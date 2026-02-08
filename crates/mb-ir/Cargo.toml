@@ -1,0 +1,12 @@
+[package]
+name = "mb-ir"
+version.workspace = true
+edition.workspace = true
+description = "Core IR types for masterblaster tracker"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+arrayvec = { workspace = true, default-features = false }

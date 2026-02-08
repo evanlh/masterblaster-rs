@@ -1,0 +1,10 @@
+[package]
+name = "mb-audio"
+version.workspace = true
+edition.workspace = true
+description = "Audio output backends for masterblaster tracker"
+
+[dependencies]
+mb-engine = { workspace = true }
+cpal = { workspace = true }
+ringbuf = { workspace = true }

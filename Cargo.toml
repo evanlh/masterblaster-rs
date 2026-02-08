@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mb-ir",
+    "crates/mb-engine",
+    "crates/mb-audio",
+    "crates/mb-formats",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["elh"]
+
+[workspace.dependencies]
+# Internal crates
+mb-ir = { path = "crates/mb-ir" }
+mb-engine = { path = "crates/mb-engine" }
+mb-audio = { path = "crates/mb-audio" }
+mb-formats = { path = "crates/mb-formats" }
+
+# Core (no_std compatible)
+arrayvec = "0.7"
+heapless = "0.8"
+
+# Desktop audio
+cpal = "0.15"
+ringbuf = "0.4"
+
+# Format parsing
+binrw = "0.14"
+
+# GUI
+eframe = "0.31"
+egui = "0.31"
+
+[package]
+name = "masterblaster"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mb-ir = { workspace = true }
+mb-engine = { workspace = true }
+mb-audio = { workspace = true }
+mb-formats = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
