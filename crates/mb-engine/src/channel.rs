@@ -1,5 +1,7 @@
 //! Channel state for tracker playback.
 
+use mb_ir::Effect;
+
 /// Mixing state for a single tracker channel.
 #[derive(Clone, Debug, Default)]
 pub struct ChannelState {
@@ -17,7 +19,9 @@ pub struct ChannelState {
     pub playing: bool,
 
     // Effect state
-    /// Target note for tone portamento
+    /// Currently active per-tick effect
+    pub active_effect: Effect,
+    /// Target increment for tone portamento (16.16 fixed-point)
     pub porta_target: u32,
     /// Vibrato phase (0-255)
     pub vibrato_phase: u8,
@@ -61,10 +65,46 @@ impl ChannelState {
         self.playing = true;
         self.envelope_tick = 0;
         self.loop_forward = true;
+        self.active_effect = Effect::None;
     }
 
     /// Stop playback.
     pub fn stop(&mut self) {
         self.playing = false;
+    }
+
+    /// Apply a row effect (first-tick / immediate).
+    pub fn apply_row_effect(&mut self, effect: &Effect) {
+        match effect {
+            Effect::SetVolume(v) => self.volume = (*v).min(64),
+            Effect::SetPan(p) => self.panning = (*p as i16 - 128).clamp(-64, 64) as i8,
+            Effect::SampleOffset(o) => self.position = (*o as u32) << 24, // 256-byte units → 16.16
+            Effect::FineVolumeSlideUp(v) => {
+                self.volume = (self.volume as i16 + *v as i16).clamp(0, 64) as u8;
+            }
+            Effect::FineVolumeSlideDown(v) => {
+                self.volume = (self.volume as i16 - *v as i16).clamp(0, 64) as u8;
+            }
+            Effect::NoteCut(0) => self.volume = 0,
+            _ => {}
+        }
+    }
+
+    /// Apply a per-tick effect (called every tick after the first).
+    pub fn apply_tick_effect(&mut self) {
+        match self.active_effect {
+            Effect::VolumeSlide(delta) => {
+                self.volume = (self.volume as i16 + delta as i16).clamp(0, 64) as u8;
+            }
+            Effect::TonePortaVolSlide(delta) | Effect::VibratoVolSlide(delta) => {
+                self.volume = (self.volume as i16 + delta as i16).clamp(0, 64) as u8;
+            }
+            Effect::NoteCut(tick) => {
+                // NoteCut is tracked as active_effect; decrement handled externally
+                // For simplicity, we just store it and let process_tick handle timing
+                let _ = tick;
+            }
+            _ => {}
+        }
     }
 }

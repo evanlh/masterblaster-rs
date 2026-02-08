@@ -6,6 +6,8 @@ use mb_ir::{Event, EventPayload, EventTarget, Song, Timestamp};
 use crate::channel::ChannelState;
 use crate::event_queue::EventQueue;
 use crate::frame::Frame;
+use crate::frequency::note_to_increment;
+use crate::scheduler;
 
 /// The main playback engine.
 pub struct Engine {
@@ -118,12 +120,11 @@ impl Engine {
 
     /// Process a tick (called once per tick).
     fn process_tick(&mut self) {
-        // Update effect state for each channel
         for channel in &mut self.channels {
             if !channel.playing {
                 continue;
             }
-            // TODO: Process per-tick effects (vibrato, volume slide, etc.)
+            channel.apply_tick_effect();
         }
     }
 
@@ -151,15 +152,31 @@ impl Engine {
                 velocity: _,
             } => {
                 // Look up sample from instrument
+                // MOD instruments are 1-indexed: instrument 1 = index 0
+                let inst_idx = if *instrument > 0 { *instrument - 1 } else { 0 };
                 let sample_idx = self
                     .song
                     .instruments
-                    .get(*instrument as usize)
+                    .get(inst_idx as usize)
                     .map(|inst| inst.sample_map[*note as usize])
-                    .unwrap_or(*instrument);
+                    .unwrap_or(inst_idx);
 
                 if let Some(channel) = self.channels.get_mut(ch as usize) {
-                    channel.trigger(*note, *instrument, sample_idx);
+                    channel.trigger(*note, inst_idx, sample_idx);
+
+                    // Compute playback increment from sample's c4_speed
+                    let c4_speed = self
+                        .song
+                        .samples
+                        .get(sample_idx as usize)
+                        .map(|s| s.c4_speed)
+                        .unwrap_or(8363);
+                    channel.increment = note_to_increment(*note, c4_speed, self.sample_rate);
+
+                    // Set volume from sample default
+                    if let Some(sample) = self.song.samples.get(sample_idx as usize) {
+                        channel.volume = sample.default_volume;
+                    }
                 }
             }
             EventPayload::NoteOff { note: _ } => {
@@ -167,8 +184,15 @@ impl Engine {
                     channel.stop();
                 }
             }
-            EventPayload::Effect(_effect) => {
-                // TODO: Apply effect
+            EventPayload::Effect(effect) => {
+                if let Some(channel) = self.channels.get_mut(ch as usize) {
+                    if effect.is_row_effect() {
+                        channel.apply_row_effect(effect);
+                    } else {
+                        // Per-tick effects: store as active, processed in process_tick
+                        channel.active_effect = *effect;
+                    }
+                }
             }
             _ => {}
         }
@@ -251,5 +275,337 @@ impl Engine {
     /// Schedule an event.
     pub fn schedule(&mut self, event: Event) {
         self.event_queue.push(event);
+    }
+
+    /// Schedule all events from the song's order list and patterns.
+    pub fn schedule_song(&mut self) {
+        for event in scheduler::schedule_song(&self.song) {
+            self.event_queue.push(event);
+        }
+    }
+
+    /// Render multiple frames into a buffer.
+    pub fn render_frames(&mut self, count: usize) -> Vec<Frame> {
+        (0..count).map(|_| self.render_frame()).collect()
+    }
+
+    /// Get a reference to a channel's state (for testing).
+    pub fn channel(&self, index: usize) -> Option<&ChannelState> {
+        self.channels.get(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frequency::note_to_increment;
+    use mb_ir::{Instrument, Sample, SampleData};
+
+    const SAMPLE_RATE: u32 = 44100;
+
+    /// Build a 1-channel song with one sample containing `data`.
+    fn song_with_sample(data: Vec<i8>, volume: u8) -> Song {
+        let mut song = Song::with_channels("test", 1);
+
+        let mut sample = Sample::new("test sample");
+        sample.data = SampleData::Mono8(data);
+        sample.default_volume = volume;
+        sample.c4_speed = 8363;
+        song.samples.push(sample);
+
+        let mut inst = Instrument::new("test inst");
+        inst.set_single_sample(0);
+        song.instruments.push(inst);
+
+        song
+    }
+
+    /// Schedule a NoteOn at tick 0 on channel 0.
+    fn schedule_note(engine: &mut Engine, note: u8, instrument: u8) {
+        engine.schedule(Event::new(
+            Timestamp::from_ticks(0),
+            EventTarget::Channel(0),
+            EventPayload::NoteOn { note, velocity: 64, instrument },
+        ));
+    }
+
+    #[test]
+    fn silent_when_not_playing() {
+        let song = song_with_sample(vec![127; 100], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        // Don't call play()
+        let frame = engine.render_frame();
+        assert_eq!(frame, Frame::silence());
+    }
+
+    #[test]
+    fn silent_with_no_events() {
+        let song = song_with_sample(vec![127; 100], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        let frame = engine.render_frame();
+        assert_eq!(frame, Frame::silence());
+    }
+
+    #[test]
+    fn note_on_sets_increment() {
+        let song = song_with_sample(vec![127; 1000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1); // instrument 1 (1-indexed)
+
+        engine.render_frame(); // processes the event
+
+        let ch = engine.channel(0).unwrap();
+        let expected = note_to_increment(48, 8363, SAMPLE_RATE);
+        assert_eq!(ch.increment, expected);
+        assert!(ch.increment > 0);
+    }
+
+    #[test]
+    fn note_on_sets_volume_from_sample() {
+        let song = song_with_sample(vec![127; 1000], 48);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+
+        engine.render_frame();
+
+        assert_eq!(engine.channel(0).unwrap().volume, 48);
+    }
+
+    #[test]
+    fn note_on_produces_nonsilent_output() {
+        let song = song_with_sample(vec![127; 1000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+
+        // First frame processes the event and mixes
+        let frame = engine.render_frame();
+        assert!(frame.left != 0 || frame.right != 0, "Expected non-silent output");
+    }
+
+    #[test]
+    fn higher_note_gives_higher_increment() {
+        let song = song_with_sample(vec![127; 1000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+        let inc_48 = engine.channel(0).unwrap().increment;
+
+        // Re-trigger at higher note
+        engine.schedule(Event::new(
+            Timestamp::from_ticks(0),
+            EventTarget::Channel(0),
+            EventPayload::NoteOn { note: 60, velocity: 64, instrument: 1 },
+        ));
+        engine.render_frame();
+        let inc_60 = engine.channel(0).unwrap().increment;
+
+        assert!(inc_60 > inc_48);
+        assert_eq!(inc_60, inc_48 * 2); // octave up = double
+    }
+
+    #[test]
+    fn note_off_stops_channel() {
+        let song = song_with_sample(vec![127; 1000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+        assert!(engine.channel(0).unwrap().playing);
+
+        engine.schedule(Event::new(
+            Timestamp::from_ticks(0),
+            EventTarget::Channel(0),
+            EventPayload::NoteOff { note: 0 },
+        ));
+        engine.render_frame();
+        assert!(!engine.channel(0).unwrap().playing);
+    }
+
+    #[test]
+    fn sample_stops_at_end_without_loop() {
+        // Very short sample, high note = fast increment
+        let song = song_with_sample(vec![127; 4], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+
+        // Render enough frames to exhaust the 4-sample data
+        for _ in 0..10000 {
+            engine.render_frame();
+        }
+
+        assert!(!engine.channel(0).unwrap().playing);
+    }
+
+    #[test]
+    fn set_tempo_changes_samples_per_tick() {
+        let song = song_with_sample(vec![127; 100], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+
+        // Default tempo 125: samples_per_tick = 44100 * 5 / (125 * 2) = 882
+        let spt_before = engine.samples_per_tick;
+        assert_eq!(spt_before, 882);
+
+        engine.schedule(Event::new(
+            Timestamp::from_ticks(0),
+            EventTarget::Global,
+            EventPayload::SetTempo(15000), // 150 BPM * 100
+        ));
+        engine.render_frame();
+
+        // 150 BPM: 44100 * 5 / (150 * 2) = 735
+        assert_eq!(engine.samples_per_tick, 735);
+    }
+
+    #[test]
+    fn zero_volume_sample_produces_silence() {
+        let song = song_with_sample(vec![127; 1000], 0);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+
+        let frame = engine.render_frame();
+        assert_eq!(frame, Frame::silence());
+    }
+
+    /// Schedule an effect at tick 0 on channel 0.
+    fn schedule_effect(engine: &mut Engine, effect: mb_ir::Effect) {
+        engine.schedule(Event::new(
+            Timestamp::from_ticks(0),
+            EventTarget::Channel(0),
+            EventPayload::Effect(effect),
+        ));
+    }
+
+    #[test]
+    fn set_volume_effect_changes_channel_volume() {
+        let song = song_with_sample(vec![127; 1000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+        assert_eq!(engine.channel(0).unwrap().volume, 64);
+
+        schedule_effect(&mut engine, mb_ir::Effect::SetVolume(32));
+        engine.render_frame();
+        assert_eq!(engine.channel(0).unwrap().volume, 32);
+    }
+
+    #[test]
+    fn set_volume_clamps_to_64() {
+        let song = song_with_sample(vec![127; 1000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+
+        schedule_effect(&mut engine, mb_ir::Effect::SetVolume(100));
+        engine.render_frame();
+        assert_eq!(engine.channel(0).unwrap().volume, 64);
+    }
+
+    #[test]
+    fn fine_volume_slide_up() {
+        let song = song_with_sample(vec![127; 1000], 32);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+        assert_eq!(engine.channel(0).unwrap().volume, 32);
+
+        schedule_effect(&mut engine, mb_ir::Effect::FineVolumeSlideUp(4));
+        engine.render_frame();
+        assert_eq!(engine.channel(0).unwrap().volume, 36);
+    }
+
+    #[test]
+    fn fine_volume_slide_down() {
+        let song = song_with_sample(vec![127; 1000], 32);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+
+        schedule_effect(&mut engine, mb_ir::Effect::FineVolumeSlideDown(4));
+        engine.render_frame();
+        assert_eq!(engine.channel(0).unwrap().volume, 28);
+    }
+
+    #[test]
+    fn fine_volume_slide_down_clamps_to_zero() {
+        let song = song_with_sample(vec![127; 1000], 2);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+
+        schedule_effect(&mut engine, mb_ir::Effect::FineVolumeSlideDown(15));
+        engine.render_frame();
+        assert_eq!(engine.channel(0).unwrap().volume, 0);
+    }
+
+    #[test]
+    fn volume_slide_applied_per_tick() {
+        let song = song_with_sample(vec![127; 100000], 32);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame(); // tick 0: note triggered, volume = 32
+
+        // Schedule volume slide +4 per tick
+        schedule_effect(&mut engine, mb_ir::Effect::VolumeSlide(4));
+        engine.render_frame(); // stores active effect
+
+        // Render until the next tick boundary to trigger process_tick
+        // samples_per_tick at 125 BPM = 882
+        let vol_before = engine.channel(0).unwrap().volume;
+        for _ in 0..882 {
+            engine.render_frame();
+        }
+        let vol_after = engine.channel(0).unwrap().volume;
+        assert!(
+            vol_after > vol_before,
+            "Volume should increase: before={}, after={}",
+            vol_before, vol_after
+        );
+    }
+
+    #[test]
+    fn volume_slide_clamps_at_bounds() {
+        let song = song_with_sample(vec![127; 100000], 62);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+
+        // Slide up by 4 per tick — should clamp at 64
+        schedule_effect(&mut engine, mb_ir::Effect::VolumeSlide(4));
+        // Render many ticks
+        engine.render_frames(882 * 10);
+        assert_eq!(engine.channel(0).unwrap().volume, 64);
+    }
+
+    #[test]
+    fn new_note_clears_active_effect() {
+        let song = song_with_sample(vec![127; 100000], 32);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+
+        schedule_effect(&mut engine, mb_ir::Effect::VolumeSlide(4));
+        engine.render_frame();
+        assert_ne!(engine.channel(0).unwrap().active_effect, mb_ir::Effect::None);
+
+        // New note should clear the active effect
+        schedule_note(&mut engine, 60, 1);
+        engine.render_frame();
+        assert_eq!(engine.channel(0).unwrap().active_effect, mb_ir::Effect::None);
     }
 }

@@ -85,6 +85,11 @@ pub fn load_mod(data: &[u8]) -> Result<Song, FormatError> {
                 .collect();
             sample.data = SampleData::Mono8(sample_data);
             sample_offset += len;
+
+            // Clamp loop bounds to actual sample length (common in real MOD files)
+            if sample.loop_end > len as u32 {
+                sample.loop_end = len as u32;
+            }
         }
     }
 

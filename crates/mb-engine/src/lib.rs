@@ -9,9 +9,13 @@ extern crate alloc;
 mod channel;
 mod event_queue;
 mod frame;
+mod frequency;
 mod mixer;
+pub mod scheduler;
 
 pub use channel::ChannelState;
 pub use event_queue::EventQueue;
 pub use frame::Frame;
+pub use frequency::note_to_increment;
 pub use mixer::Engine;
+pub use scheduler::schedule_song;
