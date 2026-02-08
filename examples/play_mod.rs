@@ -44,6 +44,10 @@ fn main() {
     println!("Samples:  {} (with data)", samples_with_data);
     println!();
 
+    let features = mb_ir::analyze(&song);
+    print!("{}", features);
+    println!();
+
     match wav_path {
         Some(wav) => render_to_wav(song, &wav),
         None => play_audio(song),

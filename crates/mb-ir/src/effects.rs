@@ -19,6 +19,25 @@ pub enum VolumeCommand {
     Vibrato(u8),
 }
 
+impl VolumeCommand {
+    /// Returns the variant name as a static string (ignoring parameters).
+    pub fn name(&self) -> &'static str {
+        match self {
+            VolumeCommand::None => "None",
+            VolumeCommand::Volume(_) => "Volume",
+            VolumeCommand::VolumeSlideDown(_) => "VolumeSlideDown",
+            VolumeCommand::VolumeSlideUp(_) => "VolumeSlideUp",
+            VolumeCommand::FineVolSlideDown(_) => "FineVolSlideDown",
+            VolumeCommand::FineVolSlideUp(_) => "FineVolSlideUp",
+            VolumeCommand::Panning(_) => "Panning",
+            VolumeCommand::PortaDown(_) => "PortaDown",
+            VolumeCommand::PortaUp(_) => "PortaUp",
+            VolumeCommand::TonePorta(_) => "TonePorta",
+            VolumeCommand::Vibrato(_) => "Vibrato",
+        }
+    }
+}
+
 /// Effect column command.
 ///
 /// This enum covers effects from MOD, S3M, XM, and IT formats.
@@ -121,6 +140,52 @@ pub enum Effect {
 }
 
 impl Effect {
+    /// Returns the variant name as a static string (ignoring parameters).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Effect::None => "None",
+            Effect::Arpeggio { .. } => "Arpeggio",
+            Effect::PortaUp(_) => "PortaUp",
+            Effect::PortaDown(_) => "PortaDown",
+            Effect::TonePorta(_) => "TonePorta",
+            Effect::Vibrato { .. } => "Vibrato",
+            Effect::TonePortaVolSlide(_) => "TonePortaVolSlide",
+            Effect::VibratoVolSlide(_) => "VibratoVolSlide",
+            Effect::Tremolo { .. } => "Tremolo",
+            Effect::SetPan(_) => "SetPan",
+            Effect::SampleOffset(_) => "SampleOffset",
+            Effect::VolumeSlide(_) => "VolumeSlide",
+            Effect::PositionJump(_) => "PositionJump",
+            Effect::SetVolume(_) => "SetVolume",
+            Effect::PatternBreak(_) => "PatternBreak",
+            Effect::FinePortaUp(_) => "FinePortaUp",
+            Effect::FinePortaDown(_) => "FinePortaDown",
+            Effect::SetVibratoWaveform(_) => "SetVibratoWaveform",
+            Effect::SetFinetune(_) => "SetFinetune",
+            Effect::PatternLoop(_) => "PatternLoop",
+            Effect::SetTremoloWaveform(_) => "SetTremoloWaveform",
+            Effect::SetPanPosition(_) => "SetPanPosition",
+            Effect::RetriggerNote(_) => "RetriggerNote",
+            Effect::FineVolumeSlideUp(_) => "FineVolumeSlideUp",
+            Effect::FineVolumeSlideDown(_) => "FineVolumeSlideDown",
+            Effect::NoteCut(_) => "NoteCut",
+            Effect::NoteDelay(_) => "NoteDelay",
+            Effect::PatternDelay(_) => "PatternDelay",
+            Effect::SetSpeed(_) => "SetSpeed",
+            Effect::SetTempo(_) => "SetTempo",
+            Effect::SetGlobalVolume(_) => "SetGlobalVolume",
+            Effect::GlobalVolumeSlide(_) => "GlobalVolumeSlide",
+            Effect::SetEnvelopePosition(_) => "SetEnvelopePosition",
+            Effect::PanningSlide(_) => "PanningSlide",
+            Effect::Retrigger { .. } => "Retrigger",
+            Effect::Tremor { .. } => "Tremor",
+            Effect::SetFilterCutoff(_) => "SetFilterCutoff",
+            Effect::SetFilterResonance(_) => "SetFilterResonance",
+            Effect::ExtraFinePortaUp(_) => "ExtraFinePortaUp",
+            Effect::ExtraFinePortaDown(_) => "ExtraFinePortaDown",
+        }
+    }
+
     /// Returns true if this effect has memory (uses previous value when param is 0).
     pub fn has_memory(&self) -> bool {
         matches!(

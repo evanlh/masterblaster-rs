@@ -10,6 +10,7 @@
 
 extern crate alloc;
 
+mod analysis;
 mod effects;
 mod event;
 mod graph;
@@ -19,6 +20,7 @@ mod sample;
 mod song;
 mod timestamp;
 
+pub use analysis::{analyze, SongFeatures};
 pub use effects::{Effect, VolumeCommand};
 pub use event::{Event, EventPayload, EventTarget};
 pub use graph::{AudioGraph, Connection, Node, NodeId, NodeType, Parameter};

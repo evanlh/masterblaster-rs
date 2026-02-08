@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 use mb_ir::{
-    Cell, ChannelSettings, Effect, Instrument, Note, OrderEntry, Pattern, Sample, SampleData, Song,
+    Cell, Effect, Instrument, Note, OrderEntry, Pattern, Sample, SampleData, Song,
     VolumeCommand,
 };
 
@@ -32,7 +32,6 @@ pub fn load_mod(data: &[u8]) -> Result<Song, FormatError> {
     let mut song = Song::with_channels(&title, num_channels);
 
     // Parse sample headers (31 samples, starting at offset 20)
-    let mut sample_offset = 1084; // After header
     for i in 0..31 {
         let header_offset = 20 + i * 30;
         let sample = parse_sample_header(&data[header_offset..header_offset + 30])?;
@@ -75,7 +74,7 @@ pub fn load_mod(data: &[u8]) -> Result<Song, FormatError> {
     }
 
     // Load sample data
-    sample_offset = 1084 + (max_pattern + 1) * pattern_size;
+    let mut sample_offset: usize = 1084 + (max_pattern + 1) * pattern_size;
     for sample in &mut song.samples {
         let len = sample.len();
         if len > 0 && sample_offset + len <= data.len() {

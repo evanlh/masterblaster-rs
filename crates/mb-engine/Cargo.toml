@@ -9,5 +9,5 @@ default = ["std"]
 std = ["mb-ir/std"]
 
 [dependencies]
-mb-ir = { workspace = true, default-features = false }
+mb-ir = { workspace = true }
 heapless = { workspace = true }

@@ -9,4 +9,4 @@ default = ["std"]
 std = []
 
 [dependencies]
-arrayvec = { workspace = true, default-features = false }
+arrayvec = { workspace = true }
