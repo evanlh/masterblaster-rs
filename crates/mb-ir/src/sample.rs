@@ -116,6 +116,20 @@ impl SampleData {
         }
     }
 
+    /// Get a linearly interpolated mono sample value.
+    ///
+    /// `pos` is a 16.16 fixed-point position. Blends between the two
+    /// nearest sample values using the fractional part.
+    pub fn get_mono_interpolated(&self, pos_fixed: u32) -> i16 {
+        let idx = (pos_fixed >> 16) as usize;
+        let frac = (pos_fixed & 0xFFFF) as i64;
+
+        let a = self.get_mono(idx) as i64;
+        let b = self.get_mono(idx + 1) as i64;
+
+        (a + ((b - a) * frac >> 16)) as i16
+    }
+
     /// Get stereo sample values at position (as i16, i16).
     pub fn get_stereo(&self, pos: usize) -> (i16, i16) {
         match self {
@@ -166,4 +180,52 @@ pub struct AutoVibrato {
     pub sweep: u8,
     /// Waveform type (0=sine, 1=ramp down, 2=square, 3=random)
     pub waveform: u8,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mono8_sample(data: &[i8]) -> SampleData {
+        SampleData::Mono8(data.to_vec())
+    }
+
+    #[test]
+    fn interpolated_at_integer_matches_nearest() {
+        let data = mono8_sample(&[0, 100, -50, 30]);
+        // pos_fixed = 1 << 16 = index 1, frac 0
+        assert_eq!(data.get_mono_interpolated(1 << 16), data.get_mono(1));
+    }
+
+    #[test]
+    fn interpolated_midpoint_averages_neighbors() {
+        let data = mono8_sample(&[0, 100]);
+        // Midpoint: index 0, frac = 0.5 = 32768
+        let mid = data.get_mono_interpolated(32768);
+        let a = data.get_mono(0) as i32; // 0
+        let b = data.get_mono(1) as i32; // 25600
+        let expected = ((a + b) / 2) as i16;
+        assert!((mid as i32 - expected as i32).abs() <= 1);
+    }
+
+    #[test]
+    fn interpolated_quarter_blends_75_25() {
+        let data = mono8_sample(&[0, 100]);
+        // 0.25 = 16384
+        let val = data.get_mono_interpolated(16384);
+        let a = data.get_mono(0) as i32;
+        let b = data.get_mono(1) as i32;
+        let expected = (a + (b - a) / 4) as i16;
+        assert!((val as i32 - expected as i32).abs() <= 1);
+    }
+
+    #[test]
+    fn interpolated_past_end_fades_to_zero() {
+        let data = mono8_sample(&[100]);
+        // pos at index 0, frac 0.5: blends sample[0] with sample[1] (out of bounds → 0)
+        let val = data.get_mono_interpolated(32768);
+        let a = data.get_mono(0) as i32; // 25600
+        let expected = (a / 2) as i16;
+        assert!((val as i32 - expected as i32).abs() <= 1);
+    }
 }

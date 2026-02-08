@@ -9,8 +9,14 @@ use mb_ir::{
     VolumeCommand,
 };
 
+/// Result of scheduling a song: events and total length.
+pub struct ScheduleResult {
+    pub events: Vec<Event>,
+    pub total_ticks: u64,
+}
+
 /// Schedule all events for a song by walking its order list and patterns.
-pub fn schedule_song(song: &Song) -> Vec<Event> {
+pub fn schedule_song(song: &Song) -> ScheduleResult {
     let mut events = Vec::new();
     let mut tick: u64 = 0;
     let speed = song.initial_speed as u64;
@@ -39,7 +45,7 @@ pub fn schedule_song(song: &Song) -> Vec<Event> {
         }
     }
 
-    events
+    ScheduleResult { events, total_ticks: tick }
 }
 
 /// Convert a single cell into events and append them to the output.
@@ -188,6 +194,11 @@ mod tests {
     use super::*;
     use mb_ir::Pattern;
 
+    /// Schedule and return just the events (convenience for tests).
+    fn schedule_events(song: &Song) -> Vec<Event> {
+        schedule_song(song).events
+    }
+
     /// Build a minimal 1-channel song with a single pattern.
     fn one_channel_song(pattern: Pattern) -> Song {
         let mut song = Song::with_channels("test", 1);
@@ -199,7 +210,7 @@ mod tests {
     #[test]
     fn empty_pattern_produces_no_events() {
         let song = one_channel_song(Pattern::new(4, 1));
-        let events = schedule_song(&song);
+        let events = schedule_events(&song);
         assert!(events.is_empty());
     }
 
@@ -209,7 +220,7 @@ mod tests {
         pat.cell_mut(0, 0).note = Note::On(60);
         pat.cell_mut(0, 0).instrument = 1;
 
-        let events = schedule_song(&one_channel_song(pat));
+        let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].time.tick, 0);
@@ -226,7 +237,7 @@ mod tests {
         pat.cell_mut(3, 0).note = Note::On(48);
         pat.cell_mut(3, 0).instrument = 2;
 
-        let events = schedule_song(&one_channel_song(pat));
+        let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 1);
         // ticks_per_row defaults to 6, so row 3 = tick 18
@@ -238,7 +249,7 @@ mod tests {
         let mut pat = Pattern::new(4, 1);
         pat.cell_mut(1, 0).note = Note::Off;
 
-        let events = schedule_song(&one_channel_song(pat));
+        let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].time.tick, 6);
@@ -257,7 +268,7 @@ mod tests {
         let idx = song.add_pattern(pat);
         song.add_order(OrderEntry::Pattern(idx));
 
-        let events = schedule_song(&song);
+        let events = schedule_events(&song);
 
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].target, EventTarget::Channel(0));
@@ -285,7 +296,7 @@ mod tests {
         song.add_order(OrderEntry::Pattern(idx0));
         song.add_order(OrderEntry::Pattern(idx1));
 
-        let events = schedule_song(&song);
+        let events = schedule_events(&song);
 
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].time.tick, 0);
@@ -304,7 +315,7 @@ mod tests {
         song.add_order(OrderEntry::Pattern(idx));
         song.add_order(OrderEntry::Pattern(idx));
 
-        let events = schedule_song(&song);
+        let events = schedule_events(&song);
 
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].time.tick, 0);
@@ -316,7 +327,7 @@ mod tests {
         let mut pat = Pattern::new(4, 1);
         pat.cell_mut(1, 0).effect = Effect::SetTempo(140);
 
-        let events = schedule_song(&one_channel_song(pat));
+        let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].target, EventTarget::Global);
@@ -328,7 +339,7 @@ mod tests {
         let mut pat = Pattern::new(4, 1);
         pat.cell_mut(0, 0).effect = Effect::SetSpeed(3);
 
-        let events = schedule_song(&one_channel_song(pat));
+        let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].target, EventTarget::Global);
@@ -340,7 +351,7 @@ mod tests {
         let mut pat = Pattern::new(4, 1);
         pat.cell_mut(0, 0).effect = Effect::VolumeSlide(4);
 
-        let events = schedule_song(&one_channel_song(pat));
+        let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].target, EventTarget::Channel(0));
@@ -354,7 +365,7 @@ mod tests {
         pat.cell_mut(0, 0).instrument = 1;
         pat.cell_mut(0, 0).effect = Effect::VolumeSlide(2);
 
-        let events = schedule_song(&one_channel_song(pat));
+        let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 2);
         // NoteOn first, then effect
@@ -369,7 +380,7 @@ mod tests {
         let mut pat = Pattern::new(4, 1);
         pat.cell_mut(0, 0).volume = VolumeCommand::Volume(48);
 
-        let events = schedule_song(&one_channel_song(pat));
+        let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].payload, EventPayload::Effect(Effect::SetVolume(48)));
@@ -387,7 +398,7 @@ mod tests {
         song.add_order(OrderEntry::End);
         song.add_order(OrderEntry::Pattern(idx)); // should not be reached
 
-        let events = schedule_song(&song);
+        let events = schedule_events(&song);
 
         assert_eq!(events.len(), 1);
     }
@@ -404,10 +415,27 @@ mod tests {
         song.add_order(OrderEntry::Skip);
         song.add_order(OrderEntry::Pattern(idx));
 
-        let events = schedule_song(&song);
+        let events = schedule_events(&song);
 
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].time.tick, 0);
         assert_eq!(events[1].time.tick, 24);
+    }
+
+    #[test]
+    fn total_ticks_matches_pattern_rows() {
+        let pat = Pattern::new(4, 1); // 4 rows * 6 ticks_per_row = 24
+        let result = schedule_song(&one_channel_song(pat));
+        assert_eq!(result.total_ticks, 24);
+    }
+
+    #[test]
+    fn total_ticks_sums_across_order() {
+        let mut song = Song::with_channels("test", 1);
+        let idx = song.add_pattern(Pattern::new(8, 1)); // 8 * 6 = 48
+        song.add_order(OrderEntry::Pattern(idx));
+        song.add_order(OrderEntry::Pattern(idx));
+        let result = schedule_song(&song);
+        assert_eq!(result.total_ticks, 96); // 48 * 2
     }
 }

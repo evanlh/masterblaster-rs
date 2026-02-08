@@ -31,7 +31,9 @@ impl CpalOutput {
             .default_output_config()
             .map_err(|e| AudioError::DeviceInit(e.to_string()))?;
 
-        let config: StreamConfig = config.into();
+        let mut config: StreamConfig = config.into();
+        // Force stereo output — the stream callback assumes 2-channel interleaving
+        config.channels = 2;
 
         // Create ring buffer for audio data (about 100ms buffer)
         let buffer_size = (config.sample_rate.0 as usize / 10) * 2;
@@ -52,6 +54,7 @@ impl CpalOutput {
     /// Build and start the audio stream.
     pub fn build_stream(&mut self, mut consumer: HeapCons<Frame>) -> Result<(), AudioError> {
         let running = self.running.clone();
+        let channels = self.config.channels as usize;
 
         let stream = self.device
             .build_output_stream(
@@ -64,13 +67,23 @@ impl CpalOutput {
                         return;
                     }
 
-                    for chunk in data.chunks_mut(2) {
+                    // Process one frame per device frame (channels samples per frame)
+                    for chunk in data.chunks_mut(channels) {
                         if let Some(frame) = consumer.try_pop() {
-                            chunk[0] = frame.left as f32 / 32768.0;
-                            chunk[1] = frame.right as f32 / 32768.0;
+                            let left = frame.left as f32 / 32768.0;
+                            let right = frame.right as f32 / 32768.0;
+                            // Write stereo pair; zero-fill any extra channels
+                            for (i, sample) in chunk.iter_mut().enumerate() {
+                                *sample = match i {
+                                    0 => left,
+                                    1 => right,
+                                    _ => 0.0,
+                                };
+                            }
                         } else {
-                            chunk[0] = 0.0;
-                            chunk[1] = 0.0;
+                            for sample in chunk.iter_mut() {
+                                *sample = 0.0;
+                            }
                         }
                     }
                 },
@@ -83,6 +96,15 @@ impl CpalOutput {
         self.stream = Some(stream);
 
         Ok(())
+    }
+}
+
+impl CpalOutput {
+    /// Write a single frame, spinning until the ring buffer has room.
+    pub fn write_spin(&mut self, frame: Frame) {
+        while self.producer.try_push(frame).is_err() {
+            std::hint::spin_loop();
+        }
     }
 }
 

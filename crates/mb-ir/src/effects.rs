@@ -145,6 +145,7 @@ impl Effect {
                 | Effect::SetTempo(_)
                 | Effect::SetVolume(_)
                 | Effect::SetPan(_)
+                | Effect::SampleOffset(_)
                 | Effect::FinePortaUp(_)
                 | Effect::FinePortaDown(_)
                 | Effect::FineVolumeSlideUp(_)

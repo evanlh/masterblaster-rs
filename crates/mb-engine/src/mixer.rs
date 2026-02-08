@@ -31,6 +31,8 @@ pub struct Engine {
     speed: u8,
     /// Is playback active?
     playing: bool,
+    /// Tick at which the song ends (set by schedule_song)
+    song_end_tick: u64,
 }
 
 impl Engine {
@@ -51,11 +53,16 @@ impl Engine {
             tempo,
             speed,
             playing: false,
+            song_end_tick: 0,
         };
 
-        // Initialize channels
-        for _ in 0..num_channels {
-            engine.channels.push(ChannelState::new());
+        // Initialize channels with panning from song settings
+        for i in 0..num_channels {
+            let mut ch = ChannelState::new();
+            if let Some(settings) = engine.song.channels.get(i) {
+                ch.panning = settings.initial_pan;
+            }
+            engine.channels.push(ch);
         }
 
         engine.update_samples_per_tick();
@@ -217,7 +224,7 @@ impl Engine {
         let mut left: i32 = 0;
         let mut right: i32 = 0;
 
-        for (i, channel) in self.channels.iter_mut().enumerate() {
+        for channel in self.channels.iter_mut() {
             if !channel.playing {
                 continue;
             }
@@ -228,17 +235,16 @@ impl Engine {
                 None => continue,
             };
 
-            // Read sample value at current position
-            let pos = (channel.position >> 16) as usize;
-            let sample_value = sample.data.get_mono(pos);
+            // Read sample value with linear interpolation
+            let sample_value = sample.data.get_mono_interpolated(channel.position);
 
             // Apply volume and panning
+            // pan: -64 (full left) to +64 (full right)
+            // Convert to 0..128 range for linear crossfade
             let vol = channel.volume as i32;
-            let pan = channel.panning as i32; // -64 to +64
-
-            // Calculate left/right volumes
-            let left_vol = ((64 - pan) * vol) >> 6;
-            let right_vol = ((64 + pan) * vol) >> 6;
+            let pan_right = (channel.panning as i32 + 64) as i32; // 0..128
+            let left_vol = ((128 - pan_right) * vol) >> 7;
+            let right_vol = (pan_right * vol) >> 7;
 
             left += (sample_value as i32 * left_vol) >> 6;
             right += (sample_value as i32 * right_vol) >> 6;
@@ -272,6 +278,11 @@ impl Engine {
         self.playing
     }
 
+    /// Returns true when playback has reached the song's end tick.
+    pub fn is_finished(&self) -> bool {
+        self.song_end_tick > 0 && self.current_time.tick >= self.song_end_tick
+    }
+
     /// Schedule an event.
     pub fn schedule(&mut self, event: Event) {
         self.event_queue.push(event);
@@ -279,7 +290,9 @@ impl Engine {
 
     /// Schedule all events from the song's order list and patterns.
     pub fn schedule_song(&mut self) {
-        for event in scheduler::schedule_song(&self.song) {
+        let result = scheduler::schedule_song(&self.song);
+        self.song_end_tick = result.total_ticks;
+        for event in result.events {
             self.event_queue.push(event);
         }
     }
