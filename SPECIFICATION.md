@@ -1067,7 +1067,7 @@ struct AudioThread {
   - Effect enum with all ~50 effect types
 - [ ] `mb-engine` with graph-based architecture:
   - [x] EventQueue with sorted insertion
-  - [ ] GraphState with topological traversal
+  - [x] GraphState with topological traversal
   - [x] TrackerChannel node type (sampler + effects)
   - [x] 16-bit mixing, linear interpolation
   - [ ] Effect processing (vibrato, portamento, volume slide, etc.)

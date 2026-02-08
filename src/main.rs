@@ -35,11 +35,18 @@ struct PlaybackState {
 
 // --- App state ---
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CenterView {
+    Pattern,
+    Graph,
+}
+
 struct TrackerApp {
     song: mb_ir::Song,
     selected_pattern: usize,
     status: String,
     playback: Option<PlaybackState>,
+    center_view: CenterView,
 }
 
 impl TrackerApp {
@@ -49,6 +56,7 @@ impl TrackerApp {
             selected_pattern: 0,
             status: String::new(),
             playback: None,
+            center_view: CenterView::Pattern,
         }
     }
 
@@ -187,6 +195,18 @@ fn transport_panel(app: &mut TrackerApp, ctx: &egui::Context, ui: &mut egui::Ui)
         }
         if ui.add_enabled(playing, egui::Button::new("Stop")).clicked() {
             app.stop_playback();
+        }
+        ui.separator();
+
+        let view_label = match app.center_view {
+            CenterView::Pattern => "Graph",
+            CenterView::Graph => "Pattern",
+        };
+        if ui.button(view_label).clicked() {
+            app.center_view = match app.center_view {
+                CenterView::Pattern => CenterView::Graph,
+                CenterView::Graph => CenterView::Pattern,
+            };
         }
         ui.separator();
 
@@ -347,6 +367,139 @@ fn pattern_editor(
     });
 }
 
+fn graph_panel(graph: &mb_ir::AudioGraph, ui: &mut egui::Ui) {
+    let layers = compute_graph_layers(graph);
+    if layers.is_empty() {
+        ui.label("No graph nodes.");
+        return;
+    }
+
+    let (response, painter) =
+        ui.allocate_painter(ui.available_size(), egui::Sense::hover());
+    let rect = response.rect;
+
+    let node_w = 70.0_f32;
+    let node_h = 28.0_f32;
+    let num_layers = layers.len();
+    let layer_spacing = rect.height() / num_layers.max(2) as f32;
+
+    // Compute node centers: (node_id → Pos2)
+    let mut node_centers: std::collections::HashMap<u16, egui::Pos2> =
+        std::collections::HashMap::new();
+
+    for (layer_idx, layer) in layers.iter().enumerate() {
+        let y = rect.top() + layer_spacing * 0.5 + layer_idx as f32 * layer_spacing;
+        let count = layer.len() as f32;
+        let total_w = count * node_w + (count - 1.0).max(0.0) * 16.0;
+        let x_start = rect.center().x - total_w / 2.0 + node_w / 2.0;
+
+        for (i, &node_id) in layer.iter().enumerate() {
+            let x = x_start + i as f32 * (node_w + 16.0);
+            node_centers.insert(node_id, egui::pos2(x, y));
+        }
+    }
+
+    // Draw connections first (behind nodes)
+    let line_color = egui::Color32::from_rgb(80, 100, 80);
+    for conn in &graph.connections {
+        if let (Some(&from_pos), Some(&to_pos)) =
+            (node_centers.get(&conn.from), node_centers.get(&conn.to))
+        {
+            let start = egui::pos2(from_pos.x, from_pos.y + node_h / 2.0);
+            let end = egui::pos2(to_pos.x, to_pos.y - node_h / 2.0);
+            painter.line_segment([start, end], egui::Stroke::new(1.5, line_color));
+        }
+    }
+
+    // Draw nodes
+    for node in &graph.nodes {
+        let Some(&center) = node_centers.get(&node.id) else {
+            continue;
+        };
+        let node_rect = egui::Rect::from_center_size(
+            center,
+            egui::vec2(node_w, node_h),
+        );
+
+        let (bg, border) = match &node.node_type {
+            mb_ir::NodeType::Master => (
+                egui::Color32::from_rgb(50, 50, 70),
+                egui::Color32::from_rgb(120, 120, 180),
+            ),
+            _ => (
+                egui::Color32::from_rgb(40, 55, 40),
+                egui::Color32::from_rgb(90, 140, 90),
+            ),
+        };
+
+        painter.rect_filled(node_rect, 4.0, bg);
+        painter.rect_stroke(
+            node_rect,
+            4.0,
+            egui::Stroke::new(1.0, border),
+            egui::StrokeKind::Outside,
+        );
+        painter.text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            node.node_type.label(),
+            egui::FontId::monospace(11.0),
+            egui::Color32::from_rgb(200, 200, 200),
+        );
+    }
+}
+
+/// Assign nodes to layers by longest path from sources.
+fn compute_graph_layers(graph: &mb_ir::AudioGraph) -> Vec<Vec<u16>> {
+    let n = graph.nodes.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    // Build in-degree for topo sort
+    let mut in_degree = vec![0u32; n];
+    for conn in &graph.connections {
+        if (conn.to as usize) < n {
+            in_degree[conn.to as usize] += 1;
+        }
+    }
+
+    // Kahn's topo sort (inline to avoid engine dependency)
+    let mut queue: Vec<u16> = (0..n as u16)
+        .filter(|&id| in_degree[id as usize] == 0)
+        .collect();
+    let mut topo = Vec::with_capacity(n);
+    while let Some(id) = queue.pop() {
+        topo.push(id);
+        for conn in &graph.connections {
+            if conn.from == id && (conn.to as usize) < n {
+                in_degree[conn.to as usize] -= 1;
+                if in_degree[conn.to as usize] == 0 {
+                    queue.push(conn.to);
+                }
+            }
+        }
+    }
+
+    // Assign depth = longest path from any source
+    let mut depth = vec![0usize; n];
+    for &id in &topo {
+        for conn in &graph.connections {
+            if conn.from == id && (conn.to as usize) < n {
+                depth[conn.to as usize] = depth[conn.to as usize].max(depth[id as usize] + 1);
+            }
+        }
+    }
+
+    // Group by depth
+    let max_depth = depth.iter().copied().max().unwrap_or(0);
+    let mut layers = vec![Vec::new(); max_depth + 1];
+    for (id, &d) in depth.iter().enumerate() {
+        layers[d].push(id as u16);
+    }
+    layers
+}
+
 fn row_color(row: u16) -> egui::Color32 {
     if row % 16 == 0 {
         egui::Color32::from_rgb(100, 100, 150)
@@ -375,8 +528,9 @@ impl eframe::App for TrackerApp {
             .default_width(200.0)
             .show(ctx, |ui| samples_panel(self, ui));
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            pattern_editor(self, pos, ui);
+        egui::CentralPanel::default().show(ctx, |ui| match self.center_view {
+            CenterView::Pattern => pattern_editor(self, pos, ui),
+            CenterView::Graph => graph_panel(&self.song.graph, ui),
         });
     }
 }

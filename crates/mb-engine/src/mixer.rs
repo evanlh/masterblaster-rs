@@ -1,12 +1,13 @@
 //! Main playback engine.
 
 use alloc::vec::Vec;
-use mb_ir::{Event, EventPayload, EventTarget, Song, Timestamp};
+use mb_ir::{Event, EventPayload, EventTarget, NodeType, Song, Timestamp};
 
 use crate::channel::ChannelState;
 use crate::event_queue::EventQueue;
 use crate::frame::Frame;
 use crate::frequency::note_to_increment;
+use crate::graph_state::{self, GraphState};
 use crate::scheduler;
 
 /// The main playback engine.
@@ -15,6 +16,8 @@ pub struct Engine {
     song: Song,
     /// Channel states
     channels: Vec<ChannelState>,
+    /// Runtime graph state (node outputs + topological order)
+    graph_state: GraphState,
     /// Event queue
     event_queue: EventQueue,
     /// Current playback position
@@ -42,9 +45,12 @@ impl Engine {
         let tempo = song.initial_tempo;
         let speed = song.initial_speed;
 
+        let graph_state = GraphState::from_graph(&song.graph);
+
         let mut engine = Self {
             song,
             channels: Vec::new(),
+            graph_state,
             event_queue: EventQueue::new(),
             current_time: Timestamp::from_ticks(0),
             sample_rate,
@@ -106,8 +112,8 @@ impl Engine {
             self.dispatch_event(&event);
         }
 
-        // 2. Mix all channels
-        let output = self.mix_channels();
+        // 2. Render audio graph
+        let output = self.render_graph();
 
         // 3. Advance time
         self.sample_counter += 1;
@@ -219,53 +225,85 @@ impl Engine {
         }
     }
 
-    /// Mix all channels into a single frame.
-    fn mix_channels(&mut self) -> Frame {
-        let mut left: i32 = 0;
-        let mut right: i32 = 0;
+    /// Render a single tracker channel into a stereo frame.
+    fn render_channel(&mut self, ch_index: usize) -> Frame {
+        let channel = match self.channels.get_mut(ch_index) {
+            Some(ch) => ch,
+            None => return Frame::silence(),
+        };
+        if !channel.playing {
+            return Frame::silence();
+        }
 
-        for channel in self.channels.iter_mut() {
-            if !channel.playing {
-                continue;
-            }
+        let sample = match self.song.samples.get(channel.sample_index as usize) {
+            Some(s) => s,
+            None => return Frame::silence(),
+        };
 
-            // Get sample data
-            let sample = match self.song.samples.get(channel.sample_index as usize) {
-                Some(s) => s,
-                None => continue,
-            };
+        // Read sample value with linear interpolation
+        let sample_value = sample.data.get_mono_interpolated(channel.position);
 
-            // Read sample value with linear interpolation
-            let sample_value = sample.data.get_mono_interpolated(channel.position);
+        // Apply volume and panning
+        // pan: -64 (full left) to +64 (full right)
+        // Convert to 0..128 range for linear crossfade
+        let vol = channel.volume as i32;
+        let pan_right = (channel.panning as i32 + 64) as i32; // 0..128
+        let left_vol = ((128 - pan_right) * vol) >> 7;
+        let right_vol = (pan_right * vol) >> 7;
 
-            // Apply volume and panning
-            // pan: -64 (full left) to +64 (full right)
-            // Convert to 0..128 range for linear crossfade
-            let vol = channel.volume as i32;
-            let pan_right = (channel.panning as i32 + 64) as i32; // 0..128
-            let left_vol = ((128 - pan_right) * vol) >> 7;
-            let right_vol = (pan_right * vol) >> 7;
+        let left = (sample_value as i32 * left_vol) >> 6;
+        let right = (sample_value as i32 * right_vol) >> 6;
 
-            left += (sample_value as i32 * left_vol) >> 6;
-            right += (sample_value as i32 * right_vol) >> 6;
+        // Advance position
+        channel.position += channel.increment;
 
-            // Advance position
-            channel.position += channel.increment;
-
-            // Handle looping
-            let pos_samples = (channel.position >> 16) as u32;
-            if sample.has_loop() && pos_samples >= sample.loop_end {
-                let loop_len = sample.loop_end - sample.loop_start;
-                channel.position -= loop_len << 16;
-            } else if pos_samples >= sample.len() as u32 {
-                channel.playing = false;
-            }
+        // Handle looping
+        let pos_samples = (channel.position >> 16) as u32;
+        if sample.has_loop() && pos_samples >= sample.loop_end {
+            let loop_len = sample.loop_end - sample.loop_start;
+            channel.position -= loop_len << 16;
+        } else if pos_samples >= sample.len() as u32 {
+            channel.playing = false;
         }
 
         Frame {
             left: left.clamp(-32768, 32767) as i16,
             right: right.clamp(-32768, 32767) as i16,
         }
+    }
+
+    /// Render the audio graph by traversing nodes in topological order.
+    fn render_graph(&mut self) -> Frame {
+        self.graph_state.clear_outputs();
+
+        // Clone topo_order to avoid borrow conflict with &mut self
+        let topo_order = self.graph_state.topo_order.clone();
+
+        for &node_id in &topo_order {
+            let node = match self.song.graph.node(node_id) {
+                Some(n) => n,
+                None => continue,
+            };
+
+            // Gather inputs from all connections feeding this node
+            let input = graph_state::gather_inputs(
+                &self.song.graph,
+                &self.graph_state.node_outputs,
+                node_id,
+            );
+
+            // Process node based on type
+            let output = match &node.node_type {
+                NodeType::TrackerChannel { index } => self.render_channel(*index as usize),
+                NodeType::Master => input,
+                _ => Frame::silence(),
+            };
+
+            self.graph_state.node_outputs[node_id as usize] = output;
+        }
+
+        // Master is always node 0
+        self.graph_state.node_outputs.first().copied().unwrap_or(Frame::silence())
     }
 
     /// Get the current playback position.

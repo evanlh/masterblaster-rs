@@ -95,6 +95,20 @@ pub enum NodeType {
     MidiOut { port: u8 },
 }
 
+impl NodeType {
+    /// Short display label for UI rendering.
+    pub fn label(&self) -> alloc::string::String {
+        match self {
+            NodeType::Master => alloc::string::String::from("Master"),
+            NodeType::Sampler { sample_id } => alloc::format!("Smp {}", sample_id),
+            NodeType::TrackerChannel { index } => alloc::format!("Chan {}", index),
+            NodeType::BuzzMachine { machine_name } => machine_name.clone(),
+            NodeType::Plugin { path } => path.clone(),
+            NodeType::MidiOut { port } => alloc::format!("MIDI {}", port),
+        }
+    }
+}
+
 /// Connection between two nodes.
 #[derive(Clone, Debug)]
 pub struct Connection {
