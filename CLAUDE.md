@@ -60,6 +60,9 @@ masterblaster-rs/
 ├── SPECIFICATION.md
 ├── src/
 │   └── main.rs             # All GUI code (TrackerApp, panels, cell formatting)
+├── tests/fixtures/
+│   ├── mod/                # ProTracker .mod test files
+│   └── bmx/                # Buzz .bmx test files
 └── crates/
     ├── mb-ir/src/
     │   ├── lib.rs           # Core types: Song, Pattern, Cell, Note, Instrument, Sample, etc.
