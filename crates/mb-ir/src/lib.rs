@@ -20,7 +20,7 @@ mod sample;
 mod song;
 mod timestamp;
 
-pub use analysis::{analyze, SongFeatures};
+pub use analysis::{analyze, tick_to_position, PlaybackPosition, SongFeatures};
 pub use effects::{Effect, VolumeCommand};
 pub use event::{Event, EventPayload, EventTarget};
 pub use graph::{AudioGraph, Connection, Node, NodeId, NodeType, Parameter};

@@ -1071,15 +1071,15 @@ struct AudioThread {
   - [x] TrackerChannel node type (sampler + effects)
   - [x] 16-bit mixing, linear interpolation
   - [ ] Effect processing (vibrato, portamento, volume slide, etc.)
-  - [ ] Pattern → event scheduling
-- [ ] `mb-audio` cpal backend
+  - [x] Pattern → event scheduling
+- [x] `mb-audio` cpal backend
   - [x] AudioOutput trait + CpalOutput with ring buffer
-  - [ ] Audio thread integration (engine → stream loop)
+  - [x] Audio thread integration (engine → stream loop)
 - [x] `mb-formats` with MOD parser → IR translation
 - [ ] Minimal egui app: load MOD, visualize graph, play
   - [x] egui shell with 3-panel layout and pattern display
-  - [ ] File loading dialog
-  - [ ] Playback controls wired to engine
+  - [x] File loading dialog
+  - [x] Playback controls wired to engine
 
 **Milestone**: MOD playback via graph engine (4 TrackerChannel → Master)
 

@@ -34,6 +34,7 @@ binrw = "0.14"
 # GUI
 eframe = "0.31"
 egui = "0.31"
+rfd = "0.15"
 
 [package]
 name = "masterblaster"
@@ -47,3 +48,4 @@ mb-audio = { workspace = true }
 mb-formats = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
+rfd = { workspace = true }

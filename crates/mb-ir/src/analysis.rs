@@ -4,7 +4,7 @@ use alloc::collections::BTreeSet;
 use core::fmt;
 
 use crate::pattern::Note;
-use crate::song::Song;
+use crate::song::{OrderEntry, Song};
 
 /// Summary of features used in a song.
 pub struct SongFeatures {
@@ -104,6 +104,51 @@ impl fmt::Display for SongFeatures {
     }
 }
 
+// --- Playback position ---
+
+/// A position within the song's order/pattern structure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlaybackPosition {
+    pub order_index: usize,
+    pub pattern_index: u8,
+    pub row: u16,
+}
+
+/// Map an absolute tick to a position in the song (order index, pattern, row).
+///
+/// Uses the same tick accumulation logic as the scheduler.
+/// Returns `None` if the tick is past the song's end.
+pub fn tick_to_position(song: &Song, tick: u64) -> Option<PlaybackPosition> {
+    let speed = song.initial_speed as u64;
+    let mut accumulated: u64 = 0;
+
+    for (order_index, entry) in song.order.iter().enumerate() {
+        match entry {
+            OrderEntry::Pattern(idx) => {
+                let pattern = song.patterns.get(*idx as usize)?;
+                let tpr = pattern.ticks_per_row as u64;
+                let row_speed = if tpr > 0 { tpr } else { speed };
+                let pattern_ticks = pattern.rows as u64 * row_speed;
+
+                if tick < accumulated + pattern_ticks {
+                    let offset = tick - accumulated;
+                    let row = (offset / row_speed) as u16;
+                    return Some(PlaybackPosition {
+                        order_index,
+                        pattern_index: *idx,
+                        row,
+                    });
+                }
+                accumulated += pattern_ticks;
+            }
+            OrderEntry::Skip => {}
+            OrderEntry::End => break,
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +192,61 @@ mod tests {
         assert_eq!(f.instruments_used.len(), 2);
         assert!(f.instruments_used.contains(&1));
         assert!(f.instruments_used.contains(&2));
+    }
+
+    #[test]
+    fn tick_to_position_first_row() {
+        let song = one_pattern_song(Pattern::new(4, 1));
+        let pos = tick_to_position(&song, 0).unwrap();
+        assert_eq!(pos.order_index, 0);
+        assert_eq!(pos.pattern_index, 0);
+        assert_eq!(pos.row, 0);
+    }
+
+    #[test]
+    fn tick_to_position_mid_pattern() {
+        let song = one_pattern_song(Pattern::new(8, 1)); // ticks_per_row=6
+        // tick 12 = row 2 (12 / 6)
+        let pos = tick_to_position(&song, 12).unwrap();
+        assert_eq!(pos.row, 2);
+    }
+
+    #[test]
+    fn tick_to_position_second_order_entry() {
+        let mut song = Song::with_channels("test", 1);
+        let p0 = song.add_pattern(Pattern::new(4, 1)); // 4*6=24 ticks
+        let p1 = song.add_pattern(Pattern::new(8, 1)); // 8*6=48 ticks
+        song.add_order(OrderEntry::Pattern(p0));
+        song.add_order(OrderEntry::Pattern(p1));
+
+        // tick 24 = first row of second pattern
+        let pos = tick_to_position(&song, 24).unwrap();
+        assert_eq!(pos.order_index, 1);
+        assert_eq!(pos.pattern_index, p1);
+        assert_eq!(pos.row, 0);
+
+        // tick 30 = row 1 of second pattern
+        let pos = tick_to_position(&song, 30).unwrap();
+        assert_eq!(pos.row, 1);
+    }
+
+    #[test]
+    fn tick_to_position_past_end_returns_none() {
+        let song = one_pattern_song(Pattern::new(4, 1)); // 24 ticks total
+        assert!(tick_to_position(&song, 24).is_none());
+        assert!(tick_to_position(&song, 100).is_none());
+    }
+
+    #[test]
+    fn tick_to_position_skips_order_skip() {
+        let mut song = Song::with_channels("test", 1);
+        let p0 = song.add_pattern(Pattern::new(4, 1));
+        song.add_order(OrderEntry::Skip);
+        song.add_order(OrderEntry::Pattern(p0));
+
+        let pos = tick_to_position(&song, 0).unwrap();
+        assert_eq!(pos.order_index, 1);
+        assert_eq!(pos.pattern_index, p0);
     }
 
     #[test]
