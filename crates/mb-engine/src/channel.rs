@@ -2,6 +2,8 @@
 
 use mb_ir::Effect;
 
+use crate::frequency::{clamp_period, period_to_increment};
+
 /// Mixing state for a single tracker channel.
 #[derive(Clone, Debug, Default)]
 pub struct ChannelState {
@@ -21,8 +23,6 @@ pub struct ChannelState {
     // Effect state
     /// Currently active per-tick effect
     pub active_effect: Effect,
-    /// Target increment for tone portamento (16.16 fixed-point)
-    pub porta_target: u32,
     /// Vibrato phase (0-255)
     pub vibrato_phase: u8,
     /// Current volume (0-64)
@@ -37,6 +37,16 @@ pub struct ChannelState {
     pub note: u8,
     /// Loop direction for ping-pong (true = forward)
     pub loop_forward: bool,
+
+    // Pitch state
+    /// Current Amiga period (higher = lower pitch)
+    pub period: u16,
+    /// Sample's playback rate at C-4 (typically 8363 Hz)
+    pub c4_speed: u32,
+    /// Target period for tone portamento
+    pub target_period: u16,
+    /// Tone portamento speed (period units per tick)
+    pub porta_speed: u8,
 }
 
 impl ChannelState {
@@ -73,6 +83,13 @@ impl ChannelState {
         self.playing = false;
     }
 
+    /// Recompute the playback increment from the current period and c4_speed.
+    pub fn update_increment(&mut self, sample_rate: u32) {
+        if self.period > 0 {
+            self.increment = period_to_increment(self.period, self.c4_speed, sample_rate);
+        }
+    }
+
     /// Apply a row effect (first-tick / immediate).
     pub fn apply_row_effect(&mut self, effect: &Effect) {
         match effect {
@@ -85,8 +102,32 @@ impl ChannelState {
             Effect::FineVolumeSlideDown(v) => {
                 self.volume = (self.volume as i16 - *v as i16).clamp(0, 64) as u8;
             }
+            Effect::FinePortaUp(v) => {
+                self.period = clamp_period(self.period.saturating_sub(*v as u16));
+            }
+            Effect::FinePortaDown(v) => {
+                self.period = clamp_period(self.period.saturating_add(*v as u16));
+            }
             Effect::NoteCut(0) => self.volume = 0,
             _ => {}
+        }
+    }
+
+    /// Slide period toward target_period by porta_speed.
+    fn apply_tone_porta(&mut self) {
+        if self.target_period == 0 || self.period == 0 {
+            return;
+        }
+        if self.period > self.target_period {
+            self.period = self.period.saturating_sub(self.porta_speed as u16);
+            if self.period < self.target_period {
+                self.period = self.target_period;
+            }
+        } else if self.period < self.target_period {
+            self.period = self.period.saturating_add(self.porta_speed as u16);
+            if self.period > self.target_period {
+                self.period = self.target_period;
+            }
         }
     }
 
@@ -96,12 +137,24 @@ impl ChannelState {
             Effect::VolumeSlide(delta) => {
                 self.volume = (self.volume as i16 + delta as i16).clamp(0, 64) as u8;
             }
-            Effect::TonePortaVolSlide(delta) | Effect::VibratoVolSlide(delta) => {
+            Effect::PortaUp(v) => {
+                self.period = clamp_period(self.period.saturating_sub(v as u16));
+            }
+            Effect::PortaDown(v) => {
+                self.period = clamp_period(self.period.saturating_add(v as u16));
+            }
+            Effect::TonePorta(_) => {
+                self.apply_tone_porta();
+            }
+            Effect::TonePortaVolSlide(delta) => {
+                self.apply_tone_porta();
+                self.volume = (self.volume as i16 + delta as i16).clamp(0, 64) as u8;
+            }
+            Effect::VibratoVolSlide(delta) => {
+                // Vibrato portion deferred to A3
                 self.volume = (self.volume as i16 + delta as i16).clamp(0, 64) as u8;
             }
             Effect::NoteCut(tick) => {
-                // NoteCut is tracked as active_effect; decrement handled externally
-                // For simplicity, we just store it and let process_tick handle timing
                 let _ = tick;
             }
             _ => {}

@@ -48,21 +48,38 @@ pub fn schedule_song(song: &Song) -> ScheduleResult {
     ScheduleResult { events, total_ticks: tick }
 }
 
+/// Returns true if the effect is a tone portamento variant.
+fn is_tone_porta(effect: &Effect) -> bool {
+    matches!(effect, Effect::TonePorta(_) | Effect::TonePortaVolSlide(_))
+}
+
 /// Convert a single cell into events and append them to the output.
 fn schedule_cell(cell: &Cell, time: Timestamp, channel: u8, events: &mut Vec<Event>) {
     let target = EventTarget::Channel(channel);
 
     match cell.note {
         Note::On(note) => {
-            events.push(Event::new(
-                time,
-                target,
-                EventPayload::NoteOn {
-                    note,
-                    velocity: 64,
-                    instrument: cell.instrument,
-                },
-            ));
+            if is_tone_porta(&cell.effect) {
+                // TonePorta + note: set target period, don't trigger sample
+                events.push(Event::new(
+                    time,
+                    target,
+                    EventPayload::PortaTarget {
+                        note,
+                        instrument: cell.instrument,
+                    },
+                ));
+            } else {
+                events.push(Event::new(
+                    time,
+                    target,
+                    EventPayload::NoteOn {
+                        note,
+                        velocity: 64,
+                        instrument: cell.instrument,
+                    },
+                ));
+            }
         }
         Note::Off | Note::Fade => {
             events.push(Event::new(
@@ -437,5 +454,52 @@ mod tests {
         song.add_order(OrderEntry::Pattern(idx));
         let result = schedule_song(&song);
         assert_eq!(result.total_ticks, 96); // 48 * 2
+    }
+
+    #[test]
+    fn tone_porta_with_note_emits_porta_target() {
+        let mut pat = Pattern::new(4, 1);
+        pat.cell_mut(0, 0).note = Note::On(60);
+        pat.cell_mut(0, 0).instrument = 1;
+        pat.cell_mut(0, 0).effect = Effect::TonePorta(8);
+
+        let events = schedule_events(&one_channel_song(pat));
+
+        // Should emit PortaTarget + Effect, NOT NoteOn + Effect
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].payload,
+            EventPayload::PortaTarget { note: 60, instrument: 1 }
+        );
+        assert!(matches!(events[1].payload, EventPayload::Effect(Effect::TonePorta(8))));
+    }
+
+    #[test]
+    fn tone_porta_vol_slide_with_note_emits_porta_target() {
+        let mut pat = Pattern::new(4, 1);
+        pat.cell_mut(0, 0).note = Note::On(64);
+        pat.cell_mut(0, 0).instrument = 2;
+        pat.cell_mut(0, 0).effect = Effect::TonePortaVolSlide(4);
+
+        let events = schedule_events(&one_channel_song(pat));
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].payload,
+            EventPayload::PortaTarget { note: 64, instrument: 2 }
+        );
+    }
+
+    #[test]
+    fn note_without_tone_porta_still_emits_note_on() {
+        let mut pat = Pattern::new(4, 1);
+        pat.cell_mut(0, 0).note = Note::On(60);
+        pat.cell_mut(0, 0).instrument = 1;
+        pat.cell_mut(0, 0).effect = Effect::VolumeSlide(4);
+
+        let events = schedule_events(&one_channel_song(pat));
+
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0].payload, EventPayload::NoteOn { .. }));
     }
 }

@@ -7,6 +7,55 @@
 /// In MOD files, period 428 (Amiga C-2) maps to note 48 via period_to_note.
 const REFERENCE_NOTE: i16 = 48;
 
+/// Amiga period for C-4 (note 48). Used as reference in period↔frequency conversion.
+const C4_PERIOD: u32 = 428;
+
+/// Lowest allowed period (highest pitch, B-3 in Amiga notation).
+pub const PERIOD_MIN: u16 = 113;
+
+/// Highest allowed period (lowest pitch, C-1 in Amiga notation).
+pub const PERIOD_MAX: u16 = 856;
+
+/// Base periods for the lowest MOD octave (notes 36-47, C-1 to B-1 in Amiga notation).
+const BASE_PERIODS: [u16; 12] = [
+    856, 808, 762, 720, 678, 640, 604, 570, 538, 508, 480, 453,
+];
+
+/// Convert a MIDI note to an Amiga period value.
+///
+/// Note 36 = C-1 (period 856), note 48 = C-2 (period 428), note 60 = C-3 (period 214).
+/// Returns 0 for note 0 (no note).
+pub fn note_to_period(note: u8) -> u16 {
+    if note == 0 {
+        return 0;
+    }
+    let offset = note as i16 - 36;
+    let semitone = offset.rem_euclid(12) as usize;
+    let octave = offset.div_euclid(12);
+    let base = BASE_PERIODS[semitone] as u32;
+    if octave >= 0 {
+        (base >> octave as u32).max(1) as u16
+    } else {
+        (base << (-octave) as u32) as u16
+    }
+}
+
+/// Convert an Amiga period + c4_speed to a 16.16 fixed-point increment.
+///
+/// Formula: freq = c4_speed * 428 / period, then increment = freq * 65536 / sample_rate.
+pub fn period_to_increment(period: u16, c4_speed: u32, sample_rate: u32) -> u32 {
+    if period == 0 || sample_rate == 0 {
+        return 0;
+    }
+    let freq = (c4_speed as u64 * C4_PERIOD as u64) / period as u64;
+    ((freq * 65536) / sample_rate as u64) as u32
+}
+
+/// Clamp a period to the valid MOD range.
+pub fn clamp_period(period: u16) -> u16 {
+    period.clamp(PERIOD_MIN, PERIOD_MAX)
+}
+
 /// Compute the 16.16 fixed-point sample increment for a given note.
 ///
 /// - `note`: MIDI note number (e.g. 48 = C-4 in our system)
@@ -142,5 +191,87 @@ mod tests {
         let inc_22050 = note_to_increment(48, C4_SPEED, 22050);
         // Half sample rate should give double increment
         assert_eq!(inc_22050, inc_44100 * 2);
+    }
+
+    // === Period-based tests ===
+
+    #[test]
+    fn note_to_period_c1() {
+        assert_eq!(note_to_period(36), 856); // C-1
+    }
+
+    #[test]
+    fn note_to_period_c2() {
+        assert_eq!(note_to_period(48), 428); // C-2 (half of 856)
+    }
+
+    #[test]
+    fn note_to_period_c3() {
+        assert_eq!(note_to_period(60), 214); // C-3 (quarter of 856)
+    }
+
+    #[test]
+    fn note_to_period_b3() {
+        assert_eq!(note_to_period(71), 113); // B-3 = PERIOD_MIN
+    }
+
+    #[test]
+    fn note_to_period_sharp_notes() {
+        assert_eq!(note_to_period(37), 808); // C#-1
+        assert_eq!(note_to_period(49), 404); // C#-2
+    }
+
+    #[test]
+    fn note_to_period_zero_returns_zero() {
+        assert_eq!(note_to_period(0), 0);
+    }
+
+    #[test]
+    fn period_to_increment_at_c4() {
+        // period 428, c4_speed 8363 → freq 8363 → same as note_to_increment(48, ...)
+        let inc = period_to_increment(428, C4_SPEED, SAMPLE_RATE);
+        let expected = note_to_increment(48, C4_SPEED, SAMPLE_RATE);
+        assert_eq!(inc, expected);
+    }
+
+    #[test]
+    fn period_to_increment_octave_up_doubles() {
+        let base = period_to_increment(428, C4_SPEED, SAMPLE_RATE);
+        let octave_up = period_to_increment(214, C4_SPEED, SAMPLE_RATE);
+        assert_eq!(octave_up, base * 2);
+    }
+
+    #[test]
+    fn period_to_increment_zero_period_returns_zero() {
+        assert_eq!(period_to_increment(0, C4_SPEED, SAMPLE_RATE), 0);
+    }
+
+    #[test]
+    fn period_to_increment_zero_sample_rate_returns_zero() {
+        assert_eq!(period_to_increment(428, C4_SPEED, 0), 0);
+    }
+
+    #[test]
+    fn note_to_period_roundtrip_matches_increment() {
+        // For note 48 (C-2), note_to_period → period_to_increment should match
+        let period = note_to_period(48);
+        let via_period = period_to_increment(period, C4_SPEED, SAMPLE_RATE);
+        let via_note = note_to_increment(48, C4_SPEED, SAMPLE_RATE);
+        assert_eq!(via_period, via_note);
+    }
+
+    #[test]
+    fn clamp_period_within_range() {
+        assert_eq!(clamp_period(428), 428);
+    }
+
+    #[test]
+    fn clamp_period_below_min() {
+        assert_eq!(clamp_period(50), PERIOD_MIN);
+    }
+
+    #[test]
+    fn clamp_period_above_max() {
+        assert_eq!(clamp_period(1000), PERIOD_MAX);
     }
 }
