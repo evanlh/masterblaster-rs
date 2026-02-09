@@ -10,8 +10,9 @@ Full design in [SPECIFICATION.md](SPECIFICATION.md).
 - **mb-formats**: MOD parser complete (header, samples, patterns, period-to-note, all effect types). Other formats not started.
 - **mb-engine**: Working. Frame mixing with linear interpolation, EventQueue with sorted insertion, ChannelState with per-tick effects (volume slide), pattern-to-event scheduling, song end detection via total tick count.
 - **mb-audio**: Working. AudioOutput trait, CpalOutput with ring buffer, stereo stream with spin-wait writes. Forces 2-channel output for macOS compatibility.
-- **GUI (src/main.rs)**: Minimal egui shell. 3-panel layout renders, pattern cells display. No keyboard input, no playback, no file loading.
-- **play_mod example**: End-to-end MOD playback and WAV export.
+- **mb-master**: Headless Controller. Unified API for song loading, real-time playback (audio thread), and offline rendering (render_frames, render_to_wav). WAV encoding lives here.
+- **GUI (src/main.rs)**: imgui-rs shell. 3-panel layout, file dialog, playback controls. UI state in `GuiState`, delegates to `Controller`.
+- **mb-cli (src/bin/cli.rs)**: CLI binary for headless playback and WAV export via Controller.
 
 ### What's functional
 - Load MOD → parse → schedule → play audio (end-to-end)
@@ -21,7 +22,6 @@ Full design in [SPECIFICATION.md](SPECIFICATION.md).
 - Song end detection (stops at last pattern row)
 
 ### What's NOT functional
-- No file loading from GUI (no file dialog)
 - Most effects not implemented (vibrato, portamento, arpeggio, tremolo, etc.)
 - No audio graph traversal (channels mix directly to master, bypassing graph)
 - No pattern editing
@@ -29,18 +29,29 @@ Full design in [SPECIFICATION.md](SPECIFICATION.md).
 ## Usage
 
 ```sh
-# Play a MOD file
-cargo run --example play_mod -- path/to/file.mod
+# Launch GUI
+cargo run
+
+# Play a MOD file (headless CLI)
+cargo cli path/to/file.mod
 
 # Render a MOD file to WAV (44100 Hz, 16-bit stereo)
-cargo run --example play_mod -- path/to/file.mod --wav output.wav
+cargo cli path/to/file.mod --wav output.wav
 ```
+
+`cargo cli` is a cargo alias for `cargo run --bin mb-cli --` (defined in `.cargo/config.toml`).
 
 ## Dependency Decisions
 
 | Crate | Version | Notes |
 |-------|---------|-------|
-| eframe/egui | 0.31 | **Not** 0.28/0.29 — icrate 0.0.4 causes macOS crash via objc2 |
+| imgui | 0.12 | With `tables-api` feature for Table API |
+| imgui-winit-support | 0.13 | |
+| imgui-glow-renderer | 0.13 | |
+| winit | 0.30 | ApplicationHandler pattern |
+| glutin | 0.32 | |
+| glow | 0.14 | |
+| rfd | 0.15 | Native file dialogs |
 | ringbuf | 0.4 | Trait-based API: `try_push`/`try_pop`, `Split` trait |
 | cpal | 0.15 | |
 | binrw | 0.14 | |
@@ -50,7 +61,6 @@ cargo run --example play_mod -- path/to/file.mod --wav output.wav
 ## Known Issues
 
 - Compiler warnings: unused imports in mb-formats
-- Spec/code drift: SPECIFICATION.md lists files (e.g. `src/app.rs`, `src/ui/*.rs`, `src/audio_thread.rs`) that don't exist — everything is in `src/main.rs` currently
 - Most effect types are unimplemented (match arms fall through to `_ => {}`)
 - 16.16 fixed-point position limits sample addressing to 65535 frames — large MOD samples (>64KB) would wrap
 - `period_to_note` quantizes to nearest semitone, losing finetune precision vs direct period-based playback
@@ -74,46 +84,41 @@ cargo run --example play_mod -- path/to/file.mod --wav output.wav
 - TDD when designing new interfaces
 - See global CLAUDE.md for full coding guidelines
 
-## File Layout (actual, not spec)
+## File Layout
 
 ```
 masterblaster-rs/
 ├── Cargo.toml              # Workspace root + main app package
 ├── SPECIFICATION.md
+├── .cargo/
+│   └── config.toml         # Cargo aliases (cli, ta)
 ├── src/
-│   └── main.rs             # All GUI code (TrackerApp, panels, cell formatting)
-├── examples/
-│   └── play_mod.rs         # CLI player + WAV export
+│   ├── main.rs             # GUI binary: winit+glutin+glow+imgui bootstrap
+│   ├── bin/
+│   │   └── cli.rs          # CLI binary: headless playback + WAV export
+│   └── ui/
+│       ├── mod.rs           # GuiState, CenterView, build_ui composition
+│       ├── transport.rs     # Transport bar + load_mod_dialog (rfd)
+│       ├── patterns.rs      # Patterns/order list panel
+│       ├── pattern_editor.rs # Pattern grid (Table API + ListClipper)
+│       ├── samples.rs       # Samples browser panel
+│       ├── graph.rs         # Audio graph visualization (DrawList)
+│       └── cell_format.rs   # Cell → display string formatting
 ├── tests/
 │   ├── fixtures/
 │   │   ├── mod/            # ProTracker .mod test files
 │   │   └── bmx/            # Buzz .bmx test files
 │   ├── mod_fixtures.rs     # MOD parser integration tests
-│   └── mod_playback.rs     # Engine playback integration tests
+│   ├── mod_playback.rs     # Engine playback integration tests
+│   └── snapshot_tests.rs   # Snapshot tests (uses Controller)
 └── crates/
-    ├── mb-ir/src/
-    │   ├── lib.rs           # Core types: Song, Pattern, Cell, Note, Instrument, Sample, etc.
-    │   ├── sample.rs        # Sample, SampleData (with interpolated read), LoopType
-    │   ├── effects.rs       # Effect + VolumeCommand enums, is_row_effect()
-    │   ├── song.rs          # Song, ChannelSettings, OrderEntry, Track
-    │   ├── timestamp.rs     # Timestamp (tick + subtick)
-    │   ├── instrument.rs    # Instrument, Envelope
-    │   └── graph.rs         # AudioGraph, Node, Connection, NodeType, Parameter
-    ├── mb-engine/src/
-    │   ├── lib.rs           # Re-exports
-    │   ├── mixer.rs         # Engine: render loop, event dispatch, channel mixing
-    │   ├── channel.rs       # ChannelState: trigger, stop, row/tick effects
-    │   ├── frequency.rs     # note_to_increment: 12-TET via fixed-point lookup
-    │   ├── scheduler.rs     # schedule_song: order list + patterns → events + total_ticks
-    │   ├── event_queue.rs   # EventQueue: sorted insertion, pop_until
-    │   └── frame.rs         # Frame: stereo i16 pair
-    ├── mb-audio/src/
-    │   ├── lib.rs           # Re-exports
-    │   ├── traits.rs        # AudioOutput trait, AudioError
-    │   └── cpal_backend.rs  # CpalOutput: ring buffer, spin-wait write, stereo stream
-    └── mb-formats/src/
-        ├── lib.rs           # FormatError, re-exports
-        └── mod_format.rs    # ProTracker MOD parser (complete)
+    ├── mb-ir/src/           # Core IR types (no_std)
+    ├── mb-engine/src/       # Playback engine (no_std)
+    ├── mb-audio/src/        # Audio output backends (cpal)
+    ├── mb-formats/src/      # Format parsers (MOD)
+    └── mb-master/src/
+        ├── lib.rs           # Controller: load, play, stop, render
+        └── wav.rs           # WAV encoding (16-bit stereo PCM)
 ```
 
 ## Next Steps (Phase 1 completion)
@@ -122,6 +127,7 @@ masterblaster-rs/
 2. ~~Implement pattern scheduling (pattern → events → queue)~~ Done
 3. ~~Connect audio thread: CpalOutput → Engine::render_frame loop~~ Done
 4. ~~End-to-end: load MOD → parse → schedule → play audio~~ Done
-5. Add file dialog to GUI for loading .mod files
-6. Wire playback controls in GUI to engine
-7. Implement remaining effects (vibrato, portamento, arpeggio, tremolo)
+5. ~~Add file dialog to GUI for loading .mod files~~ Done
+6. ~~Wire playback controls in GUI to engine~~ Done
+7. ~~Extract headless Controller into mb-master crate~~ Done
+8. Implement remaining effects (vibrato, portamento, arpeggio, tremolo)

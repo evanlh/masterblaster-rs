@@ -1,39 +1,40 @@
 //! Transport bar: Load, Play/Stop, view toggle, song info, playback position.
 
-use crate::app::{CenterView, TrackerApp};
-use std::sync::atomic::Ordering;
+use super::{CenterView, GuiState};
 
-pub fn transport_panel(ui: &imgui::Ui, app: &mut TrackerApp) {
+pub fn transport_panel(ui: &imgui::Ui, gui: &mut GuiState) {
     if ui.button("Load") {
-        app.load_mod_file();
+        load_mod_dialog(gui);
     }
     ui.same_line();
     ui.separator();
     ui.same_line();
 
-    let playing = app.is_playing();
+    let playing = gui.controller.is_playing();
 
     ui.disabled(playing, || {
         if ui.button("Play") {
-            app.start_playback();
+            gui.controller.play();
+            gui.status = "Playing...".to_string();
         }
     });
     ui.same_line();
     ui.disabled(!playing, || {
         if ui.button("Stop") {
-            app.stop_playback();
+            gui.controller.stop();
+            gui.status = "Stopped".to_string();
         }
     });
     ui.same_line();
     ui.separator();
     ui.same_line();
 
-    let view_label = match app.center_view {
+    let view_label = match gui.center_view {
         CenterView::Pattern => "Graph",
         CenterView::Graph => "Pattern",
     };
     if ui.button(view_label) {
-        app.center_view = match app.center_view {
+        gui.center_view = match gui.center_view {
             CenterView::Pattern => CenterView::Graph,
             CenterView::Graph => CenterView::Pattern,
         };
@@ -42,14 +43,15 @@ pub fn transport_panel(ui: &imgui::Ui, app: &mut TrackerApp) {
     ui.separator();
     ui.same_line();
 
-    ui.text(&app.song.title.to_string());
+    let song = gui.controller.song();
+    ui.text(&song.title.to_string());
     ui.same_line();
     ui.text(format!(
         "BPM: {} | Speed: {}",
-        app.song.initial_tempo, app.song.initial_speed
+        song.initial_tempo, song.initial_speed
     ));
 
-    if let Some(pos) = app.playback_position() {
+    if let Some(pos) = gui.controller.position() {
         ui.same_line();
         ui.text(format!(
             "Ord: {:02X} | Pat: {:02X} | Row: {:02X}",
@@ -57,15 +59,35 @@ pub fn transport_panel(ui: &imgui::Ui, app: &mut TrackerApp) {
         ));
     }
 
-    if !app.status.is_empty() {
+    if !gui.status.is_empty() {
         ui.same_line();
-        ui.text(&app.status);
+        ui.text(&gui.status);
     }
 
     // Auto-detect when playback finishes naturally
-    if let Some(ref pb) = app.playback {
-        if pb.finished.load(Ordering::Relaxed) && app.status == "Playing..." {
-            app.status = "Finished".to_string();
-        }
+    if gui.controller.is_finished() && gui.status == "Playing..." {
+        gui.status = "Finished".to_string();
+    }
+}
+
+fn load_mod_dialog(gui: &mut GuiState) {
+    let file = rfd::FileDialog::new()
+        .add_filter("MOD files", &["mod", "MOD"])
+        .pick_file();
+
+    let Some(path) = file else { return };
+
+    gui.controller.stop();
+
+    match std::fs::read(&path) {
+        Err(e) => gui.status = format!("Read error: {}", e),
+        Ok(data) => match gui.controller.load_mod(&data) {
+            Err(e) => gui.status = format!("Parse error: {:?}", e),
+            Ok(()) => {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                gui.status = format!("Loaded {}", name);
+                gui.selected_pattern = 0;
+            }
+        },
     }
 }

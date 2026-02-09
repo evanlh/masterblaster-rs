@@ -1,5 +1,7 @@
 //! Audio graph visualization using imgui DrawList with Bezier connections.
 
+use super::GuiState;
+
 const NODE_W: f32 = 70.0;
 const NODE_H: f32 = 28.0;
 const NODE_GAP: f32 = 16.0;
@@ -11,8 +13,8 @@ const CHANNEL_BORDER: [f32; 4] = [0.35, 0.55, 0.35, 1.0];
 const CONN_COLOR: [f32; 4] = [0.31, 0.39, 0.31, 1.0];
 const TEXT_COLOR: [f32; 4] = [0.78, 0.78, 0.78, 1.0];
 
-pub fn graph_panel(ui: &imgui::Ui, app: &crate::app::TrackerApp) {
-    let graph = &app.song.graph;
+pub fn graph_panel(ui: &imgui::Ui, gui: &GuiState) {
+    let graph = &gui.controller.song().graph;
     let layers = compute_graph_layers(graph);
     if layers.is_empty() {
         ui.text("No graph nodes.");

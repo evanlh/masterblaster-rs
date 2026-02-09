@@ -1,10 +1,9 @@
 //! masterblaster - A Rust-based tracker with a compiler-like architecture.
 //! Uses winit + glutin + glow + imgui-rs for the GUI.
 
-mod app;
 mod ui;
 
-use app::TrackerApp;
+use ui::GuiState;
 use std::num::NonZeroU32;
 
 use glow::HasContext;
@@ -46,7 +45,7 @@ fn main() {
         imgui,
         platform,
         renderer: None,
-        app: TrackerApp::new(),
+        gui: GuiState::new(),
     };
 
     event_loop.run_app(&mut state).unwrap();
@@ -63,7 +62,7 @@ struct AppState {
     imgui: imgui::Context,
     platform: WinitPlatform,
     renderer: Option<AutoRenderer>,
-    app: TrackerApp,
+    gui: GuiState,
 }
 
 impl ApplicationHandler for AppState {
@@ -107,7 +106,7 @@ impl ApplicationHandler for AppState {
 
         match event {
             WindowEvent::CloseRequested => {
-                self.app.stop_playback();
+                self.gui.controller.stop();
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
@@ -145,7 +144,7 @@ impl AppState {
             .expect("prepare_frame failed");
 
         let ui = self.imgui.new_frame();
-        ui::build_ui(ui, &mut self.app);
+        ui::build_ui(ui, &mut self.gui);
         self.platform.prepare_render(ui, &gl.window);
 
         let draw_data = self.imgui.render();

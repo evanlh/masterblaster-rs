@@ -1,0 +1,11 @@
+[package]
+name = "mb-master"
+version.workspace = true
+edition.workspace = true
+description = "Headless controller for masterblaster tracker"
+
+[dependencies]
+mb-ir = { workspace = true }
+mb-engine = { workspace = true }
+mb-audio = { workspace = true }
+mb-formats = { workspace = true }

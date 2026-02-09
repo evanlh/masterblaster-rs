@@ -17,7 +17,7 @@ Target: Desktop now (macOS/Linux), embedded (`no_std`) future.
 |----------|--------|-----------|
 | Internal sample format | **16-bit integer** | Embedded-friendly, classic tracker accuracy |
 | Embedded target | **Generic ARM Cortex-M** | ~256KB RAM assumption, no FPU required |
-| UI framework | **egui** | Immediate mode, good for tracker grids |
+| UI framework | **imgui-rs** (Dear ImGui) | Immediate mode, good for tracker grids; Table API + ListClipper for pattern editor |
 | C dependencies | **Pure Rust preferred** | Embedded portability; ANSI C acceptable if minimal |
 | Buzz support | **BMX playback only** | No native DLL loading, emulate common machines |
 
@@ -62,57 +62,35 @@ Target: Desktop now (macOS/Linux), embedded (`no_std`) future.
 
 ```
 masterblaster/
-├── Cargo.toml                 # Workspace root
+├── Cargo.toml                 # Workspace root + main app package
+├── .cargo/config.toml         # Cargo aliases (cli, ta)
 ├── crates/
 │   ├── mb-ir/                 # Core IR types, no_std compatible
-│   │   ├── src/
-│   │   │   ├── lib.rs
-│   │   │   ├── song.rs
-│   │   │   ├── pattern.rs
-│   │   │   ├── instrument.rs
-│   │   │   ├── sample.rs
-│   │   │   └── effects.rs
-│   │   └── Cargo.toml
-│   │
 │   ├── mb-formats/            # Format parsers → IR
-│   │   ├── src/
-│   │   │   ├── lib.rs
-│   │   │   ├── mod_format.rs  # ProTracker MOD
-│   │   │   ├── xm.rs          # FastTracker XM
-│   │   │   ├── it.rs          # Impulse Tracker IT
-│   │   │   ├── s3m.rs         # Scream Tracker S3M
-│   │   │   └── bmx.rs         # Jeskola Buzz BMX
-│   │   └── Cargo.toml
-│   │
 │   ├── mb-engine/             # Playback engine, no_std compatible
-│   │   ├── src/
-│   │   │   ├── lib.rs
-│   │   │   ├── mixer.rs
-│   │   │   ├── player.rs
-│   │   │   ├── effects.rs
-│   │   │   └── interpolation.rs
-│   │   └── Cargo.toml
-│   │
-│   └── mb-audio/              # Audio output abstraction
-│       ├── src/
-│       │   ├── lib.rs
-│       │   ├── traits.rs
-│       │   └── cpal_backend.rs
-│       └── Cargo.toml
+│   ├── mb-audio/              # Audio output abstraction (cpal)
+│   └── mb-master/             # Headless controller (see below)
+│       └── src/
+│           ├── lib.rs         # Controller: load, play, stop, render
+│           └── wav.rs         # WAV encoding (16-bit stereo PCM)
 │
-├── src/                       # Main application (egui)
-│   ├── main.rs
-│   ├── app.rs
-│   ├── ui/
-│   │   ├── mod.rs
-│   │   ├── pattern_editor.rs
-│   │   ├── transport.rs
-│   │   ├── order_list.rs
-│   │   └── instrument_panel.rs
-│   └── audio_thread.rs
+├── src/                       # GUI application (imgui-rs)
+│   ├── main.rs                # winit+glutin+glow+imgui bootstrap
+│   ├── bin/
+│   │   └── cli.rs             # CLI binary: headless playback + WAV export
+│   └── ui/
+│       ├── mod.rs             # GuiState, CenterView, build_ui
+│       ├── transport.rs       # Transport bar + file dialog
+│       ├── pattern_editor.rs  # Pattern grid (Table API + ListClipper)
+│       ├── patterns.rs        # Pattern/order list panel
+│       ├── samples.rs         # Samples browser panel
+│       ├── graph.rs           # Audio graph visualization (DrawList)
+│       └── cell_format.rs     # Cell → display string formatting
 │
 └── tests/                     # Integration tests
-    └── ...
+    ├── mod_fixtures.rs        # MOD parser tests
+    ├── mod_playback.rs        # Engine playback tests
+    └── snapshot_tests.rs      # WAV snapshot tests (uses Controller)
 ```
 
 ---
@@ -891,9 +869,13 @@ pub trait AudioOutput {
 - `symphonia` - Audio format decoding (WAV, FLAC, MP3 for sample import)
 
 ### GUI
-- `egui` - Immediate mode GUI, ideal for tracker grids
-- `eframe` - egui application framework (desktop)
-- `egui_extras` - Tables, date pickers, etc.
+- `imgui` (imgui-rs 0.12) - Dear ImGui bindings, Table API + ListClipper
+- `imgui-winit-support` - winit 0.30 integration
+- `imgui-glow-renderer` - OpenGL rendering via glow
+- `winit` - Window creation and event loop
+- `glutin` - OpenGL context management
+- `glow` - OpenGL bindings
+- `rfd` - Native file dialogs
 
 ---
 
@@ -921,139 +903,68 @@ Open-source Buzz clone in C/GStreamer. Contains:
 
 ---
 
-## GUI Architecture (egui)
+## Headless Controller (`mb-master`)
 
-### Why egui for Trackers
+The `Controller` is the shared application layer between the GUI and CLI. It owns
+the song and manages both real-time playback (audio thread) and offline rendering.
 
-- **Immediate mode**: Natural fit for pattern grids that need per-cell rendering
-- **Custom widgets**: Easy to build hex editors, waveform displays
-- **Cross-platform**: Same code for macOS/Linux/Windows
-- **No callback hell**: Data flows naturally through Rust ownership
+```
+GUI:   AppState --owns--> GuiState --owns--> Controller
+         └── load button calls rfd, then controller.load_mod(data)
+         └── play/stop delegate to controller
+
+CLI:   main() --> Controller --> load_mod / play / render_to_wav
+Tests: test() --> Controller --> load_mod / render_to_wav / assert snapshot
+```
+
+Key design decisions:
+- `load_mod(data: &[u8])` takes raw bytes — the caller handles I/O and file dialogs
+- `render_frames` / `render_to_wav` take `&self` and clone the Song internally
+- `play()` spawns an audio thread with atomic-based position reporting
+- WAV encoding lives in `mb-master` as a shared utility
+
+## GUI Architecture (imgui-rs)
+
+Uses winit 0.30 + glutin 0.32 + glow 0.14 + imgui 0.12 (with `tables-api` feature).
 
 ### Application Structure
 
 ```rust
-// src/main.rs
-use eframe::egui;
-
-struct TrackerApp {
-    song: Song,
-    engine: Engine,
-    playback_state: PlaybackState,
-    ui_state: UiState,
+// src/main.rs — GL/imgui infrastructure
+struct AppState {
+    gl: Option<GlObjects>,
+    imgui: imgui::Context,
+    platform: WinitPlatform,
+    renderer: Option<AutoRenderer>,
+    gui: GuiState,           // Application + UI state
 }
 
-struct UiState {
-    current_pattern: u8,
-    cursor_row: u16,
-    cursor_channel: u8,
-    cursor_column: CursorColumn,
-    edit_mode: bool,
-    octave: u8,
-    // ...
-}
-
-enum CursorColumn {
-    Note,
-    Instrument,
-    Volume,
-    Effect,
-    EffectParam,
-}
-
-impl eframe::App for TrackerApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Top panel: transport controls
-        egui::TopBottomPanel::top("transport").show(ctx, |ui| {
-            self.render_transport(ui);
-        });
-
-        // Left panel: pattern list / order editor
-        egui::SidePanel::left("patterns").show(ctx, |ui| {
-            self.render_pattern_list(ui);
-        });
-
-        // Right panel: instruments/samples
-        egui::SidePanel::right("instruments").show(ctx, |ui| {
-            self.render_instrument_panel(ui);
-        });
-
-        // Central panel: pattern editor
-        egui::CentralPanel::default().show(ctx, |ui| {
-            self.render_pattern_editor(ui);
-        });
-    }
+// src/ui/mod.rs — UI-facing state bundle, no GL/imgui/renderer fields
+pub struct GuiState {
+    pub controller: Controller,
+    pub selected_pattern: usize,
+    pub center_view: CenterView,
+    pub status: String,
 }
 ```
 
-### Pattern Editor Widget
+UI panel functions take `&mut GuiState` to avoid coupling panels to GL internals.
+The render loop passes `&mut self.gui` to `build_ui`.
 
-```rust
-fn render_pattern_editor(&mut self, ui: &mut egui::Ui) {
-    let pattern = &self.song.patterns[self.ui_state.current_pattern as usize];
+### Layout
 
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        // Use egui::Grid or custom painter for pattern grid
-        for row in 0..pattern.rows {
-            ui.horizontal(|ui| {
-                // Row number
-                ui.monospace(format!("{:02X}", row));
-
-                // Each channel
-                for ch in 0..pattern.channels {
-                    let cell = pattern.cell(row, ch);
-                    self.render_cell(ui, cell, row, ch);
-                }
-            });
-        }
-    });
-}
-
-fn render_cell(&mut self, ui: &mut egui::Ui, cell: &Cell, row: u16, ch: u8) {
-    let is_cursor = row == self.ui_state.cursor_row
-                 && ch == self.ui_state.cursor_channel;
-
-    let bg = if is_cursor {
-        egui::Color32::from_rgb(60, 60, 100)
-    } else if row % 4 == 0 {
-        egui::Color32::from_rgb(40, 40, 40)
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-
-    // Note | Inst | Vol | Effect
-    // C-4    01    40   A0F
-    ui.horizontal(|ui| {
-        ui.monospace(format_note(cell.note));
-        ui.monospace(format_inst(cell.instrument));
-        ui.monospace(format_vol(&cell.volume));
-        ui.monospace(format_effect(&cell.effect));
-    });
-}
-```
+Three-column layout via imgui `child_window()` with fixed sizes:
+- **Left (150px)**: Pattern list + order list
+- **Center (flexible)**: Pattern editor (Table API + ListClipper) or graph view
+- **Right (200px)**: Samples browser
 
 ### Audio Thread Communication
 
-```rust
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use ringbuf::{HeapRb, Producer, Consumer};
-
-enum AudioCommand {
-    Play,
-    Stop,
-    SetPosition(u8, u16),
-    LoadSong(Box<Song>),
-}
-
-struct AudioThread {
-    engine: Engine,
-    command_rx: Consumer<AudioCommand>,
-    running: Arc<AtomicBool>,
-}
-
-// GUI sends commands via lock-free ring buffer
-// Audio thread processes them between buffer fills
-```
+The `Controller` in `mb-master` manages the audio thread internally. `play()`
+spawns a thread that renders via `Engine` into a `CpalOutput` ring buffer.
+Position reporting uses atomic integers (`AtomicU64` for current tick,
+`AtomicBool` for stop/finished signals). The GUI polls `controller.position()`
+each frame — no lock-free command queue needed.
 
 ---
 
@@ -1076,10 +987,15 @@ struct AudioThread {
   - [x] AudioOutput trait + CpalOutput with ring buffer
   - [x] Audio thread integration (engine → stream loop)
 - [x] `mb-formats` with MOD parser → IR translation
-- [ ] Minimal egui app: load MOD, visualize graph, play
-  - [x] egui shell with 3-panel layout and pattern display
-  - [x] File loading dialog
-  - [x] Playback controls wired to engine
+- [x] `mb-master` headless Controller
+  - [x] Unified API for load, play, stop, render
+  - [x] WAV encoding (shared by CLI + tests)
+  - [x] CLI binary (`mb-cli`) for headless playback + export
+- [x] imgui-rs app: load MOD, visualize graph, play
+  - [x] 3-panel layout with pattern editor (Table API + ListClipper)
+  - [x] File loading dialog (rfd)
+  - [x] Playback controls wired to Controller
+  - [x] Audio graph visualization (DrawList + Bezier curves)
 
 **Milestone**: MOD playback via graph engine (4 TrackerChannel → Master)
 

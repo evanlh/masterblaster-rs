@@ -1,19 +1,20 @@
 //! Patterns list + order list panel.
 
-use crate::app::TrackerApp;
+use super::GuiState;
 
-pub fn patterns_panel(ui: &imgui::Ui, app: &mut TrackerApp, pos: Option<mb_ir::PlaybackPosition>) {
+pub fn patterns_panel(ui: &imgui::Ui, gui: &mut GuiState, pos: Option<mb_ir::PlaybackPosition>) {
     ui.text("Patterns");
     ui.separator();
 
-    for (i, _) in app.song.patterns.iter().enumerate() {
+    let song = gui.controller.song();
+    for (i, _) in song.patterns.iter().enumerate() {
         let label = format!("Pattern {:02X}", i);
         if ui
             .selectable_config(&label)
-            .selected(app.selected_pattern == i)
+            .selected(gui.selected_pattern == i)
             .build()
         {
-            app.selected_pattern = i;
+            gui.selected_pattern = i;
         }
     }
 
@@ -22,7 +23,7 @@ pub fn patterns_panel(ui: &imgui::Ui, app: &mut TrackerApp, pos: Option<mb_ir::P
     ui.separator();
 
     let playing_order = pos.map(|p| p.order_index);
-    for (i, entry) in app.song.order.iter().enumerate() {
+    for (i, entry) in song.order.iter().enumerate() {
         let text = match entry {
             mb_ir::OrderEntry::Pattern(idx) => format!("{:02}: Pat {:02X}", i, idx),
             mb_ir::OrderEntry::Skip => format!("{:02}: +++", i),

@@ -7,10 +7,37 @@ mod patterns;
 mod samples;
 mod transport;
 
-use crate::app::{CenterView, TrackerApp};
+use mb_master::Controller;
 
-pub fn build_ui(ui: &imgui::Ui, app: &mut TrackerApp) {
-    let pos = app.playback_position();
+/// Toggle between center panel views.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CenterView {
+    Pattern,
+    Graph,
+}
+
+/// UI-facing state bundle — passed to all panel functions.
+/// No GL/imgui/renderer fields.
+pub struct GuiState {
+    pub controller: Controller,
+    pub selected_pattern: usize,
+    pub center_view: CenterView,
+    pub status: String,
+}
+
+impl GuiState {
+    pub fn new() -> Self {
+        Self {
+            controller: Controller::new(),
+            selected_pattern: 0,
+            center_view: CenterView::Pattern,
+            status: String::new(),
+        }
+    }
+}
+
+pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
+    let pos = gui.controller.position();
 
     let display_size = ui.io().display_size;
     ui.window("masterblaster")
@@ -24,7 +51,7 @@ pub fn build_ui(ui: &imgui::Ui, app: &mut TrackerApp) {
                 | imgui::WindowFlags::NO_BRING_TO_FRONT_ON_FOCUS,
         )
         .build(|| {
-            transport::transport_panel(ui, app);
+            transport::transport_panel(ui, gui);
             ui.separator();
 
             let avail = ui.content_region_avail();
@@ -34,19 +61,19 @@ pub fn build_ui(ui: &imgui::Ui, app: &mut TrackerApp) {
 
             ui.child_window("patterns")
                 .size([left_w, avail[1]])
-                .build(|| patterns::patterns_panel(ui, app, pos));
+                .build(|| patterns::patterns_panel(ui, gui, pos));
             ui.same_line();
 
             ui.child_window("center")
                 .size([center_w, avail[1]])
-                .build(|| match app.center_view {
-                    CenterView::Pattern => pattern_editor::pattern_editor(ui, app, pos),
-                    CenterView::Graph => graph::graph_panel(ui, app),
+                .build(|| match gui.center_view {
+                    CenterView::Pattern => pattern_editor::pattern_editor(ui, gui, pos),
+                    CenterView::Graph => graph::graph_panel(ui, gui),
                 });
             ui.same_line();
 
             ui.child_window("samples")
                 .size([right_w, avail[1]])
-                .build(|| samples::samples_panel(ui, app));
+                .build(|| samples::samples_panel(ui, gui));
         });
 }

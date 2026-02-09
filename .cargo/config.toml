@@ -1,2 +1,3 @@
 [alias]
 ta = "test --workspace"
+cli = "run --bin mb-cli --"
