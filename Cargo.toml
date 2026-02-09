@@ -32,8 +32,14 @@ ringbuf = "0.4"
 binrw = "0.14"
 
 # GUI
-eframe = "0.31"
-egui = "0.31"
+imgui = { version = "0.12", features = ["tables-api"] }
+imgui-winit-support = "0.13"
+imgui-glow-renderer = "0.13"
+winit = "0.30"
+glow = "0.14"
+glutin = "0.32"
+glutin-winit = "0.5"
+raw-window-handle = "0.6"
 rfd = "0.15"
 
 [package]
@@ -46,6 +52,12 @@ mb-ir = { workspace = true }
 mb-engine = { workspace = true }
 mb-audio = { workspace = true }
 mb-formats = { workspace = true }
-eframe = { workspace = true }
-egui = { workspace = true }
+imgui = { workspace = true }
+imgui-winit-support = { workspace = true }
+imgui-glow-renderer = { workspace = true }
+winit = { workspace = true }
+glow = { workspace = true }
+glutin = { workspace = true }
+glutin-winit = { workspace = true }
+raw-window-handle = { workspace = true }
 rfd = { workspace = true }
