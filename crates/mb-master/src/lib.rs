@@ -150,7 +150,7 @@ fn audio_thread(
     engine.schedule_song();
     engine.play();
 
-    if output.build_stream(consumer).is_err() {
+    if output.build_stream(consumer, std::thread::current()).is_err() {
         finished.store(true, Ordering::Relaxed);
         return;
     }
@@ -160,7 +160,7 @@ fn audio_thread(
     let mut frame_count: u64 = 0;
 
     while !engine.is_finished() && !stop_signal.load(Ordering::Relaxed) {
-        output.write_spin(engine.render_frame());
+        output.write_park(engine.render_frame());
         frame_count += 1;
         if frame_count % tick_interval == 0 {
             current_tick.store(engine.position().tick, Ordering::Relaxed);
@@ -168,7 +168,7 @@ fn audio_thread(
     }
 
     for _ in 0..sample_rate {
-        output.write_spin(Frame::silence());
+        output.write_park(Frame::silence());
     }
 
     finished.store(true, Ordering::Relaxed);

@@ -52,7 +52,14 @@ impl CpalOutput {
     }
 
     /// Build and start the audio stream.
-    pub fn build_stream(&mut self, mut consumer: HeapCons<Frame>) -> Result<(), AudioError> {
+    ///
+    /// `producer_thread` is unparked after each callback so the render thread
+    /// can sleep instead of spin-waiting when the ring buffer is full.
+    pub fn build_stream(
+        &mut self,
+        mut consumer: HeapCons<Frame>,
+        producer_thread: std::thread::Thread,
+    ) -> Result<(), AudioError> {
         let running = self.running.clone();
         let channels = self.config.channels as usize;
 
@@ -67,12 +74,10 @@ impl CpalOutput {
                         return;
                     }
 
-                    // Process one frame per device frame (channels samples per frame)
                     for chunk in data.chunks_mut(channels) {
                         if let Some(frame) = consumer.try_pop() {
                             let left = frame.left as f32 / 32768.0;
                             let right = frame.right as f32 / 32768.0;
-                            // Write stereo pair; zero-fill any extra channels
                             for (i, sample) in chunk.iter_mut().enumerate() {
                                 *sample = match i {
                                     0 => left,
@@ -86,6 +91,9 @@ impl CpalOutput {
                             }
                         }
                     }
+
+                    // Wake the producer — buffer now has room
+                    producer_thread.unpark();
                 },
                 |err| eprintln!("Audio stream error: {}", err),
                 None,
@@ -100,10 +108,13 @@ impl CpalOutput {
 }
 
 impl CpalOutput {
-    /// Write a single frame, spinning until the ring buffer has room.
-    pub fn write_spin(&mut self, frame: Frame) {
+    /// Write a single frame, parking until the ring buffer has room.
+    ///
+    /// The CPAL callback calls `unpark()` after consuming frames, so this
+    /// sleeps instead of burning CPU while waiting for buffer space.
+    pub fn write_park(&mut self, frame: Frame) {
         while self.producer.try_push(frame).is_err() {
-            std::hint::spin_loop();
+            std::thread::park();
         }
     }
 }
