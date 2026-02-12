@@ -1,3 +1,4 @@
 [alias]
 ta = "test --workspace"
 cli = "run --bin mb-cli --"
+mb = "run --bin masterblaster --"
