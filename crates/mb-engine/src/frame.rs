@@ -36,3 +36,30 @@ impl Frame {
         self.right = ((self.right as i32 * volume as i32) >> 6) as i16;
     }
 }
+
+/// A wide (i32) stereo frame for accumulating multiple i16 inputs without premature clamping.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WideFrame {
+    pub left: i32,
+    pub right: i32,
+}
+
+impl WideFrame {
+    pub const fn silence() -> Self {
+        Self { left: 0, right: 0 }
+    }
+
+    /// Accumulate a narrow frame without clamping.
+    pub fn accumulate(&mut self, frame: Frame) {
+        self.left += frame.left as i32;
+        self.right += frame.right as i32;
+    }
+
+    /// Attenuate and clamp to i16 Frame.
+    pub fn to_frame(self, shift: u32) -> Frame {
+        Frame {
+            left: (self.left >> shift).clamp(-32768, 32767) as i16,
+            right: (self.right >> shift).clamp(-32768, 32767) as i16,
+        }
+    }
+}

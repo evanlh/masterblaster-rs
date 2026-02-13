@@ -36,9 +36,18 @@ pub struct Engine {
     playing: bool,
     /// Tick at which the song ends (set by schedule_song)
     song_end_tick: u64,
-    /// Extra right-shift applied per channel to prevent clipping when summed.
-    /// For N channels with L-R panning, at most N/2 contribute to one side.
-    mix_shift: u32,
+    /// Right-shift applied in the Master node to prevent clipping.
+    /// Derived from the number of connections feeding the Master node.
+    master_mix_shift: u32,
+}
+
+/// Compute the right-shift needed to attenuate N inputs to prevent clipping.
+///
+/// For N inputs with L-R panning, at most N/2 contribute to one side.
+/// Returns the number of bits to shift right.
+fn compute_mix_shift(input_count: u32) -> u32 {
+    let sides = (input_count / 2).max(1);
+    sides.next_power_of_two().trailing_zeros()
 }
 
 impl Engine {
@@ -50,10 +59,9 @@ impl Engine {
 
         let graph_state = GraphState::from_graph(&song.graph);
 
-        // For N channels, at most N/2 are hard-panned to one side (L-R-R-L).
-        // Shift each channel's output right to prevent clipping when summed.
-        let sides = (num_channels / 2).max(1) as u32;
-        let mix_shift = sides.next_power_of_two().trailing_zeros();
+        // Derive attenuation from the number of connections feeding Master (node 0)
+        let master_inputs = song.graph.connections.iter().filter(|c| c.to == 0).count() as u32;
+        let master_mix_shift = compute_mix_shift(master_inputs);
 
         let mut engine = Self {
             song,
@@ -68,7 +76,7 @@ impl Engine {
             speed,
             playing: false,
             song_end_tick: 0,
-            mix_shift,
+            master_mix_shift,
         };
 
         // Initialize channels with panning from song settings
@@ -300,9 +308,8 @@ impl Engine {
         let left_vol = ((128 - pan_right) * vol) >> 7;
         let right_vol = (pan_right * vol) >> 7;
 
-        let shift = 6 + self.mix_shift;
-        let left = (sample_value as i32 * left_vol) >> shift;
-        let right = (sample_value as i32 * right_vol) >> shift;
+        let left = (sample_value as i32 * left_vol) >> 6;
+        let right = (sample_value as i32 * right_vol) >> 6;
 
         // Advance position
         channel.position += channel.increment;
@@ -335,18 +342,24 @@ impl Engine {
                 None => continue,
             };
 
-            // Gather inputs from all connections feeding this node
-            let input = graph_state::gather_inputs(
-                &self.song.graph,
-                &self.graph_state.node_outputs,
-                node_id,
-            );
-
-            // Process node based on type
             let output = match &node.node_type {
+                // Sources: no gather_inputs needed
                 NodeType::TrackerChannel { index } => self.render_channel(*index as usize),
-                NodeType::Master => input,
-                _ => Frame::silence(),
+                // Master: accumulate at i32, then attenuate + clamp
+                NodeType::Master => {
+                    let wide = graph_state::gather_inputs_wide(
+                        &self.song.graph,
+                        &self.graph_state.node_outputs,
+                        node_id,
+                    );
+                    wide.to_frame(self.master_mix_shift)
+                }
+                // Future effect/processing nodes: narrow passthrough
+                _ => graph_state::gather_inputs(
+                    &self.song.graph,
+                    &self.graph_state.node_outputs,
+                    node_id,
+                ),
             };
 
             self.graph_state.node_outputs[node_id as usize] = output;

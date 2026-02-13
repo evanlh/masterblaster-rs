@@ -261,3 +261,37 @@ fn stop_produces_silence() {
         "Expected silence after stop"
     );
 }
+
+/// Regression test: SetSpeed effects must increase rendering duration.
+/// Pattern 20 of musiklinjen has a ritardando (speed ramps 6→26),
+/// so it should produce more audio than 64 rows at constant speed 6.
+#[test]
+fn setspeed_produces_ritardando() {
+    let data = fs::read(fixtures_dir().join("musiklinjen.mod")).unwrap();
+    let song = load_mod(&data).unwrap();
+
+    // Render pattern 20 in isolation
+    let mut isolated = song.clone();
+    isolated.order.clear();
+    isolated.order.push(OrderEntry::Pattern(20));
+
+    let mut engine = Engine::new(isolated, 44100);
+    engine.schedule_song();
+    engine.play();
+
+    let mut frame_count = 0usize;
+    while !engine.is_finished() && frame_count < 44100 * 60 {
+        engine.render_frame();
+        frame_count += 1;
+    }
+
+    // PatternBreak at row 15 → only 16 rows play.
+    // At constant speed 6 / 125 BPM: 16 rows * 6 ticks/row * 882 samples/tick = 84,672 frames
+    // With ritardando (speed 6→26): 223 ticks * 882 = 196,686 frames
+    let constant_speed_frames = 16 * 6 * 882;
+    assert!(
+        frame_count > constant_speed_frames * 2,
+        "SetSpeed ritardando should produce >2x frames vs constant speed: got {}, baseline {}",
+        frame_count, constant_speed_frames
+    );
+}

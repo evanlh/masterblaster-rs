@@ -80,7 +80,7 @@ pub struct Pattern {
     pub rows: u16,
     /// Number of channels
     pub channels: u8,
-    /// Ticks per row (default 6, affects timing resolution)
+    /// Ticks per row override; 0 means use global speed (default)
     pub ticks_per_row: u8,
     /// Pattern data, stored row-major: data[row * channels + channel]
     pub data: Vec<Cell>,
@@ -92,7 +92,7 @@ impl Pattern {
         Self {
             rows,
             channels,
-            ticks_per_row: 6,
+            ticks_per_row: 0,
             data: alloc::vec![Cell::empty(); rows as usize * channels as usize],
         }
     }
@@ -117,9 +117,14 @@ impl Pattern {
         &self.data[start..start + self.channels as usize]
     }
 
-    /// Total number of ticks in this pattern.
+    /// Effective ticks per row (falls back to default speed 6 when 0).
+    pub fn effective_ticks_per_row(&self) -> u8 {
+        if self.ticks_per_row > 0 { self.ticks_per_row } else { 6 }
+    }
+
+    /// Estimated total ticks (ignores dynamic speed changes).
     pub fn total_ticks(&self) -> u64 {
-        self.rows as u64 * self.ticks_per_row as u64
+        self.rows as u64 * self.effective_ticks_per_row() as u64
     }
 }
 

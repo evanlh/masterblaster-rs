@@ -59,14 +59,16 @@ fn main() {
 
     let features = mb_ir::analyze(song);
     print!("{}", features);
-    println!();
 
     if let Some(p) = pattern_idx {
         if p >= song.patterns.len() {
             eprintln!("Pattern {} out of range (song has {})", p, song.patterns.len());
             std::process::exit(1);
         }
-        println!("Pattern: {}", p);
+        println!("\nPattern: {}", p);
+
+        let pf = mb_ir::analyze_pattern(&song.patterns[p]);
+        print!("{}", pf);
     }
 
     match (wav_path, pattern_idx) {

@@ -16,7 +16,7 @@ pub mod scheduler;
 
 pub use channel::ChannelState;
 pub use event_queue::EventQueue;
-pub use frame::Frame;
+pub use frame::{Frame, WideFrame};
 pub use frequency::{note_to_increment, note_to_period, period_to_increment, clamp_period, PERIOD_MIN, PERIOD_MAX};
 pub use mixer::Engine;
 pub use scheduler::{schedule_song, ScheduleResult};

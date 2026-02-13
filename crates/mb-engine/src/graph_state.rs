@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use mb_ir::{AudioGraph, NodeId};
 
-use crate::frame::Frame;
+use crate::frame::{Frame, WideFrame};
 
 /// Runtime state for the audio graph during playback.
 pub struct GraphState {
@@ -93,6 +93,23 @@ pub fn gather_inputs(
     input
 }
 
+/// Gather input frames at i32 precision (no intermediate clamping).
+pub fn gather_inputs_wide(
+    graph: &AudioGraph,
+    node_outputs: &[Frame],
+    node_id: NodeId,
+) -> WideFrame {
+    let mut wide = WideFrame::silence();
+    for conn in &graph.connections {
+        if conn.to == node_id {
+            if let Some(&src_output) = node_outputs.get(conn.from as usize) {
+                wide.accumulate(src_output);
+            }
+        }
+    }
+    wide
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +182,23 @@ mod tests {
         let outputs = vec![Frame::silence(); 1];
         let input = gather_inputs(&graph, &outputs, 0);
         assert_eq!(input, Frame::silence());
+    }
+
+    #[test]
+    fn gather_inputs_wide_no_premature_clamp() {
+        let mut graph = AudioGraph::with_master();
+        let a = graph.add_node(NodeType::TrackerChannel { index: 0 });
+        let b = graph.add_node(NodeType::TrackerChannel { index: 1 });
+        graph.connect(a, 0);
+        graph.connect(b, 0);
+
+        let mut outputs = vec![Frame::silence(); 3];
+        outputs[a as usize] = Frame { left: 30000, right: 30000 };
+        outputs[b as usize] = Frame { left: 30000, right: 30000 };
+
+        let wide = gather_inputs_wide(&graph, &outputs, 0);
+        assert_eq!(wide.left, 60000); // not clamped to 32767
+        assert_eq!(wide.right, 60000);
     }
 
     #[test]
