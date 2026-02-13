@@ -89,10 +89,6 @@ pub enum NodeType {
     TrackerChannel { index: u8 },
     /// Buzz machine (emulated)
     BuzzMachine { machine_name: String },
-    /// Future: VST/CLAP plugin
-    Plugin { path: String },
-    /// Future: MIDI output
-    MidiOut { port: u8 },
 }
 
 impl NodeType {
@@ -103,8 +99,6 @@ impl NodeType {
             NodeType::Sampler { sample_id } => alloc::format!("Smp {}", sample_id),
             NodeType::TrackerChannel { index } => alloc::format!("Chan {}", index),
             NodeType::BuzzMachine { machine_name } => machine_name.clone(),
-            NodeType::Plugin { path } => path.clone(),
-            NodeType::MidiOut { port } => alloc::format!("MIDI {}", port),
         }
     }
 }

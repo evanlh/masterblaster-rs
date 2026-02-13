@@ -11,6 +11,8 @@ mod event_queue;
 mod frame;
 mod frequency;
 mod graph_state;
+pub mod machine;
+pub mod machines;
 mod mixer;
 pub mod scheduler;
 

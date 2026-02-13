@@ -20,10 +20,11 @@ Full design in [SPECIFICATION.md](SPECIFICATION.md).
 - Linear interpolation for smooth sample playback
 - L-R-R-L channel panning (classic Amiga stereo)
 - Song end detection (stops at last pattern row)
+- Machine trait + BuzzMachine graph integration (first machine: Amiga low-pass filter)
+- Audio graph routing: Chan→AmigaFilter→Master (with per-node mix_shifts)
 
 ### What's NOT functional
 - Most effects not implemented (vibrato, portamento, arpeggio, tremolo, etc.)
-- No audio graph traversal (channels mix directly to master, bypassing graph)
 - No pattern editing
 
 ## Usage
@@ -70,7 +71,8 @@ cargo cli path/to/file.mod --wav output.wav
 - **no_std** compatible in mb-ir and mb-engine (use `alloc`, not `std`)
 - **16-bit integer mixing** throughout (embedded-friendly, classic tracker accuracy)
 - **Linear interpolation** on sample reads via `SampleData::get_mono_interpolated()` (16.16 fixed-point blending, i64 intermediate to avoid overflow)
-- **Graph-based routing** from day 1: even MOD files route TrackerChannel nodes → Master
+- **Graph-based routing**: MOD files route TrackerChannel→AmigaFilter→Master; per-node `mix_shifts` for attenuation
+- **Machine trait**: `Machine { info, init, tick, work, stop, set_param }` — f32 at machine boundary, i16↔f32 conversion in engine
 - **Beat-based timing**: `MusicalTime { beat, sub_beat }` with `SUB_BEAT_UNIT = 720720` (LCM 1..16). Rows positioned in beat-space (speed-independent); speed only affects per-tick effects and NoteDelay.
 - **Event-driven**: patterns compile to events, engine consumes sorted event queue
 - **Fixed-point 16.16** for sample position/increment in engine
@@ -115,6 +117,8 @@ masterblaster-rs/
 └── crates/
     ├── mb-ir/src/           # Core IR types (no_std)
     ├── mb-engine/src/       # Playback engine (no_std)
+    │   ├── machine.rs       # Machine trait + types
+    │   └── machines/        # Built-in machines (amiga_filter.rs)
     ├── mb-audio/src/        # Audio output backends (cpal)
     ├── mb-formats/src/      # Format parsers (MOD)
     └── mb-master/src/

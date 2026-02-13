@@ -1,5 +1,7 @@
 //! Main playback engine.
 
+use alloc::boxed::Box;
+use alloc::vec;
 use alloc::vec::Vec;
 use mb_ir::{Effect, Event, EventPayload, EventTarget, MusicalTime, NodeType, Song, SUB_BEAT_UNIT};
 
@@ -8,6 +10,8 @@ use crate::event_queue::EventQueue;
 use crate::frame::Frame;
 use crate::frequency::note_to_period;
 use crate::graph_state::{self, GraphState};
+use crate::machine::Machine;
+use crate::machines;
 use crate::scheduler;
 
 /// The main playback engine.
@@ -40,8 +44,10 @@ pub struct Engine {
     playing: bool,
     /// Time at which the song ends (set by schedule_song)
     song_end_time: Option<MusicalTime>,
-    /// Right-shift applied in the Master node to prevent clipping.
-    master_mix_shift: u32,
+    /// Per-node right-shift to prevent clipping (indexed by NodeId).
+    mix_shifts: Vec<u32>,
+    /// Machine instances (indexed by NodeId; `Some` only for BuzzMachine nodes).
+    machines: Vec<Option<Box<dyn Machine>>>,
 }
 
 /// Compute the right-shift needed to attenuate N inputs to prevent clipping.
@@ -51,6 +57,34 @@ pub struct Engine {
 fn compute_mix_shift(input_count: u32) -> u32 {
     let sides = (input_count / 2).max(1);
     sides.next_power_of_two().trailing_zeros()
+}
+
+/// Compute per-node mix_shifts from connection counts in the graph.
+fn compute_all_mix_shifts(song: &Song) -> Vec<u32> {
+    let n = song.graph.nodes.len();
+    let mut shifts = vec![0u32; n];
+    for (id, _node) in song.graph.nodes.iter().enumerate() {
+        let input_count = song.graph.connections.iter().filter(|c| c.to == id as u16).count() as u32;
+        shifts[id] = compute_mix_shift(input_count);
+    }
+    shifts
+}
+
+/// Instantiate machines for all BuzzMachine nodes in the graph.
+fn init_machines(song: &Song, sample_rate: u32) -> Vec<Option<Box<dyn Machine>>> {
+    song.graph.nodes.iter().map(|node| {
+        if let NodeType::BuzzMachine { machine_name } = &node.node_type {
+            let mut machine = machines::create_machine(machine_name)?;
+            machine.init(sample_rate);
+            // Apply initial parameter values from graph node
+            for param in &node.parameters {
+                machine.set_param(param.id, param.value);
+            }
+            Some(machine)
+        } else {
+            None
+        }
+    }).collect()
 }
 
 impl Engine {
@@ -63,9 +97,11 @@ impl Engine {
 
         let graph_state = GraphState::from_graph(&song.graph);
 
-        // Derive attenuation from the number of connections feeding Master (node 0)
-        let master_inputs = song.graph.connections.iter().filter(|c| c.to == 0).count() as u32;
-        let master_mix_shift = compute_mix_shift(master_inputs);
+        // Compute per-node mix_shifts from connection counts
+        let mix_shifts = compute_all_mix_shifts(&song);
+
+        // Instantiate machines for BuzzMachine nodes
+        let machines_vec = init_machines(&song, sample_rate);
 
         let mut engine = Self {
             song,
@@ -82,7 +118,8 @@ impl Engine {
             tick_in_beat: 0,
             playing: false,
             song_end_time: None,
-            master_mix_shift,
+            mix_shifts,
+            machines: machines_vec,
         };
 
         // Initialize channels with panning from song settings
@@ -198,6 +235,11 @@ impl Engine {
             channel.apply_tick_effect();
             channel.update_increment(sample_rate);
         }
+        for slot in &mut self.machines {
+            if let Some(machine) = slot {
+                machine.tick();
+            }
+        }
     }
 
     /// Dispatch an event to its target.
@@ -236,6 +278,17 @@ impl Engine {
             .unwrap_or(8363)
     }
 
+    /// Resolve instrument/sample for a NoteOn, falling back to the channel's
+    /// current instrument when `instrument == 0` (MOD convention: "keep current").
+    fn resolve_note_on(&self, ch: u8, instrument: u8, note: u8) -> (u8, u8) {
+        if instrument > 0 {
+            self.resolve_sample(instrument, note)
+        } else {
+            let channel = &self.channels[ch as usize];
+            (channel.instrument, channel.sample_index)
+        }
+    }
+
     /// Apply an event to a channel.
     fn apply_channel_event(&mut self, ch: u8, payload: &EventPayload) {
         match payload {
@@ -244,7 +297,7 @@ impl Engine {
                 instrument,
                 velocity: _,
             } => {
-                let (inst_idx, sample_idx) = self.resolve_sample(*instrument, *note);
+                let (inst_idx, sample_idx) = self.resolve_note_on(ch, *instrument, *note);
                 let c4_speed = self.sample_c4_speed(sample_idx);
                 let default_vol = self.song.samples.get(sample_idx as usize).map(|s| s.default_volume);
                 let sample_rate = self.sample_rate;
@@ -382,18 +435,19 @@ impl Engine {
             };
 
             let output = match &node.node_type {
-                // Sources: no gather_inputs needed
                 NodeType::TrackerChannel { index } => self.render_channel(*index as usize),
-                // Master: accumulate at i32, then attenuate + clamp
                 NodeType::Master => {
                     let wide = graph_state::gather_inputs_wide(
                         &self.song.graph,
                         &self.graph_state.node_outputs,
                         node_id,
                     );
-                    wide.to_frame(self.master_mix_shift)
+                    let shift = self.mix_shifts.get(node_id as usize).copied().unwrap_or(0);
+                    wide.to_frame(shift)
                 }
-                // Future effect/processing nodes: narrow passthrough
+                NodeType::BuzzMachine { .. } => {
+                    self.render_machine(node_id)
+                }
                 _ => graph_state::gather_inputs(
                     &self.song.graph,
                     &self.graph_state.node_outputs,
@@ -406,6 +460,34 @@ impl Engine {
 
         // Master is always node 0
         self.graph_state.node_outputs.first().copied().unwrap_or(Frame::silence())
+    }
+
+    /// Render a BuzzMachine node: gather inputs → f32 → machine.work() → i16.
+    fn render_machine(&mut self, node_id: u16) -> Frame {
+        use crate::machine::WorkMode;
+
+        let wide = graph_state::gather_inputs_wide(
+            &self.song.graph,
+            &self.graph_state.node_outputs,
+            node_id,
+        );
+        let shift = self.mix_shifts.get(node_id as usize).copied().unwrap_or(0);
+        let attenuated_l = wide.left >> shift;
+        let attenuated_r = wide.right >> shift;
+
+        let mut buf = [
+            attenuated_l as f32 / 32768.0,
+            attenuated_r as f32 / 32768.0,
+        ];
+
+        if let Some(Some(machine)) = self.machines.get_mut(node_id as usize) {
+            machine.work(&mut buf, WorkMode::ReadWrite);
+        }
+
+        Frame {
+            left: (buf[0] * 32767.0).clamp(-32768.0, 32767.0) as i16,
+            right: (buf[1] * 32767.0).clamp(-32768.0, 32767.0) as i16,
+        }
     }
 
     /// Get the current playback position.

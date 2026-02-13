@@ -171,13 +171,13 @@ fn parse_cell(data: &[u8]) -> Cell {
     // Byte 2: Lower 4 bits of sample number, effect command
     // Byte 3: Effect parameter
 
-    let sample_hi = (data[0] & 0xF0) as u16;
+    let sample_hi = data[0] & 0xF0;              // upper 4 bits → bits 4..7
     let period_hi = ((data[0] & 0x0F) as u16) << 8;
     let period_lo = data[1] as u16;
     let period = period_hi | period_lo;
 
-    let sample_lo = (data[2] & 0xF0) >> 4;
-    let sample = ((sample_hi >> 4) | sample_lo as u16) as u8;
+    let sample_lo = (data[2] & 0xF0) >> 4;       // upper 4 bits → bits 0..3
+    let sample = sample_hi | sample_lo;
 
     let effect_cmd = data[2] & 0x0F;
     let effect_param = data[3];

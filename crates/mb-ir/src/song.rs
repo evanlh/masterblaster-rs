@@ -66,10 +66,22 @@ impl Song {
     }
 
     /// Create a song with a given number of channels (for tracker formats).
+    ///
+    /// Graph: Chan0→AmigaFilter→Master, Chan1→AmigaFilter→Master, ...
     pub fn with_channels(title: &str, num_channels: u8) -> Self {
+        use crate::graph::{NodeType, Parameter};
+
         let mut song = Self::new(title);
 
-        // Create channel settings
+        // Insert Amiga filter between channels and master
+        let filter_id = song
+            .graph
+            .add_node(NodeType::BuzzMachine { machine_name: alloc::string::String::from("Amiga Filter") });
+        song.graph.node_mut(filter_id).unwrap().parameters.push(
+            Parameter::new(0, "Cutoff", 1000, 22050, 4410),
+        );
+        song.graph.connect(filter_id, 0); // filter → master
+
         for i in 0..num_channels {
             song.channels.push(ChannelSettings {
                 // Classic Amiga panning: L R R L pattern
@@ -78,10 +90,8 @@ impl Song {
                 muted: false,
             });
 
-            // Add a TrackerChannel node for each channel
-            let node_id = song.graph.add_node(crate::graph::NodeType::TrackerChannel { index: i });
-            // Connect to master (node 0)
-            song.graph.connect(node_id, 0);
+            let node_id = song.graph.add_node(NodeType::TrackerChannel { index: i });
+            song.graph.connect(node_id, filter_id); // channel → filter
         }
 
         song
