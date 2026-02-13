@@ -30,6 +30,7 @@ pub fn load_mod(data: &[u8]) -> Result<Song, FormatError> {
     // Parse header
     let title = parse_string(&data[0..20]);
     let mut song = Song::with_channels(&title, num_channels);
+    song.rows_per_beat = 4; // MOD standard: 4 rows per beat
 
     // Parse sample headers (31 samples, starting at offset 20)
     for i in 0..31 {

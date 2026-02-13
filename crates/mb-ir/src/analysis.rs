@@ -3,6 +3,7 @@
 use alloc::collections::BTreeSet;
 use core::fmt;
 
+use crate::musical_time::MusicalTime;
 use crate::pattern::{Cell, Note, Pattern};
 use crate::song::{OrderEntry, Song};
 
@@ -153,32 +154,31 @@ pub struct PlaybackPosition {
     pub row: u16,
 }
 
-/// Map an absolute tick to a position in the song (order index, pattern, row).
+/// Map a `MusicalTime` to a position in the song (order index, pattern, row).
 ///
-/// Uses the same tick accumulation logic as the scheduler.
-/// Returns `None` if the tick is past the song's end.
-pub fn tick_to_position(song: &Song, tick: u64) -> Option<PlaybackPosition> {
-    let speed = song.initial_speed as u64;
-    let mut accumulated: u64 = 0;
+/// Walks the order list, accumulating rows in beat-space.
+/// Returns `None` if the time is past the song's end.
+pub fn time_to_position(song: &Song, time: MusicalTime) -> Option<PlaybackPosition> {
+    let rpb = song.rows_per_beat as u32;
+    let mut accumulated = MusicalTime::zero();
 
     for (order_index, entry) in song.order.iter().enumerate() {
         match entry {
             OrderEntry::Pattern(idx) => {
                 let pattern = song.patterns.get(*idx as usize)?;
-                let tpr = pattern.ticks_per_row as u64;
-                let row_speed = if tpr > 0 { tpr } else { speed };
-                let pattern_ticks = pattern.rows as u64 * row_speed;
+                let pat_rpb = pattern.rows_per_beat.map_or(rpb, |r| r as u32);
+                let pattern_end = accumulated.add_rows(pattern.rows as u32, pat_rpb);
 
-                if tick < accumulated + pattern_ticks {
-                    let offset = tick - accumulated;
-                    let row = (offset / row_speed) as u16;
+                if time < pattern_end {
+                    // Binary search for the row within this pattern
+                    let row = find_row_at(accumulated, time, pat_rpb, pattern.rows);
                     return Some(PlaybackPosition {
                         order_index,
                         pattern_index: *idx,
                         row,
                     });
                 }
-                accumulated += pattern_ticks;
+                accumulated = pattern_end;
             }
             OrderEntry::Skip => {}
             OrderEntry::End => break,
@@ -186,6 +186,19 @@ pub fn tick_to_position(song: &Song, tick: u64) -> Option<PlaybackPosition> {
     }
 
     None
+}
+
+/// Find which row contains `time`, given that the pattern starts at `base`.
+fn find_row_at(base: MusicalTime, time: MusicalTime, rpb: u32, max_rows: u16) -> u16 {
+    // Each row occupies SUB_BEAT_UNIT/rpb sub_beats.
+    // Compute elapsed sub_beats from base, then divide.
+    let sub_per_row = crate::musical_time::SUB_BEAT_UNIT / rpb;
+    let elapsed_beats = time.beat - base.beat;
+    let elapsed_sub = elapsed_beats * crate::musical_time::SUB_BEAT_UNIT as u64
+        + time.sub_beat as u64
+        - base.sub_beat as u64;
+    let row = (elapsed_sub / sub_per_row as u64) as u16;
+    row.min(max_rows - 1)
 }
 
 #[cfg(test)]
@@ -288,55 +301,76 @@ mod tests {
 
     // --- Playback position tests ---
 
+    use crate::musical_time::{MusicalTime, SUB_BEAT_UNIT};
+
+    /// Helper: MusicalTime for row N at rpb=4.
+    fn time_at_row(row: u32) -> MusicalTime {
+        MusicalTime::zero().add_rows(row, 4)
+    }
+
     #[test]
-    fn tick_to_position_first_row() {
+    fn time_to_position_first_row() {
         let song = one_pattern_song(Pattern::new(4, 1));
-        let pos = tick_to_position(&song, 0).unwrap();
+        let pos = time_to_position(&song, MusicalTime::zero()).unwrap();
         assert_eq!(pos.order_index, 0);
         assert_eq!(pos.pattern_index, 0);
         assert_eq!(pos.row, 0);
     }
 
     #[test]
-    fn tick_to_position_mid_pattern() {
-        let song = one_pattern_song(Pattern::new(8, 1)); // ticks_per_row=6
-        let pos = tick_to_position(&song, 12).unwrap();
+    fn time_to_position_mid_pattern() {
+        let song = one_pattern_song(Pattern::new(8, 1));
+        // Row 2 at rpb=4
+        let pos = time_to_position(&song, time_at_row(2)).unwrap();
         assert_eq!(pos.row, 2);
     }
 
     #[test]
-    fn tick_to_position_second_order_entry() {
+    fn time_to_position_second_order_entry() {
         let mut song = Song::with_channels("test", 1);
         let p0 = song.add_pattern(Pattern::new(4, 1));
         let p1 = song.add_pattern(Pattern::new(8, 1));
         song.add_order(OrderEntry::Pattern(p0));
         song.add_order(OrderEntry::Pattern(p1));
 
-        let pos = tick_to_position(&song, 24).unwrap();
+        // 4 rows at rpb=4 = 1 beat → first row of p1
+        let pos = time_to_position(&song, MusicalTime::from_beats(1)).unwrap();
         assert_eq!(pos.order_index, 1);
         assert_eq!(pos.pattern_index, p1);
         assert_eq!(pos.row, 0);
 
-        let pos = tick_to_position(&song, 30).unwrap();
+        // 1 beat + 1 row = row 1 of p1
+        let t = MusicalTime::from_beats(1).add_rows(1, 4);
+        let pos = time_to_position(&song, t).unwrap();
         assert_eq!(pos.row, 1);
     }
 
     #[test]
-    fn tick_to_position_past_end_returns_none() {
+    fn time_to_position_past_end_returns_none() {
         let song = one_pattern_song(Pattern::new(4, 1));
-        assert!(tick_to_position(&song, 24).is_none());
-        assert!(tick_to_position(&song, 100).is_none());
+        // 4 rows at rpb=4 = 1 beat; time >= 1 beat should be None
+        assert!(time_to_position(&song, MusicalTime::from_beats(1)).is_none());
+        assert!(time_to_position(&song, MusicalTime::from_beats(10)).is_none());
     }
 
     #[test]
-    fn tick_to_position_skips_order_skip() {
+    fn time_to_position_skips_order_skip() {
         let mut song = Song::with_channels("test", 1);
         let p0 = song.add_pattern(Pattern::new(4, 1));
         song.add_order(OrderEntry::Skip);
         song.add_order(OrderEntry::Pattern(p0));
 
-        let pos = tick_to_position(&song, 0).unwrap();
+        let pos = time_to_position(&song, MusicalTime::zero()).unwrap();
         assert_eq!(pos.order_index, 1);
         assert_eq!(pos.pattern_index, p0);
+    }
+
+    #[test]
+    fn time_to_position_sub_beat_within_row() {
+        let song = one_pattern_song(Pattern::new(8, 1));
+        // Halfway through row 0 should still be row 0
+        let t = MusicalTime { beat: 0, sub_beat: SUB_BEAT_UNIT / 8 - 1 };
+        let pos = time_to_position(&song, t).unwrap();
+        assert_eq!(pos.row, 0);
     }
 }

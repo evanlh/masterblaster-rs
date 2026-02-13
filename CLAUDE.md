@@ -6,9 +6,9 @@ Full design in [SPECIFICATION.md](SPECIFICATION.md).
 ## Current Status: Phase 1 (Core Foundation) — In Progress
 
 ### What's built
-- **mb-ir**: Complete. All IR types (Song, Pattern, Cell, Instrument, Sample, Effect, AudioGraph, Event, Timestamp). Tests passing.
+- **mb-ir**: Complete. All IR types (Song, Pattern, Cell, Instrument, Sample, Effect, AudioGraph, Event, MusicalTime). Tests passing.
 - **mb-formats**: MOD parser complete (header, samples, patterns, period-to-note, all effect types). Other formats not started.
-- **mb-engine**: Working. Frame mixing with linear interpolation, EventQueue with sorted insertion, ChannelState with per-tick effects (volume slide), pattern-to-event scheduling, song end detection via total tick count.
+- **mb-engine**: Working. Frame mixing with linear interpolation, EventQueue with sorted insertion, ChannelState with per-tick effects (volume slide), beat-based scheduling, song end detection via MusicalTime.
 - **mb-audio**: Working. AudioOutput trait, CpalOutput with ring buffer, stereo stream with spin-wait writes. Forces 2-channel output for macOS compatibility.
 - **mb-master**: Headless Controller. Unified API for song loading, real-time playback (audio thread), and offline rendering (render_frames, render_to_wav). WAV encoding lives here.
 - **GUI (src/main.rs)**: imgui-rs shell. 3-panel layout, file dialog, playback controls. UI state in `GuiState`, delegates to `Controller`.
@@ -71,6 +71,7 @@ cargo cli path/to/file.mod --wav output.wav
 - **16-bit integer mixing** throughout (embedded-friendly, classic tracker accuracy)
 - **Linear interpolation** on sample reads via `SampleData::get_mono_interpolated()` (16.16 fixed-point blending, i64 intermediate to avoid overflow)
 - **Graph-based routing** from day 1: even MOD files route TrackerChannel nodes → Master
+- **Beat-based timing**: `MusicalTime { beat, sub_beat }` with `SUB_BEAT_UNIT = 720720` (LCM 1..16). Rows positioned in beat-space (speed-independent); speed only affects per-tick effects and NoteDelay.
 - **Event-driven**: patterns compile to events, engine consumes sorted event queue
 - **Fixed-point 16.16** for sample position/increment in engine
 - **Panning formula**: `pan_right = pan + 64` (0..128), then `(128 - pan_right) * vol >> 7` for left, `pan_right * vol >> 7` for right

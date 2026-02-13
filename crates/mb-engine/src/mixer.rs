@@ -1,7 +1,7 @@
 //! Main playback engine.
 
 use alloc::vec::Vec;
-use mb_ir::{Effect, Event, EventPayload, EventTarget, NodeType, Song, Timestamp};
+use mb_ir::{Effect, Event, EventPayload, EventTarget, MusicalTime, NodeType, Song, SUB_BEAT_UNIT};
 
 use crate::channel::ChannelState;
 use crate::event_queue::EventQueue;
@@ -20,8 +20,8 @@ pub struct Engine {
     graph_state: GraphState,
     /// Event queue
     event_queue: EventQueue,
-    /// Current playback position
-    current_time: Timestamp,
+    /// Current playback position in musical time
+    current_time: MusicalTime,
     /// Audio sample rate (e.g., 44100)
     sample_rate: u32,
     /// Samples per tick at current tempo
@@ -32,12 +32,15 @@ pub struct Engine {
     tempo: u8,
     /// Current speed (ticks per row)
     speed: u8,
+    /// Rows per beat (from song)
+    rows_per_beat: u32,
+    /// Tick counter within current beat (0..ticks_per_beat)
+    tick_in_beat: u32,
     /// Is playback active?
     playing: bool,
-    /// Tick at which the song ends (set by schedule_song)
-    song_end_tick: u64,
+    /// Time at which the song ends (set by schedule_song)
+    song_end_time: Option<MusicalTime>,
     /// Right-shift applied in the Master node to prevent clipping.
-    /// Derived from the number of connections feeding the Master node.
     master_mix_shift: u32,
 }
 
@@ -56,6 +59,7 @@ impl Engine {
         let num_channels = song.channels.len();
         let tempo = song.initial_tempo;
         let speed = song.initial_speed;
+        let rows_per_beat = song.rows_per_beat as u32;
 
         let graph_state = GraphState::from_graph(&song.graph);
 
@@ -68,14 +72,16 @@ impl Engine {
             channels: Vec::new(),
             graph_state,
             event_queue: EventQueue::new(),
-            current_time: Timestamp::from_ticks(0),
+            current_time: MusicalTime::zero(),
             sample_rate,
             samples_per_tick: 0,
             sample_counter: 0,
             tempo,
             speed,
+            rows_per_beat,
+            tick_in_beat: 0,
             playing: false,
-            song_end_tick: 0,
+            song_end_time: None,
             master_mix_shift,
         };
 
@@ -111,9 +117,10 @@ impl Engine {
     }
 
     /// Seek to a position.
-    pub fn seek(&mut self, time: Timestamp) {
+    pub fn seek(&mut self, time: MusicalTime) {
         self.current_time = time;
         self.sample_counter = 0;
+        self.tick_in_beat = 0;
         self.event_queue.clear();
         // TODO: Re-schedule events from patterns
     }
@@ -136,16 +143,48 @@ impl Engine {
         self.sample_counter += 1;
         if self.sample_counter >= self.samples_per_tick {
             self.sample_counter = 0;
-            self.current_time.tick += 1;
-            self.current_time.subtick = 0;
+            self.advance_tick();
             self.process_tick();
         } else {
-            // Interpolate subtick
-            self.current_time.subtick =
-                ((self.sample_counter as u64 * 65536) / self.samples_per_tick as u64) as u16;
+            // Interpolate sub_beat within current tick
+            self.interpolate_sub_beat();
         }
 
         output
+    }
+
+    /// Advance by one tick in beat-space.
+    fn advance_tick(&mut self) {
+        self.tick_in_beat += 1;
+        let tpb = self.ticks_per_beat();
+        if self.tick_in_beat >= tpb {
+            self.tick_in_beat = 0;
+            self.current_time.beat += 1;
+            self.current_time.sub_beat = 0;
+        } else {
+            self.current_time.sub_beat =
+                self.tick_in_beat * SUB_BEAT_UNIT / tpb;
+        }
+    }
+
+    /// Interpolate sub_beat for sub-tick precision (between ticks).
+    fn interpolate_sub_beat(&mut self) {
+        let tpb = self.ticks_per_beat();
+        if tpb == 0 {
+            return;
+        }
+        let sub_per_tick = SUB_BEAT_UNIT / tpb;
+        let base_sub = self.tick_in_beat * sub_per_tick;
+        let frac = (self.sample_counter as u64 * sub_per_tick as u64)
+            / self.samples_per_tick as u64;
+        let total = base_sub as u64 + frac;
+        // Shouldn't exceed SUB_BEAT_UNIT, but clamp just in case
+        self.current_time.sub_beat = (total as u32).min(SUB_BEAT_UNIT - 1);
+    }
+
+    /// Ticks per beat = speed * rows_per_beat.
+    fn ticks_per_beat(&self) -> u32 {
+        self.speed as u32 * self.rows_per_beat
     }
 
     /// Process a tick (called once per tick).
@@ -370,7 +409,7 @@ impl Engine {
     }
 
     /// Get the current playback position.
-    pub fn position(&self) -> Timestamp {
+    pub fn position(&self) -> MusicalTime {
         self.current_time
     }
 
@@ -379,9 +418,10 @@ impl Engine {
         self.playing
     }
 
-    /// Returns true when playback has reached the song's end tick.
+    /// Returns true when playback has reached the song's end time.
     pub fn is_finished(&self) -> bool {
-        self.song_end_tick > 0 && self.current_time.tick >= self.song_end_tick
+        self.song_end_time
+            .is_some_and(|end| self.current_time >= end)
     }
 
     /// Schedule an event.
@@ -392,7 +432,7 @@ impl Engine {
     /// Schedule all events from the song's order list and patterns.
     pub fn schedule_song(&mut self) {
         let result = scheduler::schedule_song(&self.song);
-        self.song_end_tick = result.total_ticks;
+        self.song_end_time = Some(result.total_time);
         for event in result.events {
             self.event_queue.push(event);
         }
@@ -413,7 +453,7 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::frequency::period_to_increment;
-    use mb_ir::{Instrument, Sample, SampleData};
+    use mb_ir::{Instrument, MusicalTime, Sample, SampleData};
 
     const SAMPLE_RATE: u32 = 44100;
 
@@ -437,7 +477,7 @@ mod tests {
     /// Schedule a NoteOn at tick 0 on channel 0.
     fn schedule_note(engine: &mut Engine, note: u8, instrument: u8) {
         engine.schedule(Event::new(
-            Timestamp::from_ticks(0),
+            MusicalTime::zero(),
             EventTarget::Channel(0),
             EventPayload::NoteOn { note, velocity: 64, instrument },
         ));
@@ -512,7 +552,7 @@ mod tests {
 
         // Re-trigger at higher note
         engine.schedule(Event::new(
-            Timestamp::from_ticks(0),
+            MusicalTime::zero(),
             EventTarget::Channel(0),
             EventPayload::NoteOn { note: 60, velocity: 64, instrument: 1 },
         ));
@@ -533,7 +573,7 @@ mod tests {
         assert!(engine.channel(0).unwrap().playing);
 
         engine.schedule(Event::new(
-            Timestamp::from_ticks(0),
+            MusicalTime::zero(),
             EventTarget::Channel(0),
             EventPayload::NoteOff { note: 0 },
         ));
@@ -568,7 +608,7 @@ mod tests {
         assert_eq!(spt_before, 882);
 
         engine.schedule(Event::new(
-            Timestamp::from_ticks(0),
+            MusicalTime::zero(),
             EventTarget::Global,
             EventPayload::SetTempo(15000), // 150 BPM * 100
         ));
@@ -592,7 +632,7 @@ mod tests {
     /// Schedule an effect at tick 0 on channel 0.
     fn schedule_effect(engine: &mut Engine, effect: mb_ir::Effect) {
         engine.schedule(Event::new(
-            Timestamp::from_ticks(0),
+            MusicalTime::zero(),
             EventTarget::Channel(0),
             EventPayload::Effect(effect),
         ));
@@ -849,7 +889,7 @@ mod tests {
 
         // Set porta target to C-3 (period 214) via PortaTarget event
         engine.schedule(Event::new(
-            Timestamp::from_ticks(0),
+            MusicalTime::zero(),
             EventTarget::Channel(0),
             EventPayload::PortaTarget { note: 60, instrument: 1 },
         ));
@@ -874,7 +914,7 @@ mod tests {
         engine.render_frame();
 
         engine.schedule(Event::new(
-            Timestamp::from_ticks(0),
+            MusicalTime::zero(),
             EventTarget::Channel(0),
             EventPayload::PortaTarget { note: 60, instrument: 1 },
         ));
@@ -901,7 +941,7 @@ mod tests {
 
         // PortaTarget should NOT reset position
         engine.schedule(Event::new(
-            Timestamp::from_ticks(0),
+            MusicalTime::zero(),
             EventTarget::Channel(0),
             EventPayload::PortaTarget { note: 60, instrument: 1 },
         ));
@@ -920,7 +960,7 @@ mod tests {
 
         // Set up porta target
         engine.schedule(Event::new(
-            Timestamp::from_ticks(0),
+            MusicalTime::zero(),
             EventTarget::Channel(0),
             EventPayload::PortaTarget { note: 60, instrument: 1 },
         ));

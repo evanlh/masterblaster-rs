@@ -116,10 +116,10 @@ fn playback_advances_position() {
     engine.render_frames(44100);
     let pos_after = engine.position();
     assert!(
-        pos_after.tick > pos_before.tick,
-        "Position should advance: before={}, after={}",
-        pos_before.tick,
-        pos_after.tick
+        pos_after > pos_before,
+        "Position should advance: before={:?}, after={:?}",
+        pos_before,
+        pos_after
     );
 }
 

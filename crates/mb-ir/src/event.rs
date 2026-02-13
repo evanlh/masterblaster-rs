@@ -2,13 +2,13 @@
 
 use crate::effects::Effect;
 use crate::graph::NodeId;
-use crate::timestamp::Timestamp;
+use crate::musical_time::MusicalTime;
 
 /// A scheduled event in the song.
 #[derive(Clone, Debug)]
 pub struct Event {
     /// When the event should fire
-    pub time: Timestamp,
+    pub time: MusicalTime,
     /// Where the event is routed
     pub target: EventTarget,
     /// What the event does
@@ -17,7 +17,7 @@ pub struct Event {
 
 impl Event {
     /// Create a new event.
-    pub fn new(time: Timestamp, target: EventTarget, payload: EventPayload) -> Self {
+    pub fn new(time: MusicalTime, target: EventTarget, payload: EventPayload) -> Self {
         Self {
             time,
             target,

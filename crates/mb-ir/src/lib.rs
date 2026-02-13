@@ -18,14 +18,14 @@ mod instrument;
 mod pattern;
 mod sample;
 mod song;
-mod timestamp;
+mod musical_time;
 
-pub use analysis::{analyze, analyze_pattern, tick_to_position, PatternFeatures, PlaybackPosition, SongFeatures};
+pub use analysis::{analyze, analyze_pattern, time_to_position, PatternFeatures, PlaybackPosition, SongFeatures};
 pub use effects::{Effect, VolumeCommand};
 pub use event::{Event, EventPayload, EventTarget};
 pub use graph::{AudioGraph, Connection, Node, NodeId, NodeType, Parameter};
 pub use instrument::{DuplicateCheck, Envelope, EnvelopePoint, Instrument, NewNoteAction};
+pub use musical_time::{MusicalTime, SUB_BEAT_UNIT};
 pub use pattern::{Cell, Note, Pattern};
 pub use sample::{AutoVibrato, LoopType, Sample, SampleData};
 pub use song::{ChannelSettings, OrderEntry, Song, Track, TrackEntry};
-pub use timestamp::Timestamp;

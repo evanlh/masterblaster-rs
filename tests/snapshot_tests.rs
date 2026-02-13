@@ -25,13 +25,16 @@ fn should_update() -> bool {
     env::var("UPDATE_SNAPSHOTS").is_ok()
 }
 
-fn snapshot_path(fixture_name: &str) -> PathBuf {
-    let stem = fixture_name.strip_suffix(".mod").unwrap_or(fixture_name);
-    snapshots_dir().join(format!("{}.wav", stem))
+fn snapshot_path(name: &str) -> PathBuf {
+    snapshots_dir().join(format!("{}.wav", name))
 }
 
-fn assert_snapshot(fixture_name: &str, wav_bytes: &[u8]) {
-    let path = snapshot_path(fixture_name);
+fn snapshot_stem(fixture_name: &str) -> String {
+    fixture_name.strip_suffix(".mod").unwrap_or(fixture_name).to_string()
+}
+
+fn assert_snapshot(name: &str, wav_bytes: &[u8]) {
+    let path = snapshot_path(name);
 
     if should_update() {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -71,7 +74,16 @@ fn snapshot_test(fixture_name: &str) {
     ctrl.load_mod(&fs::read(fixtures_dir().join(fixture_name)).unwrap())
         .unwrap();
     let wav = ctrl.render_to_wav(SAMPLE_RATE, MAX_SECONDS);
-    assert_snapshot(fixture_name, &wav);
+    assert_snapshot(&snapshot_stem(fixture_name), &wav);
+}
+
+fn snapshot_pattern_test(fixture_name: &str, pattern: usize) {
+    let mut ctrl = Controller::new();
+    ctrl.load_mod(&fs::read(fixtures_dir().join(fixture_name)).unwrap())
+        .unwrap();
+    let wav = ctrl.render_pattern_to_wav(pattern, SAMPLE_RATE, MAX_SECONDS);
+    let name = format!("{}_pat{:02}", snapshot_stem(fixture_name), pattern);
+    assert_snapshot(&name, &wav);
 }
 
 #[test]
@@ -87,4 +99,9 @@ fn snapshot_noise_synth_pop() {
 #[test]
 fn snapshot_musiklinjen() {
     snapshot_test("musiklinjen.mod");
+}
+
+#[test]
+fn snapshot_musiklinjen_pat20_ritardando() {
+    snapshot_pattern_test("musiklinjen.mod", 20);
 }

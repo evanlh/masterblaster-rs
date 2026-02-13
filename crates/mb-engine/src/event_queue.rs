@@ -1,7 +1,7 @@
 //! Priority queue for scheduled events.
 
 use alloc::vec::Vec;
-use mb_ir::{Event, Timestamp};
+use mb_ir::{Event, MusicalTime};
 
 /// A priority queue of events sorted by timestamp.
 #[derive(Clone, Debug, Default)]
@@ -40,7 +40,7 @@ impl EventQueue {
     }
 
     /// Pop all events at or before the given timestamp.
-    pub fn pop_until(&mut self, time: Timestamp) -> Vec<Event> {
+    pub fn pop_until(&mut self, time: MusicalTime) -> Vec<Event> {
         let mut result = Vec::new();
         while let Some(event) = self.events.first() {
             if event.time <= time {
@@ -78,23 +78,23 @@ mod tests {
         let mut queue = EventQueue::new();
 
         queue.push(Event::new(
-            Timestamp::from_ticks(10),
+            MusicalTime::from_beats(10),
             EventTarget::Global,
             EventPayload::SetTempo(12500),
         ));
         queue.push(Event::new(
-            Timestamp::from_ticks(5),
+            MusicalTime::from_beats(5),
             EventTarget::Global,
             EventPayload::SetSpeed(6),
         ));
         queue.push(Event::new(
-            Timestamp::from_ticks(15),
+            MusicalTime::from_beats(15),
             EventTarget::Global,
             EventPayload::SetTempo(14000),
         ));
 
-        assert_eq!(queue.pop().unwrap().time.tick, 5);
-        assert_eq!(queue.pop().unwrap().time.tick, 10);
-        assert_eq!(queue.pop().unwrap().time.tick, 15);
+        assert_eq!(queue.pop().unwrap().time.beat, 5);
+        assert_eq!(queue.pop().unwrap().time.beat, 10);
+        assert_eq!(queue.pop().unwrap().time.beat, 15);
     }
 }

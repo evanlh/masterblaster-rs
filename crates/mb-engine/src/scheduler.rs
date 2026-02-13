@@ -5,14 +5,14 @@
 
 use alloc::vec::Vec;
 use mb_ir::{
-    Cell, Effect, Event, EventPayload, EventTarget, Note, OrderEntry, Song, Timestamp,
+    Cell, Effect, Event, EventPayload, EventTarget, MusicalTime, Note, OrderEntry, Song,
     VolumeCommand,
 };
 
 /// Result of scheduling a song: events and total length.
 pub struct ScheduleResult {
     pub events: Vec<Event>,
-    pub total_ticks: u64,
+    pub total_time: MusicalTime,
 }
 
 /// Resolve the order entry at `order_idx`, skipping Skip entries.
@@ -32,7 +32,7 @@ fn resolve_order(song: &Song, order_idx: &mut usize) -> Option<u8> {
 struct FlowControl {
     break_row: Option<u8>,
     jump_order: Option<u8>,
-    new_speed: Option<u64>,
+    new_speed: Option<u32>,
     pattern_delay: u8,
 }
 
@@ -48,7 +48,7 @@ fn scan_flow_control(pattern: &mb_ir::Pattern, row: u16) -> FlowControl {
         match pattern.cell(row, ch).effect {
             Effect::PatternBreak(r) => fc.break_row = Some(r),
             Effect::PositionJump(p) => fc.jump_order = Some(p),
-            Effect::SetSpeed(s) if s > 0 => fc.new_speed = Some(s as u64),
+            Effect::SetSpeed(s) if s > 0 => fc.new_speed = Some(s as u32),
             Effect::PatternDelay(d) => fc.pattern_delay = d,
             _ => {}
         }
@@ -57,12 +57,16 @@ fn scan_flow_control(pattern: &mb_ir::Pattern, row: u16) -> FlowControl {
 }
 
 /// Schedule all events for a song by walking rows with flow control.
+///
+/// Row positions are in beat-space (speed-independent). Speed only affects
+/// NoteDelay sub-beat offsets and SetSpeed events.
 pub fn schedule_song(song: &Song) -> ScheduleResult {
     let mut events = Vec::new();
     let mut order_idx: usize = 0;
     let mut row: u16 = 0;
-    let mut tick: u64 = 0;
-    let mut speed: u64 = song.initial_speed as u64;
+    let mut time = MusicalTime::zero();
+    let mut speed: u32 = song.initial_speed as u32;
+    let song_rpb = song.rows_per_beat as u32;
 
     // Loop detection: cap at 2x total rows across all patterns
     let max_rows: u64 = song.patterns.iter().map(|p| p.rows as u64).sum::<u64>() * 2 + 256;
@@ -81,10 +85,12 @@ pub fn schedule_song(song: &Song) -> ScheduleResult {
             row = 0;
         }
 
-        // Schedule events for this row
-        let time = Timestamp::from_ticks(tick);
+        let rpb = pattern.rows_per_beat.map_or(song_rpb, |r| r as u32);
+
+        // Schedule events for this row (speed needed for NoteDelay computation)
+        let eff_speed = effective_speed(pattern, speed);
         for ch in 0..pattern.channels {
-            schedule_cell(pattern.cell(row, ch), time, ch, &mut events);
+            schedule_cell(pattern.cell(row, ch), time, ch, eff_speed, rpb, &mut events);
         }
 
         // Scan for flow control and speed changes
@@ -93,13 +99,8 @@ pub fn schedule_song(song: &Song) -> ScheduleResult {
             speed = s;
         }
 
-        // Advance tick by current row's speed (+ pattern delay)
-        let base_speed = if pattern.ticks_per_row > 0 {
-            pattern.ticks_per_row as u64
-        } else {
-            speed
-        };
-        tick += base_speed + (fc.pattern_delay as u64 * base_speed);
+        // Advance time by 1 + pattern_delay rows in beat-space
+        time = time.add_rows(1 + fc.pattern_delay as u32, rpb);
         rows_processed += 1;
         if rows_processed >= max_rows {
             break;
@@ -129,7 +130,16 @@ pub fn schedule_song(song: &Song) -> ScheduleResult {
         }
     }
 
-    ScheduleResult { events, total_ticks: tick }
+    ScheduleResult { events, total_time: time }
+}
+
+/// Resolve effective speed for a pattern row.
+fn effective_speed(pattern: &mb_ir::Pattern, global_speed: u32) -> u32 {
+    if pattern.ticks_per_row > 0 {
+        pattern.ticks_per_row as u32
+    } else {
+        global_speed
+    }
 }
 
 /// Returns true if the effect is a tone portamento variant.
@@ -137,19 +147,30 @@ fn is_tone_porta(effect: &Effect) -> bool {
     matches!(effect, Effect::TonePorta(_) | Effect::TonePortaVolSlide(_))
 }
 
-/// Extract NoteDelay tick offset from a cell's effect.
-fn note_delay_ticks(effect: &Effect) -> u64 {
+/// Extract NoteDelay tick count from a cell's effect.
+fn note_delay_amount(effect: &Effect) -> u32 {
     match effect {
-        Effect::NoteDelay(d) if *d > 0 => *d as u64,
+        Effect::NoteDelay(d) if *d > 0 => *d as u32,
         _ => 0,
     }
 }
 
 /// Convert a single cell into events and append them to the output.
-fn schedule_cell(cell: &Cell, time: Timestamp, channel: u8, events: &mut Vec<Event>) {
+///
+/// `speed` and `rpb` are needed for NoteDelay sub-beat computation:
+/// ticks_per_beat = speed * rpb.
+fn schedule_cell(
+    cell: &Cell,
+    time: MusicalTime,
+    channel: u8,
+    speed: u32,
+    rpb: u32,
+    events: &mut Vec<Event>,
+) {
     let target = EventTarget::Channel(channel);
-    let delay = note_delay_ticks(&cell.effect);
-    let note_time = Timestamp::from_ticks(time.tick + delay);
+    let delay = note_delay_amount(&cell.effect);
+    let tpb = speed * rpb;
+    let note_time = time.add_ticks(delay, tpb);
 
     match cell.note {
         Note::On(note) => {
@@ -193,7 +214,7 @@ fn schedule_cell(cell: &Cell, time: Timestamp, channel: u8, events: &mut Vec<Eve
 /// Convert a volume column command into an event.
 fn schedule_volume_command(
     vol: &VolumeCommand,
-    time: Timestamp,
+    time: MusicalTime,
     channel: u8,
     events: &mut Vec<Event>,
 ) {
@@ -285,7 +306,7 @@ fn is_scheduler_directive(effect: &Effect) -> bool {
 }
 
 /// Convert an effect command into an event, routing tempo/speed to Global.
-fn schedule_effect(effect: &Effect, time: Timestamp, channel: u8, events: &mut Vec<Event>) {
+fn schedule_effect(effect: &Effect, time: MusicalTime, channel: u8, events: &mut Vec<Event>) {
     match effect {
         Effect::None => {}
         e if is_scheduler_directive(e) => {} // consumed by scheduler
@@ -331,6 +352,11 @@ mod tests {
         song
     }
 
+    /// MusicalTime for row N at rpb=4 (default).
+    fn time_at_row(n: u32) -> MusicalTime {
+        MusicalTime::zero().add_rows(n, 4)
+    }
+
     #[test]
     fn empty_pattern_produces_no_events() {
         let song = one_channel_song(Pattern::new(4, 1));
@@ -347,7 +373,7 @@ mod tests {
         let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].time.tick, 0);
+        assert_eq!(events[0].time, MusicalTime::zero());
         assert_eq!(events[0].target, EventTarget::Channel(0));
         assert_eq!(
             events[0].payload,
@@ -356,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn note_at_row_n_offset_by_ticks_per_row() {
+    fn note_at_row_n_offset_by_rows_per_beat() {
         let mut pat = Pattern::new(8, 1);
         pat.cell_mut(3, 0).note = Note::On(48);
         pat.cell_mut(3, 0).instrument = 2;
@@ -364,8 +390,8 @@ mod tests {
         let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 1);
-        // ticks_per_row defaults to 6, so row 3 = tick 18
-        assert_eq!(events[0].time.tick, 18);
+        // Row 3 at rpb=4: beat 0, sub_beat = 3 * (720720/4) = 3 * 180180
+        assert_eq!(events[0].time, time_at_row(3));
     }
 
     #[test]
@@ -376,7 +402,7 @@ mod tests {
         let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].time.tick, 6);
+        assert_eq!(events[0].time, time_at_row(1));
         assert_eq!(events[0].payload, EventPayload::NoteOff { note: 0 });
     }
 
@@ -397,19 +423,17 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].target, EventTarget::Channel(0));
         assert_eq!(events[1].target, EventTarget::Channel(2));
-        // Both at tick 0
-        assert_eq!(events[0].time.tick, 0);
-        assert_eq!(events[1].time.tick, 0);
+        // Both at time zero
+        assert_eq!(events[0].time, MusicalTime::zero());
+        assert_eq!(events[1].time, MusicalTime::zero());
     }
 
     #[test]
     fn two_patterns_in_order_offsets_correctly() {
-        // Pattern 0: 4 rows, note at row 0
         let mut pat0 = Pattern::new(4, 1);
         pat0.cell_mut(0, 0).note = Note::On(60);
         pat0.cell_mut(0, 0).instrument = 1;
 
-        // Pattern 1: 4 rows, note at row 0
         let mut pat1 = Pattern::new(4, 1);
         pat1.cell_mut(0, 0).note = Note::On(64);
         pat1.cell_mut(0, 0).instrument = 1;
@@ -423,9 +447,9 @@ mod tests {
         let events = schedule_events(&song);
 
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].time.tick, 0);
-        // Pattern 0 has 4 rows * 6 ticks = 24 ticks, so pattern 1 starts at tick 24
-        assert_eq!(events[1].time.tick, 24);
+        assert_eq!(events[0].time, MusicalTime::zero());
+        // Pattern 0: 4 rows at rpb=4 = 1 beat
+        assert_eq!(events[1].time, MusicalTime::from_beats(1));
     }
 
     #[test]
@@ -442,8 +466,8 @@ mod tests {
         let events = schedule_events(&song);
 
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].time.tick, 0);
-        assert_eq!(events[1].time.tick, 24); // 4 rows * 6 ticks
+        assert_eq!(events[0].time, MusicalTime::zero());
+        assert_eq!(events[1].time, MusicalTime::from_beats(1));
     }
 
     #[test]
@@ -492,11 +516,10 @@ mod tests {
         let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 2);
-        // NoteOn first, then effect
         assert!(matches!(events[0].payload, EventPayload::NoteOn { .. }));
         assert!(matches!(events[1].payload, EventPayload::Effect(_)));
-        // Same tick
-        assert_eq!(events[0].time.tick, events[1].time.tick);
+        // Same time
+        assert_eq!(events[0].time, events[1].time);
     }
 
     #[test]
@@ -520,10 +543,9 @@ mod tests {
         let idx = song.add_pattern(pat);
         song.add_order(OrderEntry::Pattern(idx));
         song.add_order(OrderEntry::End);
-        song.add_order(OrderEntry::Pattern(idx)); // should not be reached
+        song.add_order(OrderEntry::Pattern(idx));
 
         let events = schedule_events(&song);
-
         assert_eq!(events.len(), 1);
     }
 
@@ -542,25 +564,25 @@ mod tests {
         let events = schedule_events(&song);
 
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].time.tick, 0);
-        assert_eq!(events[1].time.tick, 24);
+        assert_eq!(events[0].time, MusicalTime::zero());
+        assert_eq!(events[1].time, MusicalTime::from_beats(1));
     }
 
     #[test]
-    fn total_ticks_matches_pattern_rows() {
-        let pat = Pattern::new(4, 1); // 4 rows * 6 ticks_per_row = 24
+    fn total_time_matches_pattern_rows() {
+        let pat = Pattern::new(4, 1); // 4 rows at rpb=4 = 1 beat
         let result = schedule_song(&one_channel_song(pat));
-        assert_eq!(result.total_ticks, 24);
+        assert_eq!(result.total_time, MusicalTime::from_beats(1));
     }
 
     #[test]
-    fn total_ticks_sums_across_order() {
+    fn total_time_sums_across_order() {
         let mut song = Song::with_channels("test", 1);
-        let idx = song.add_pattern(Pattern::new(8, 1)); // 8 * 6 = 48
+        let idx = song.add_pattern(Pattern::new(8, 1)); // 8 rows = 2 beats
         song.add_order(OrderEntry::Pattern(idx));
         song.add_order(OrderEntry::Pattern(idx));
         let result = schedule_song(&song);
-        assert_eq!(result.total_ticks, 96); // 48 * 2
+        assert_eq!(result.total_time, MusicalTime::from_beats(4));
     }
 
     #[test]
@@ -572,7 +594,6 @@ mod tests {
 
         let events = schedule_events(&one_channel_song(pat));
 
-        // Should emit PortaTarget + Effect, NOT NoteOn + Effect
         assert_eq!(events.len(), 2);
         assert_eq!(
             events[0].payload,
@@ -614,13 +635,11 @@ mod tests {
 
     #[test]
     fn pattern_break_skips_to_next_pattern() {
-        // Pattern 0: 4 rows, break at row 1 → should skip rows 2-3
         let mut pat0 = Pattern::new(4, 1);
         pat0.cell_mut(0, 0).note = Note::On(60);
         pat0.cell_mut(0, 0).instrument = 1;
         pat0.cell_mut(1, 0).effect = Effect::PatternBreak(0);
 
-        // Pattern 1: 4 rows, note at row 0
         let mut pat1 = Pattern::new(4, 1);
         pat1.cell_mut(0, 0).note = Note::On(64);
         pat1.cell_mut(0, 0).instrument = 1;
@@ -633,23 +652,21 @@ mod tests {
 
         let result = schedule_song(&song);
 
-        // Filter to NoteOn events only (PatternBreak also generates an event)
         let notes: Vec<_> = result.events.iter().filter_map(|e| match e.payload {
-            EventPayload::NoteOn { note, .. } => Some((note, e.time.tick)),
+            EventPayload::NoteOn { note, .. } => Some((note, e.time)),
             _ => None,
         }).collect();
 
-        // Note 60 at tick 0, note 64 at tick 12 (2 rows * 6 ticks)
-        assert_eq!(notes, vec![(60, 0), (64, 12)]);
+        // Note 60 at row 0, note 64 at row 2 (break at row 1 = 2 rows played)
+        assert_eq!(notes[0], (60, MusicalTime::zero()));
+        assert_eq!(notes[1], (64, time_at_row(2)));
     }
 
     #[test]
     fn pattern_break_to_specific_row() {
-        // Pattern 0: break at row 0 → go to row 2 of pattern 1
         let mut pat0 = Pattern::new(2, 1);
         pat0.cell_mut(0, 0).effect = Effect::PatternBreak(2);
 
-        // Pattern 1: 4 rows, note at row 2
         let mut pat1 = Pattern::new(4, 1);
         pat1.cell_mut(2, 0).note = Note::On(60);
         pat1.cell_mut(2, 0).instrument = 1;
@@ -662,21 +679,24 @@ mod tests {
 
         let events = schedule_events(&song);
 
-        // Filter to NoteOn events (PatternBreak also generates an effect event)
         let notes: Vec<_> = events.iter().filter_map(|e| match e.payload {
-            EventPayload::NoteOn { note, .. } => Some((note, e.time.tick)),
+            EventPayload::NoteOn { note, .. } => Some((note, e.time)),
             _ => None,
         }).collect();
 
-        // Break fires after row 0 of pat0 (1 row = 6 ticks)
-        // Jumps directly to row 2 of pat1 → note at tick 6
-        assert_eq!(notes, vec![(60, 6)]);
+        // Break after row 0 (1 row of beat-space). Jump to row 2 of pat1.
+        // Row 2 is reached after row 0, row 1 of pat1 → total 1 + 2 inner rows
+        // But since we jump directly to row 2, the scheduler processes row 2
+        // *next*, so it's at: time after 1 row (break) = time_at_row(1).
+        // Then the scheduler doesn't process rows 0-1 of pat1, it starts at 2.
+        // The note fires when the scheduler first visits that row.
+        assert_eq!(notes, vec![(60, time_at_row(1))]);
     }
 
     #[test]
-    fn pattern_break_total_ticks() {
-        // Pat0: 4 rows, break at row 1 → only 2 rows play (12 ticks)
-        // Pat1: 4 rows → 24 ticks. Total = 36
+    fn pattern_break_total_time() {
+        // Pat0: 4 rows, break at row 1 → only 2 rows play
+        // Pat1: 4 rows → 4 rows. Total = 6 rows = 1.5 beats
         let mut pat0 = Pattern::new(4, 1);
         pat0.cell_mut(1, 0).effect = Effect::PatternBreak(0);
 
@@ -687,21 +707,21 @@ mod tests {
         song.add_order(OrderEntry::Pattern(idx1));
 
         let result = schedule_song(&song);
-        assert_eq!(result.total_ticks, 36);
+        // 2 + 4 = 6 rows at rpb=4 = 1 beat + 2 rows = beat 1, sub_beat = 2*180180
+        assert_eq!(result.total_time, time_at_row(6));
     }
 
     // --- PositionJump tests ---
 
     #[test]
     fn position_jump_to_later_order() {
-        // 3 patterns in order. Pat0 jumps to order 2 (pat2), skipping pat1.
         let mut pat0 = Pattern::new(2, 1);
         pat0.cell_mut(0, 0).note = Note::On(60);
         pat0.cell_mut(0, 0).instrument = 1;
         pat0.cell_mut(0, 0).effect = Effect::PositionJump(2);
 
         let mut pat1 = Pattern::new(2, 1);
-        pat1.cell_mut(0, 0).note = Note::On(62); // should be skipped
+        pat1.cell_mut(0, 0).note = Note::On(62);
         pat1.cell_mut(0, 0).instrument = 1;
 
         let mut pat2 = Pattern::new(2, 1);
@@ -718,44 +738,39 @@ mod tests {
 
         let events = schedule_events(&song);
 
-        // Should have notes 60 (tick 0) and 64 (after 1 row = tick 6), no note 62
         let notes: Vec<_> = events.iter().filter_map(|e| match e.payload {
             EventPayload::NoteOn { note, .. } => Some(note),
             _ => None,
         }).collect();
         assert_eq!(notes, vec![60, 64]);
-        assert_eq!(events[0].time.tick, 0);
+        assert_eq!(events[0].time, MusicalTime::zero());
     }
 
     #[test]
     fn position_jump_backwards_terminates() {
-        // Jump back to order 0 creates a loop — should be capped by max_rows
         let mut pat = Pattern::new(2, 1);
         pat.cell_mut(1, 0).effect = Effect::PositionJump(0);
 
         let result = schedule_song(&one_channel_song(pat));
 
-        // Should terminate (not hang). The loop cap is 2*2 + 256 = 260 rows.
-        // Each iteration plays 2 rows, so ~130 iterations * 2 rows * 6 ticks
-        assert!(result.total_ticks > 0);
-        assert!(result.total_ticks <= 260 * 6);
+        // Should terminate (not hang). max_rows = 2*2+256 = 260
+        assert!(result.total_time > MusicalTime::zero());
     }
 
     // --- Combined PatternBreak + PositionJump ---
 
     #[test]
     fn position_jump_with_pattern_break() {
-        // Jump to order 2, start at row 1
         let mut pat0 = Pattern::new(2, 2);
         pat0.cell_mut(0, 0).effect = Effect::PositionJump(2);
         pat0.cell_mut(0, 1).effect = Effect::PatternBreak(1);
 
         let mut pat1 = Pattern::new(4, 2);
-        pat1.cell_mut(0, 0).note = Note::On(62); // skipped
+        pat1.cell_mut(0, 0).note = Note::On(62);
         pat1.cell_mut(0, 0).instrument = 1;
 
         let mut pat2 = Pattern::new(4, 2);
-        pat2.cell_mut(1, 0).note = Note::On(64); // row 1 = target
+        pat2.cell_mut(1, 0).note = Note::On(64);
         pat2.cell_mut(1, 0).instrument = 1;
 
         let mut song = Song::with_channels("test", 2);
@@ -772,16 +787,15 @@ mod tests {
             EventPayload::NoteOn { note, .. } => Some(note),
             _ => None,
         }).collect();
-        // Should skip pat1 entirely, land on pat2 row 1
         assert_eq!(notes, vec![64]);
     }
 
-    // --- SetSpeed affects scheduling ---
+    // --- SetSpeed no longer changes row timing (rows are beat-positioned) ---
 
     #[test]
-    fn set_speed_changes_subsequent_row_timing() {
-        // Speed 6 (default), then SetSpeed(3) at row 1
-        // ticks_per_row=0 so global speed applies
+    fn set_speed_does_not_change_row_timing() {
+        // In beat-space, rows are equidistant regardless of speed.
+        // SetSpeed only affects per-tick effects and NoteDelay.
         let mut pat = Pattern::new(4, 1);
         pat.ticks_per_row = 0;
         pat.cell_mut(0, 0).note = Note::On(60);
@@ -793,25 +807,28 @@ mod tests {
         let result = schedule_song(&one_channel_song(pat));
 
         let note_events: Vec<_> = result.events.iter().filter_map(|e| match e.payload {
-            EventPayload::NoteOn { note, .. } => Some((note, e.time.tick)),
+            EventPayload::NoteOn { note, .. } => Some((note, e.time)),
             _ => None,
         }).collect();
 
-        // Row 0: tick 0 (speed=6), Row 1: tick 6 (speed→3), Row 2: tick 9
-        assert_eq!(note_events, vec![(60, 0), (64, 9)]);
+        // Row 0 at time 0, Row 2 at time_at_row(2) — speed doesn't affect positioning
+        assert_eq!(note_events, vec![
+            (60, MusicalTime::zero()),
+            (64, time_at_row(2)),
+        ]);
     }
 
     #[test]
-    fn set_speed_affects_total_ticks() {
-        // 4 rows, speed changes from 6 to 3 at row 2
-        // ticks_per_row=0 so global speed applies
-        // Row 0: 6, Row 1: 6, Row 2 (speed→3): 3, Row 3: 3 → total 18
+    fn set_speed_still_emits_event() {
         let mut pat = Pattern::new(4, 1);
         pat.ticks_per_row = 0;
         pat.cell_mut(2, 0).effect = Effect::SetSpeed(3);
 
         let result = schedule_song(&one_channel_song(pat));
-        assert_eq!(result.total_ticks, 18);
+        let speed_events: Vec<_> = result.events.iter().filter(|e|
+            matches!(e.payload, EventPayload::SetSpeed(_))
+        ).collect();
+        assert_eq!(speed_events.len(), 1);
     }
 
     // --- NoteDelay tests ---
@@ -827,8 +844,9 @@ mod tests {
 
         let note = events.iter().find(|e| matches!(e.payload, EventPayload::NoteOn { .. }));
         assert!(note.is_some());
-        // Note at row 0 delayed by 3 ticks → tick 3
-        assert_eq!(note.unwrap().time.tick, 3);
+        // 3 ticks delay at speed=6, rpb=4 → tpb=24, sub_per_tick=30030
+        let expected = MusicalTime::zero().add_ticks(3, 24);
+        assert_eq!(note.unwrap().time, expected);
     }
 
     #[test]
@@ -841,7 +859,7 @@ mod tests {
         let events = schedule_events(&one_channel_song(pat));
 
         let note = events.iter().find(|e| matches!(e.payload, EventPayload::NoteOn { .. }));
-        assert_eq!(note.unwrap().time.tick, 0);
+        assert_eq!(note.unwrap().time, MusicalTime::zero());
     }
 
     #[test]
@@ -853,7 +871,6 @@ mod tests {
 
         let events = schedule_events(&one_channel_song(pat));
 
-        // Should only have the NoteOn event, no NoteDelay effect event
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0].payload, EventPayload::NoteOn { .. }));
     }
@@ -868,24 +885,24 @@ mod tests {
 
         let events = schedule_events(&one_channel_song(pat));
 
-        // Both events should be at tick 2
+        let expected = MusicalTime::zero().add_ticks(2, 24);
         for e in &events {
-            assert_eq!(e.time.tick, 2);
+            assert_eq!(e.time, expected);
         }
     }
 
     // --- PatternDelay tests ---
 
     #[test]
-    fn pattern_delay_adds_extra_ticks() {
-        // 2 rows, row 0 has PatternDelay(2) → row 0 takes 3x normal ticks
+    fn pattern_delay_adds_extra_rows_in_beat_space() {
+        // 2 rows, row 0 has PatternDelay(2) → row 0 takes 3 rows worth of beat-space
         let mut pat = Pattern::new(2, 1);
         pat.cell_mut(0, 0).effect = Effect::PatternDelay(2);
 
         let result = schedule_song(&one_channel_song(pat));
 
-        // Row 0: 6 + 2*6 = 18 ticks, Row 1: 6 ticks → total 24
-        assert_eq!(result.total_ticks, 24);
+        // Row 0: 1+2 = 3 rows, Row 1: 1 row → total 4 rows = 1 beat
+        assert_eq!(result.total_time, MusicalTime::from_beats(1));
     }
 
     #[test]
@@ -898,8 +915,8 @@ mod tests {
         let events = schedule_events(&one_channel_song(pat));
 
         let note = events.iter().find(|e| matches!(e.payload, EventPayload::NoteOn { .. }));
-        // Row 0: 6 + 1*6 = 12 ticks. Row 1 note at tick 12.
-        assert_eq!(note.unwrap().time.tick, 12);
+        // Row 0: 1+1 = 2 rows of beat-space. Row 1 at row offset 2.
+        assert_eq!(note.unwrap().time, time_at_row(2));
     }
 
     #[test]
@@ -908,8 +925,6 @@ mod tests {
         pat.cell_mut(0, 0).effect = Effect::PatternDelay(2);
 
         let events = schedule_events(&one_channel_song(pat));
-
-        // No events should be emitted for PatternDelay
         assert!(events.is_empty());
     }
 
@@ -923,8 +938,6 @@ mod tests {
         song.add_order(OrderEntry::Pattern(idx));
 
         let events = schedule_events(&song);
-
-        // PatternBreak should be consumed by scheduler
         assert!(events.is_empty());
     }
 }

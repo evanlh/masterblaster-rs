@@ -26,7 +26,8 @@ pub struct Controller {
 
 struct PlaybackHandle {
     stop_signal: Arc<AtomicBool>,
-    current_tick: Arc<AtomicU64>,
+    /// Packed MusicalTime: (beat as u32) << 32 | sub_beat
+    current_time: Arc<AtomicU64>,
     finished: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -65,20 +66,20 @@ impl Controller {
         self.stop();
 
         let stop_signal = Arc::new(AtomicBool::new(false));
-        let current_tick = Arc::new(AtomicU64::new(0));
+        let current_time = Arc::new(AtomicU64::new(0));
         let finished = Arc::new(AtomicBool::new(false));
 
         let stop = stop_signal.clone();
-        let tick = current_tick.clone();
+        let time = current_time.clone();
         let done = finished.clone();
 
         let thread = std::thread::spawn(move || {
-            audio_thread(song, stop, tick, done);
+            audio_thread(song, stop, time, done);
         });
 
         self.playback = Some(PlaybackHandle {
             stop_signal,
-            current_tick,
+            current_time,
             finished,
             thread: Some(thread),
         });
@@ -107,11 +108,12 @@ impl Controller {
 
     pub fn position(&self) -> Option<PlaybackPosition> {
         let pb = self.playback.as_ref()?;
-        let tick = pb.current_tick.load(Ordering::Relaxed);
         if pb.finished.load(Ordering::Relaxed) {
             return None;
         }
-        mb_ir::tick_to_position(&self.song, tick)
+        let packed = pb.current_time.load(Ordering::Relaxed);
+        let time = unpack_time(packed);
+        mb_ir::time_to_position(&self.song, time)
     }
 
     // --- Offline rendering ---
@@ -144,6 +146,19 @@ impl Default for Controller {
     }
 }
 
+/// Pack a MusicalTime into a u64: (beat as u32) << 32 | sub_beat.
+fn pack_time(t: mb_ir::MusicalTime) -> u64 {
+    ((t.beat as u32 as u64) << 32) | t.sub_beat as u64
+}
+
+/// Unpack a u64 into a MusicalTime.
+fn unpack_time(packed: u64) -> mb_ir::MusicalTime {
+    mb_ir::MusicalTime {
+        beat: (packed >> 32) as u64,
+        sub_beat: packed as u32,
+    }
+}
+
 fn render_song_frames(song: Song, sample_rate: u32, max_frames: usize) -> Vec<Frame> {
     let mut engine = Engine::new(song, sample_rate);
     engine.schedule_song();
@@ -165,7 +180,7 @@ fn render_song_to_wav(song: Song, sample_rate: u32, max_seconds: u32) -> Vec<u8>
 fn audio_thread(
     song: Song,
     stop_signal: Arc<AtomicBool>,
-    current_tick: Arc<AtomicU64>,
+    current_time: Arc<AtomicU64>,
     finished: Arc<AtomicBool>,
 ) {
     let Ok((mut output, consumer)) = CpalOutput::new() else {
@@ -184,14 +199,14 @@ fn audio_thread(
     }
     let _ = output.start();
 
-    let tick_interval = (sample_rate / 100) as u64;
+    let report_interval = (sample_rate / 100) as u64;
     let mut frame_count: u64 = 0;
 
     while !engine.is_finished() && !stop_signal.load(Ordering::Relaxed) {
         output.write_park(engine.render_frame());
         frame_count += 1;
-        if frame_count % tick_interval == 0 {
-            current_tick.store(engine.position().tick, Ordering::Relaxed);
+        if frame_count % report_interval == 0 {
+            current_time.store(pack_time(engine.position()), Ordering::Relaxed);
         }
     }
 

@@ -119,7 +119,7 @@ fn play_pattern(ctrl: &mut Controller, pattern: usize) {
 
 fn render_to_wav_pattern(ctrl: &Controller, path: &str, pattern: usize) {
     let sample_rate: u32 = 44100;
-    let max_seconds: u32 = 300;
+    let max_seconds: u32 = 1200;
     println!("Rendering pattern {} to {} at {} Hz...", pattern, path, sample_rate);
 
     let wav = ctrl.render_pattern_to_wav(pattern, sample_rate, max_seconds);
@@ -135,7 +135,7 @@ fn render_to_wav_pattern(ctrl: &Controller, path: &str, pattern: usize) {
 
 fn render_to_wav(ctrl: &Controller, path: &str) {
     let sample_rate: u32 = 44100;
-    let max_seconds: u32 = 300;
+    let max_seconds: u32 = 1200;
     println!("Rendering to {} at {} Hz...", path, sample_rate);
 
     let wav = ctrl.render_to_wav(sample_rate, max_seconds);

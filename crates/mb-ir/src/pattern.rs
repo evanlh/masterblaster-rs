@@ -82,6 +82,8 @@ pub struct Pattern {
     pub channels: u8,
     /// Ticks per row override; 0 means use global speed (default)
     pub ticks_per_row: u8,
+    /// Per-pattern rows-per-beat override; None means use song default
+    pub rows_per_beat: Option<u8>,
     /// Pattern data, stored row-major: data[row * channels + channel]
     pub data: Vec<Cell>,
 }
@@ -93,6 +95,7 @@ impl Pattern {
             rows,
             channels,
             ticks_per_row: 0,
+            rows_per_beat: None,
             data: alloc::vec![Cell::empty(); rows as usize * channels as usize],
         }
     }

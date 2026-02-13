@@ -5,9 +5,9 @@ use arrayvec::ArrayString;
 
 use crate::graph::{AudioGraph, NodeId};
 use crate::instrument::Instrument;
+use crate::musical_time::MusicalTime;
 use crate::pattern::Pattern;
 use crate::sample::Sample;
-use crate::timestamp::Timestamp;
 
 /// A complete song.
 #[derive(Clone, Debug)]
@@ -18,6 +18,8 @@ pub struct Song {
     pub initial_tempo: u8,
     /// Initial speed (ticks per row, 1-31)
     pub initial_speed: u8,
+    /// Rows per beat (default 4: 4 rows = 1 beat)
+    pub rows_per_beat: u8,
     /// Global volume (0-64)
     pub global_volume: u8,
     /// All patterns in the song
@@ -42,6 +44,7 @@ impl Default for Song {
             title: ArrayString::new(),
             initial_tempo: 125,
             initial_speed: 6,
+            rows_per_beat: 4,
             global_volume: 64,
             patterns: Vec::new(),
             order: Vec::new(),
@@ -84,17 +87,19 @@ impl Song {
         song
     }
 
-    /// Get the total length of the song in ticks.
-    pub fn total_ticks(&self) -> u64 {
-        let mut ticks = 0u64;
+    /// Get the total length of the song as a `MusicalTime`.
+    pub fn total_time(&self) -> MusicalTime {
+        let rpb = self.rows_per_beat as u32;
+        let mut time = MusicalTime::zero();
         for entry in &self.order {
             if let OrderEntry::Pattern(idx) = entry {
                 if let Some(pattern) = self.patterns.get(*idx as usize) {
-                    ticks += pattern.total_ticks();
+                    let pat_rpb = pattern.rows_per_beat.map_or(rpb, |r| r as u32);
+                    time = time.add_rows(pattern.rows as u32, pat_rpb);
                 }
             }
         }
-        ticks
+        time
     }
 
     /// Add a pattern and return its index.
@@ -171,17 +176,17 @@ impl Track {
 pub enum TrackEntry {
     /// A pattern placed at a specific time
     Pattern {
-        start: Timestamp,
+        start: MusicalTime,
         pattern_id: u16,
     },
     /// A MIDI clip (future)
     MidiClip {
-        start: Timestamp,
+        start: MusicalTime,
         clip_id: u16,
     },
     /// An audio clip (future)
     AudioClip {
-        start: Timestamp,
+        start: MusicalTime,
         clip_id: u16,
     },
 }
