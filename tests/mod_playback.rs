@@ -2,6 +2,7 @@
 
 use mb_engine::{Engine, Frame};
 use mb_formats::load_mod;
+use mb_ir::{Note, OrderEntry};
 use std::fs;
 use std::path::PathBuf;
 
@@ -120,6 +121,131 @@ fn playback_advances_position() {
         pos_before.tick,
         pos_after.tick
     );
+}
+
+#[test]
+fn musiklinjen_pattern7_diagnostics() {
+    let data = fs::read(fixtures_dir().join("musiklinjen.mod")).unwrap();
+    let song = load_mod(&data).unwrap();
+
+    // Dump pattern 7 cell data
+    let pat = &song.patterns[7];
+    println!("Pattern 7: {} rows x {} channels", pat.rows, pat.channels);
+    println!();
+
+    // Collect effects and samples used
+    let mut effects_used = std::collections::BTreeSet::new();
+    let mut samples_used = std::collections::BTreeSet::new();
+
+    for row in 0..pat.rows {
+        let mut row_has_data = false;
+        for ch in 0..pat.channels {
+            let cell = pat.cell(row, ch);
+            if !cell.is_empty() {
+                row_has_data = true;
+            }
+            if cell.effect != mb_ir::Effect::None {
+                effects_used.insert(cell.effect.name());
+            }
+            if cell.instrument > 0 {
+                samples_used.insert(cell.instrument);
+            }
+        }
+        if row_has_data {
+            print!("Row {:02X}: ", row);
+            for ch in 0..pat.channels {
+                let cell = pat.cell(row, ch);
+                let note_str = match cell.note {
+                    Note::On(n) => {
+                        let names = ["C-","C#","D-","D#","E-","F-","F#","G-","G#","A-","A#","B-"];
+                        format!("{}{}", names[(n % 12) as usize], n / 12)
+                    }
+                    Note::Off => "OFF".to_string(),
+                    _ => "...".to_string(),
+                };
+                let inst_str = if cell.instrument > 0 {
+                    format!("{:02X}", cell.instrument)
+                } else {
+                    "..".to_string()
+                };
+                let fx_str = if cell.effect != mb_ir::Effect::None {
+                    format!("{:?}", cell.effect)
+                } else {
+                    "...".to_string()
+                };
+                print!("| {} {} {} ", note_str, inst_str, fx_str);
+            }
+            println!("|");
+        }
+    }
+
+    println!();
+    println!("Effects used: {:?}", effects_used);
+    println!("Instruments used: {:?}", samples_used);
+
+    // Print sample info for each used instrument
+    for &inst in &samples_used {
+        let idx = (inst - 1) as usize;
+        if let Some(sample) = song.samples.get(idx) {
+            println!(
+                "  Sample {:02X} '{}': len={}, loop={}..{}, has_loop={}, vol={}, c4={}",
+                inst, sample.name, sample.len(), sample.loop_start, sample.loop_end,
+                sample.has_loop(), sample.default_volume, sample.c4_speed
+            );
+        }
+    }
+
+    // Render pattern 7 in isolation and scan for clicks
+    let mut isolated = song.clone();
+    isolated.order.clear();
+    isolated.order.push(OrderEntry::Pattern(7));
+
+    let mut engine = Engine::new(isolated, 44100);
+    engine.schedule_song();
+    engine.play();
+
+    let max_frames = 44100 * 10;
+    let mut frames = Vec::with_capacity(max_frames);
+    while !engine.is_finished() && frames.len() < max_frames {
+        frames.push(engine.render_frame());
+    }
+    println!();
+    println!("Rendered {} frames ({:.2}s)", frames.len(), frames.len() as f64 / 44100.0);
+
+    // Scan for clicks: large frame-to-frame deltas
+    let click_threshold = 4000i32; // ~12% of i16 range
+    let mut clicks = Vec::new();
+    for i in 1..frames.len() {
+        let dl = (frames[i].left as i32 - frames[i-1].left as i32).abs();
+        let dr = (frames[i].right as i32 - frames[i-1].right as i32).abs();
+        let max_delta = dl.max(dr);
+        if max_delta > click_threshold {
+            clicks.push((i, max_delta, dl, dr));
+        }
+    }
+
+    println!("Clicks detected (delta > {}): {}", click_threshold, clicks.len());
+    // Show first 20
+    for &(pos, max_d, dl, dr) in clicks.iter().take(20) {
+        let time_ms = pos as f64 / 44.1;
+        println!(
+            "  Frame {: >7} ({:7.1}ms): max_delta={:5} (L:{:5} R:{:5}) | L: {:6} → {:6} | R: {:6} → {:6}",
+            pos, time_ms, max_d, dl, dr,
+            frames[pos-1].left, frames[pos].left,
+            frames[pos-1].right, frames[pos].right
+        );
+    }
+    if clicks.len() > 20 {
+        println!("  ... and {} more", clicks.len() - 20);
+    }
+
+    // Summary stats
+    let max_amp = frames.iter()
+        .flat_map(|f| [f.left.unsigned_abs(), f.right.unsigned_abs()])
+        .max()
+        .unwrap_or(0);
+    println!();
+    println!("Max amplitude: {}", max_amp);
 }
 
 #[test]

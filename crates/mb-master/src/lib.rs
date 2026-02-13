@@ -14,7 +14,7 @@ use std::thread::JoinHandle;
 // Re-export common types so callers don't need mb-ir/mb-engine directly.
 pub use mb_engine::Frame;
 pub use mb_formats::FormatError;
-pub use mb_ir::{PlaybackPosition, Song};
+pub use mb_ir::{OrderEntry, PlaybackPosition, Song};
 
 pub use wav::{frames_to_wav, write_wav};
 
@@ -54,9 +54,16 @@ impl Controller {
     // --- Real-time playback ---
 
     pub fn play(&mut self) {
+        self.play_song(self.song.clone());
+    }
+
+    pub fn play_pattern(&mut self, pattern: usize) {
+        self.play_song(self.single_pattern_song(pattern));
+    }
+
+    fn play_song(&mut self, song: Song) {
         self.stop();
 
-        let song = self.song.clone();
         let stop_signal = Arc::new(AtomicBool::new(false));
         let current_tick = Arc::new(AtomicU64::new(0));
         let finished = Arc::new(AtomicBool::new(false));
@@ -110,21 +117,24 @@ impl Controller {
     // --- Offline rendering ---
 
     pub fn render_frames(&self, sample_rate: u32, max_frames: usize) -> Vec<Frame> {
-        let mut engine = Engine::new(self.song.clone(), sample_rate);
-        engine.schedule_song();
-        engine.play();
-
-        let mut frames = Vec::with_capacity(max_frames);
-        while !engine.is_finished() && frames.len() < max_frames {
-            frames.push(engine.render_frame());
-        }
-        frames
+        render_song_frames(self.song.clone(), sample_rate, max_frames)
     }
 
     pub fn render_to_wav(&self, sample_rate: u32, max_seconds: u32) -> Vec<u8> {
-        let max_frames = (sample_rate * max_seconds) as usize;
-        let frames = self.render_frames(sample_rate, max_frames);
-        wav::frames_to_wav(&frames, sample_rate)
+        render_song_to_wav(self.song.clone(), sample_rate, max_seconds)
+    }
+
+    pub fn render_pattern_to_wav(&self, pattern: usize, sample_rate: u32, max_seconds: u32) -> Vec<u8> {
+        render_song_to_wav(self.single_pattern_song(pattern), sample_rate, max_seconds)
+    }
+
+    // --- Helpers ---
+
+    fn single_pattern_song(&self, pattern: usize) -> Song {
+        let mut song = self.song.clone();
+        song.order.clear();
+        song.order.push(OrderEntry::Pattern(pattern as u8));
+        song
     }
 }
 
@@ -132,6 +142,24 @@ impl Default for Controller {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn render_song_frames(song: Song, sample_rate: u32, max_frames: usize) -> Vec<Frame> {
+    let mut engine = Engine::new(song, sample_rate);
+    engine.schedule_song();
+    engine.play();
+
+    let mut frames = Vec::with_capacity(max_frames);
+    while !engine.is_finished() && frames.len() < max_frames {
+        frames.push(engine.render_frame());
+    }
+    frames
+}
+
+fn render_song_to_wav(song: Song, sample_rate: u32, max_seconds: u32) -> Vec<u8> {
+    let max_frames = (sample_rate * max_seconds) as usize;
+    let frames = render_song_frames(song, sample_rate, max_frames);
+    wav::frames_to_wav(&frames, sample_rate)
 }
 
 fn audio_thread(

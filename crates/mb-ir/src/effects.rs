@@ -202,19 +202,26 @@ impl Effect {
 
     /// Returns true if this effect is processed only on tick 0.
     pub fn is_row_effect(&self) -> bool {
-        matches!(
-            self,
-            Effect::PositionJump(_)
-                | Effect::PatternBreak(_)
-                | Effect::SetSpeed(_)
-                | Effect::SetTempo(_)
-                | Effect::SetVolume(_)
-                | Effect::SetPan(_)
-                | Effect::SampleOffset(_)
-                | Effect::FinePortaUp(_)
-                | Effect::FinePortaDown(_)
-                | Effect::FineVolumeSlideUp(_)
-                | Effect::FineVolumeSlideDown(_)
-        )
+        matches!(self, Effect::NoteCut(0))
+            || matches!(
+                self,
+                Effect::PositionJump(_)
+                    | Effect::PatternBreak(_)
+                    | Effect::SetSpeed(_)
+                    | Effect::SetTempo(_)
+                    | Effect::SetVolume(_)
+                    | Effect::SetPan(_)
+                    | Effect::SampleOffset(_)
+                    | Effect::FinePortaUp(_)
+                    | Effect::FinePortaDown(_)
+                    | Effect::FineVolumeSlideUp(_)
+                    | Effect::FineVolumeSlideDown(_)
+                    | Effect::SetVibratoWaveform(_)
+                    | Effect::SetTremoloWaveform(_)
+                    | Effect::ExtraFinePortaUp(_)
+                    | Effect::ExtraFinePortaDown(_)
+                    | Effect::NoteDelay(_)
+                    | Effect::PatternDelay(_)
+            )
     }
 }

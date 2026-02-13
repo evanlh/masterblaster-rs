@@ -83,3 +83,8 @@ fn snapshot_kawaik1() {
 fn snapshot_noise_synth_pop() {
     snapshot_test("noise_synth_pop.mod");
 }
+
+#[test]
+fn snapshot_musiklinjen() {
+    snapshot_test("musiklinjen.mod");
+}
