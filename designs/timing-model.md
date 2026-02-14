@@ -1,5 +1,19 @@
 # Timing Model Design
 
+## Status
+
+- [x] Phase 1 — Beat-based musical time
+  - [x] `MusicalTime { beat, sub_beat }` replacing `Timestamp { tick, subtick }`
+  - [x] `SUB_BEAT_UNIT = 720720` (LCM 1..16)
+  - [x] Scheduler computes beat positions from rows
+  - [x] Engine uses `samples_per_beat` scalar
+  - [x] `Song.rows_per_beat` + per-pattern override
+- [ ] Phase 2 — Dual timeline + tempo map
+  - [ ] `TempoMap` with beat-to-sample random-access conversion
+  - [ ] Engine maintains parallel beat + sample counters
+  - [ ] Audio clip renderer with `StretchMode` (Follow/Free/Repitch)
+  - [ ] UI timeline ruler via TempoMap
+
 ## Problem
 
 The engine needs a single time representation that works for tracker patterns,

@@ -1,5 +1,23 @@
 # Pattern and Sequence Enhancements
 
+## Status
+
+- [ ] Pattern operations
+  - [ ] `pattern_rotate`
+  - [ ] `pattern_reverse`
+  - [ ] `pattern_transpose`
+  - [ ] `pattern_invert`
+- [ ] Euclidean rhythm generation
+  - [ ] `euclidean_rhythm` (Bjorklund's algorithm)
+  - [ ] `euclidean_fill` (pattern column integration)
+- [ ] Polyrhythmic tracks
+  - [ ] `SeqEntry.repeat` for clip looping
+  - [ ] Scheduler unrolls repeats into events
+- [ ] UI
+  - [ ] Multi-track display with proportional row heights + beat grid
+  - [ ] Cross-track cursor navigation with row translation
+  - [ ] Euclidean generator UI (sliders with live preview)
+
 Building on the sequencing model defined in `sequencing-model.md`, this
 document covers pattern operations, generative tools, and polyrhythmic
 track support.

@@ -1,5 +1,28 @@
 # Machine Architecture Design
 
+## Status
+
+- [x] Machine trait (`Machine`, `MachineInfo`, `MachineType`, `ParamInfo`, `WorkMode`)
+- [x] Graph integration (`NodeType::BuzzMachine`, `render_graph()`)
+- [x] AmigaFilter (one-pole RC LPF, first built-in machine)
+- [ ] Shared DSP primitives (Biquad, FilterCascade, DelayLine, Envelope, Smoother, Oscillator)
+- [ ] Phase 1 — Foundation machines
+  - [ ] 1. Jeskola Distortion
+  - [ ] 2. Elak SVF
+  - [ ] 3. Jeskola Noise
+  - [ ] 4. Jeskola Delay
+  - [ ] 5. Arguru Compressor
+- [ ] Phase 2 — Intermediate machines
+  - [ ] 6. Jeskola CrossDelay
+  - [ ] 7. FSM Kick
+  - [ ] 8. FSM WahMan
+  - [ ] 9. FSM Philta
+- [ ] Phase 3 — Advanced machines
+  - [ ] 10. Jeskola Freeverb
+  - [ ] 11. FSM KickXP
+- [ ] Phase 4 — Research
+  - [ ] 12. FSM Infector
+
 ## Problem
 
 The engine needs a plugin system for audio generators and effects — both

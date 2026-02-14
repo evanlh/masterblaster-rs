@@ -1,5 +1,20 @@
 # Faust DSP Integration Design
 
+## Status
+
+- [ ] Approach A — AOT Rust codegen
+  - [ ] `build.rs` Faust compiler integration
+  - [ ] `FaustMachine<D>` adapter (FaustDsp -> Machine trait)
+  - [ ] Parameter discovery via `build_user_interface` collector
+  - [ ] i16/f32 boundary conversion
+- [ ] Starter effects
+  - [ ] 1. Distortion (pipeline validation)
+  - [ ] 2. Delay
+  - [ ] 3. Freeverb
+  - [ ] 4. Multimode filter (Philta equivalent)
+- [ ] Approach B — AOT C codegen via cc crate (fallback)
+- [ ] Approach C — JIT via libfaust (future, live coding)
+
 ## Motivation
 
 The machine architecture design (`machine-architecture.md`) defined a `Machine`

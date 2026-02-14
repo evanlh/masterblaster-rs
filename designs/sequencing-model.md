@@ -1,5 +1,16 @@
 # Sequencing Model Design
 
+## Status
+
+- [ ] Core types (Track, Clip, SeqEntry)
+- [ ] Per-track sequencing replacing global patterns + order list
+- [ ] PatternData split (Tracker vs Params)
+- [ ] Automation clips (AutomationLane, EnvelopePoint, InterpMode)
+- [ ] Track group tag + grouped UI display
+- [ ] MOD import (split global patterns into per-track)
+- [ ] MOD export (round-trip validation + recombine)
+- [ ] Scheduler updated for per-track clip walking
+
 ## Problem
 
 The current sequencing model uses global patterns (multi-channel grids) with a
