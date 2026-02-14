@@ -5,7 +5,7 @@
 - [ ] Core types (Track, Clip, SeqEntry)
 - [ ] Per-track sequencing replacing global patterns + order list
 - [ ] PatternData split (Tracker vs Params)
-- [ ] Automation clips (AutomationLane, EnvelopePoint, InterpMode)
+- [ ] Automation clips (AutomationLane, AutomationPoint, uses CurveKind from modulator system)
 - [ ] Track group tag + grouped UI display
 - [ ] MOD import (split global patterns into per-track)
 - [ ] MOD export (round-trip validation + recombine)
@@ -147,21 +147,26 @@ per parameter), each with interpolated points.
 ```rust
 struct AutomationLane {
     parameter: u16,
-    points: Vec<EnvelopePoint>,
-    interpolation: InterpMode,
+    points: Vec<AutomationPoint>,
 }
 
-struct EnvelopePoint {
-    position: MusicalTime,       // relative to clip start
+struct AutomationPoint {
+    position: MusicalTime,       // absolute, relative to clip start
     value: f32,
-}
-
-enum InterpMode {
-    Step,
-    Linear,
-    Smooth,
+    curve: CurveKind,            // reuses CurveKind from modulator-system.md
 }
 ```
+
+`AutomationPoint` uses absolute `MusicalTime` positions (good for UI editing
+— click at beat 4.5 and set a value). `CurveKind` (from `mod_envelope.rs`)
+replaces the earlier `InterpMode` — it's a strict superset with `Step`,
+`Linear`, `SineQuarter`, and `Exponential(f32)`.
+
+At scheduling time, each `AutomationLane` converts to the runtime
+representation: a `ModEnvelope` (relative `dt` between consecutive points)
+wrapped in a `Modulator` targeting the track's node parameter (see
+`modulator-system.md`). The conversion computes `dt` deltas between
+consecutive absolute positions.
 
 A track's sequence can mix clip types — pattern clips for some sections,
 automation clips for others — but clips don't overlap within a track.
@@ -278,17 +283,26 @@ struct Song {
 
 ## How the Scheduler Uses This
 
-The scheduler walks all tracks, converting clips into a flat event stream:
+The scheduler walks all tracks, converting clips into engine primitives:
 
 1. For each track, walk its sequence entries in order
 2. For each entry, resolve the clip at that index
-3. Pattern clip: emit events at beat positions (same as current scheduler)
-4. Automation clip: sample the envelope curves at some resolution and emit
-   parameter-change events
-5. All events carry MusicalTime timestamps and target the track's node
+3. **Pattern clip (Tracker)**: emit NoteOn/NoteOff/Effect events at beat
+   positions (same as current scheduler)
+4. **Pattern clip (Params)**: emit SetParameter events per row. Alternatively,
+   compile the column into a step-interpolated `ModEnvelope` (one breakpoint
+   per row, `CurveKind::Step`) — the engine evaluates it continuously
+   without per-row events
+5. **Automation clip**: convert each `AutomationLane` to a `Modulator {
+   source: ModEnvelope, target: ModTarget::Node { node, param },
+   mode: ModMode::Set }`. The engine evaluates the `ModEnvelope` continuously
+   — no sampling resolution needed, the evaluator interpolates between
+   breakpoints at whatever rate `process_tick()` runs
+6. All events carry MusicalTime timestamps and target the track's node
 
 The engine receives and processes events identically regardless of which track
-or clip type produced them.
+or clip type produced them. Automation and parameter patterns both converge on
+`ModEnvelope` at runtime (see `modulator-system.md`).
 
 See also: `pattern-and-sequence-enhancements.md` for pattern operations
 (rotation, transpose, reverse), Euclidean rhythm generation, polyrhythmic
