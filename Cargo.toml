@@ -25,6 +25,7 @@ mb-master = { path = "crates/mb-master" }
 # Core (no_std compatible)
 arrayvec = "0.7"
 heapless = "0.8"
+libm = "0.2"
 
 # Desktop audio
 cpal = "0.15"

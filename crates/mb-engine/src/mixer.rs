@@ -3,7 +3,7 @@
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
-use mb_ir::{Effect, Event, EventPayload, EventTarget, MusicalTime, NodeType, Song, SUB_BEAT_UNIT};
+use mb_ir::{Effect, Event, EventPayload, EventTarget, MusicalTime, NodeType, Song, SUB_BEAT_UNIT, sub_beats_per_tick};
 
 use crate::channel::ChannelState;
 use crate::event_queue::EventQueue;
@@ -224,15 +224,21 @@ impl Engine {
         self.speed as u32 * self.rows_per_beat
     }
 
+    /// Sub-beat units per tick (for modulator timing).
+    fn spt(&self) -> u32 {
+        sub_beats_per_tick(self.speed, self.rows_per_beat as u8)
+    }
+
     /// Process a tick (called once per tick).
     fn process_tick(&mut self) {
         let sample_rate = self.sample_rate;
+        let spt = self.spt();
         for channel in &mut self.channels {
             if !channel.playing {
                 continue;
             }
             channel.clear_modulation();
-            channel.apply_tick_effect();
+            channel.apply_tick_effect(spt);
             channel.update_increment(sample_rate);
         }
         for slot in &mut self.machines {
@@ -338,6 +344,7 @@ impl Engine {
                 }
             }
             EventPayload::Effect(effect) => {
+                let spt = self.spt();
                 if let Some(channel) = self.channels.get_mut(ch as usize) {
                     // Store porta speed from TonePorta for TonePortaVolSlide
                     if let Effect::TonePorta(speed) = effect {
@@ -353,6 +360,7 @@ impl Engine {
                     } else {
                         channel.active_effect = *effect;
                         channel.effect_tick = 0;
+                        channel.setup_modulator(effect, spt);
                     }
                 }
             }
@@ -1224,15 +1232,15 @@ mod tests {
         schedule_effect(&mut engine, mb_ir::Effect::Arpeggio { x: 12, y: 7 });
         engine.render_frame();
 
-        // Tick 0: base note (arpeggio_tick=0 → offset=0)
-        // Tick 1: x=12 semitones up (arpeggio_tick=1)
-        advance_tick(&mut engine); // arpeggio_tick 0→1, offset=0
-        advance_tick(&mut engine); // arpeggio_tick 1→2, offset=x
+        // Tick 1: envelope advances to x step (12 semitones up)
+        advance_tick(&mut engine);
+        let expected_x = note_to_period(48 + 12) as i16 - 428; // 214 - 428 = -214
+        assert_eq!(engine.channel(0).unwrap().period_offset, expected_x);
 
-        let ch = engine.channel(0).unwrap();
-        let expected_offset = note_to_period(48 + 12) as i16 - 428;
-        // note_to_period(60) = 214, so offset = 214 - 428 = -214
-        assert_eq!(ch.period_offset, expected_offset);
+        // Tick 2: envelope advances to y step (7 semitones up)
+        advance_tick(&mut engine);
+        let expected_y = note_to_period(48 + 7) as i16 - 428; // 285 - 428 = -143
+        assert_eq!(engine.channel(0).unwrap().period_offset, expected_y);
     }
 
     // === Tremolo tests ===
@@ -1312,30 +1320,29 @@ mod tests {
     }
 
     #[test]
-    fn vibrato_phase_resets_on_new_note_by_default() {
+    fn vibrato_mod_resets_on_new_note_by_default() {
         let song = song_with_sample(vec![127; 100000], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
         schedule_note(&mut engine, 48, 1);
         engine.render_frame();
 
-        // Run vibrato for a few ticks to advance phase
+        // Run vibrato for a few ticks to advance modulator
         schedule_effect(&mut engine, mb_ir::Effect::Vibrato { speed: 8, depth: 4 });
         engine.render_frame();
         for _ in 0..5 {
             advance_tick(&mut engine);
         }
-        let phase_before = engine.channel(0).unwrap().vibrato_phase;
-        assert!(phase_before > 0, "phase should have advanced");
+        assert!(engine.channel(0).unwrap().period_mod.is_some(), "vibrato mod should be active");
 
-        // Trigger new note → phase should reset (default waveform has retrig)
+        // Trigger new note → period_mod should reset (default waveform has retrig)
         schedule_note(&mut engine, 60, 1);
         engine.render_frame();
-        assert_eq!(engine.channel(0).unwrap().vibrato_phase, 0);
+        assert!(engine.channel(0).unwrap().period_mod.is_none(), "mod should reset on note");
     }
 
     #[test]
-    fn vibrato_phase_persists_with_no_retrig_flag() {
+    fn vibrato_mod_persists_with_no_retrig_flag() {
         let song = song_with_sample(vec![127; 100000], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
@@ -1351,13 +1358,12 @@ mod tests {
         for _ in 0..5 {
             advance_tick(&mut engine);
         }
-        let phase_before = engine.channel(0).unwrap().vibrato_phase;
-        assert!(phase_before > 0);
+        assert!(engine.channel(0).unwrap().period_mod.is_some(), "vibrato mod should be active");
 
-        // Trigger new note → phase should NOT reset
+        // Trigger new note → period_mod should NOT reset (no-retrig flag)
         schedule_note(&mut engine, 60, 1);
         engine.render_frame();
-        assert_eq!(engine.channel(0).unwrap().vibrato_phase, phase_before);
+        assert!(engine.channel(0).unwrap().period_mod.is_some(), "mod should persist with no-retrig");
     }
 
     // === NoteCut tests ===

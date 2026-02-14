@@ -73,13 +73,3 @@ pub enum EventPayload {
     Effect(Effect),
 }
 
-impl EventPayload {
-    /// Create a note on event with default velocity.
-    pub fn note_on(note: u8, instrument: u8) -> Self {
-        Self::NoteOn {
-            note,
-            velocity: 64,
-            instrument,
-        }
-    }
-}

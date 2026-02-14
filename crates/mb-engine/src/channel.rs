@@ -1,26 +1,26 @@
 //! Channel state for tracker playback.
 
-use mb_ir::Effect;
+use mb_ir::{
+    arpeggio_envelope, retrigger_envelope, add_mode_sine_envelope, Effect,
+    ModEnvelope, ModMode,
+};
 
+use crate::envelope_state::EnvelopeState;
 use crate::frequency::{clamp_period, note_to_period, period_to_increment, PERIOD_MAX, PERIOD_MIN};
 
-/// ProTracker sine table: 32-entry half-wave (0→255→0).
-/// Phase 0-63, index = phase & 31, sign = phase & 32.
-const SINE_TABLE: [u8; 32] = [
-    0, 24, 49, 74, 97, 120, 141, 161, 180, 197, 212, 224, 235, 244, 250, 255,
-    255, 250, 244, 235, 224, 212, 197, 180, 161, 141, 120, 97, 74, 49, 24, 0,
-];
+/// An active envelope-based modulator on a channel parameter.
+#[derive(Clone, Debug)]
+pub struct ActiveMod {
+    pub envelope: ModEnvelope,
+    pub state: EnvelopeState,
+    pub mode: ModMode,
+}
 
-/// Compute signed waveform value for vibrato/tremolo.
-/// Returns -255..255 based on waveform type and phase (0-63).
-fn waveform_value(waveform: u8, phase: u8) -> i16 {
-    let index = (phase & 31) as usize;
-    let magnitude = match waveform & 3 {
-        0 => SINE_TABLE[index] as i16,
-        1 => (index as i16) << 3, // ramp: 0, 8, 16, ..., 248
-        _ => 255i16,              // square
-    };
-    if phase & 32 != 0 { -magnitude } else { magnitude }
+impl ActiveMod {
+    pub fn new(envelope: ModEnvelope, mode: ModMode) -> Self {
+        let state = EnvelopeState::new(&envelope);
+        Self { envelope, state, mode }
+    }
 }
 
 /// Mixing state for a single tracker channel.
@@ -39,11 +39,13 @@ pub struct ChannelState {
     /// Is the channel currently playing?
     pub playing: bool,
 
-    // Effect state
+    // Per-tick effect (direct-mutation effects only)
     /// Currently active per-tick effect
     pub active_effect: Effect,
-    /// Vibrato phase (0-255)
-    pub vibrato_phase: u8,
+    /// Tick counter for the current active effect
+    pub effect_tick: u8,
+
+    // Base parameter values
     /// Current volume (0-64)
     pub volume: u8,
     /// Envelope tick position
@@ -67,36 +69,33 @@ pub struct ChannelState {
     /// Tone portamento speed (period units per tick)
     pub porta_speed: u8,
 
-    // Vibrato state
-    /// Vibrato speed (phase advance per tick)
+    // Effect memory (for tracker effect parameter persistence)
+    /// Last vibrato speed
     pub vibrato_speed: u8,
-    /// Vibrato depth (period modulation amplitude)
+    /// Last vibrato depth
     pub vibrato_depth: u8,
     /// Vibrato waveform (0=sine, 1=ramp, 2=square; bit 2=no retrig)
     pub vibrato_waveform: u8,
-
-    // Tremolo state
-    /// Tremolo speed (phase advance per tick)
+    /// Last tremolo speed
     pub tremolo_speed: u8,
-    /// Tremolo depth (volume modulation amplitude)
+    /// Last tremolo depth
     pub tremolo_depth: u8,
-    /// Tremolo phase (0-63)
-    pub tremolo_phase: u8,
     /// Tremolo waveform (0=sine, 1=ramp, 2=square; bit 2=no retrig)
     pub tremolo_waveform: u8,
 
-    // Arpeggio state
-    /// Arpeggio tick counter (cycles 0→1→2→0)
-    pub arpeggio_tick: u8,
+    // Envelope-based modulators (Add/Trigger mode)
+    /// Period modulator (vibrato, arpeggio)
+    pub period_mod: Option<ActiveMod>,
+    /// Volume modulator (tremolo)
+    pub volume_mod: Option<ActiveMod>,
+    /// Trigger modulator (retrigger)
+    pub trigger_mod: Option<ActiveMod>,
 
-    // Temporary per-tick modulation (not saved to base values)
+    // Computed per-tick modulation outputs
     /// Period offset from vibrato/arpeggio
     pub period_offset: i16,
     /// Volume offset from tremolo
     pub volume_offset: i8,
-
-    /// Tick counter for the current active effect (increments each process_tick)
-    pub effect_tick: u8,
 }
 
 impl ChannelState {
@@ -129,14 +128,14 @@ impl ChannelState {
         self.effect_tick = 0;
         self.period_offset = 0;
         self.volume_offset = 0;
-        self.arpeggio_tick = 0;
-        // Retrigger waveform phase unless bit 2 is set
+        // Clear modulators (respect no-retrig waveform flag)
         if self.vibrato_waveform & 4 == 0 {
-            self.vibrato_phase = 0;
+            self.period_mod = None;
         }
         if self.tremolo_waveform & 4 == 0 {
-            self.tremolo_phase = 0;
+            self.volume_mod = None;
         }
+        self.trigger_mod = None;
     }
 
     /// Stop playback.
@@ -159,7 +158,7 @@ impl ChannelState {
         match effect {
             Effect::SetVolume(v) => self.volume = (*v).min(64),
             Effect::SetPan(p) => self.panning = (*p as i16 - 128).clamp(-64, 64) as i8,
-            Effect::SampleOffset(o) => self.position = (*o as u32) << 24, // 256-byte units → 16.16
+            Effect::SampleOffset(o) => self.position = (*o as u32) << 24,
             Effect::FineVolumeSlideUp(v) => {
                 self.volume = (self.volume as i16 + *v as i16).clamp(0, 64) as u8;
             }
@@ -197,44 +196,40 @@ impl ChannelState {
         }
     }
 
-    /// Apply vibrato: oscillate period around base value.
-    fn apply_vibrato(&mut self) {
-        let delta = waveform_value(self.vibrato_waveform, self.vibrato_phase);
-        self.period_offset = (delta as i32 * self.vibrato_depth as i32 / 128) as i16;
-        self.vibrato_phase = (self.vibrato_phase.wrapping_add(self.vibrato_speed)) & 63;
-    }
-
-    /// Apply tremolo: oscillate volume around base value.
-    fn apply_tremolo(&mut self) {
-        let delta = waveform_value(self.tremolo_waveform, self.tremolo_phase);
-        self.volume_offset = (delta as i32 * self.tremolo_depth as i32 / 64) as i8;
-        self.tremolo_phase = (self.tremolo_phase.wrapping_add(self.tremolo_speed)) & 63;
-    }
-
-    /// Apply arpeggio: cycle period between base note, +x, +y semitones.
-    fn apply_arpeggio(&mut self, x: u8, y: u8) {
-        let semitone_offset = match self.arpeggio_tick % 3 {
-            1 => x,
-            2 => y,
-            _ => 0,
-        };
-        self.period_offset = if semitone_offset == 0 {
-            0
-        } else {
-            let target = note_to_period(self.note.saturating_add(semitone_offset));
-            if target > 0 { target as i16 - self.period as i16 } else { 0 }
-        };
-        self.arpeggio_tick = (self.arpeggio_tick + 1) % 3;
-    }
-
     /// Clear temporary per-tick modulation before applying effects.
     pub fn clear_modulation(&mut self) {
         self.period_offset = 0;
         self.volume_offset = 0;
     }
 
+    /// Advance the period modulator and write period_offset.
+    fn advance_period_mod(&mut self, spt: u32) {
+        if let Some(m) = &mut self.period_mod {
+            m.state.advance(&m.envelope, spt);
+            self.period_offset = m.state.value() as i16;
+        }
+    }
+
+    /// Advance the volume modulator and write volume_offset.
+    fn advance_volume_mod(&mut self, spt: u32) {
+        if let Some(m) = &mut self.volume_mod {
+            m.state.advance(&m.envelope, spt);
+            self.volume_offset = m.state.value() as i8;
+        }
+    }
+
+    /// Advance the trigger modulator and reset position on loop.
+    fn advance_trigger_mod(&mut self, spt: u32) {
+        if let Some(m) = &mut self.trigger_mod {
+            m.state.advance(&m.envelope, spt);
+            if m.state.looped() {
+                self.position = 0;
+            }
+        }
+    }
+
     /// Apply a per-tick effect (called every tick after the first).
-    pub fn apply_tick_effect(&mut self) {
+    pub fn apply_tick_effect(&mut self, spt: u32) {
         self.effect_tick = self.effect_tick.wrapping_add(1);
         match self.active_effect {
             Effect::VolumeSlide(delta) => {
@@ -256,31 +251,102 @@ impl ChannelState {
             Effect::Vibrato { speed, depth } => {
                 if speed > 0 { self.vibrato_speed = speed; }
                 if depth > 0 { self.vibrato_depth = depth; }
-                self.apply_vibrato();
+                self.advance_period_mod(spt);
             }
             Effect::VibratoVolSlide(delta) => {
-                self.apply_vibrato();
+                self.advance_period_mod(spt);
                 self.volume = (self.volume as i16 + delta as i16).clamp(0, 64) as u8;
             }
             Effect::Tremolo { speed, depth } => {
                 if speed > 0 { self.tremolo_speed = speed; }
                 if depth > 0 { self.tremolo_depth = depth; }
-                self.apply_tremolo();
+                self.advance_volume_mod(spt);
             }
-            Effect::Arpeggio { x, y } => {
-                self.apply_arpeggio(x, y);
+            Effect::Arpeggio { x: _, y: _ } => {
+                self.advance_period_mod(spt);
             }
             Effect::NoteCut(tick) => {
                 if self.effect_tick >= tick {
                     self.volume = 0;
                 }
             }
-            Effect::RetriggerNote(interval) => {
-                if interval > 0 && self.effect_tick % interval == 0 {
-                    self.position = 0;
-                }
+            Effect::RetriggerNote(_) => {
+                self.advance_trigger_mod(spt);
             }
             _ => {}
         }
     }
+
+    /// Set up envelope-based modulators for the current effect.
+    /// Called when a new per-tick effect is dispatched.
+    pub fn setup_modulator(&mut self, effect: &Effect, spt: u32) {
+        match effect {
+            Effect::Vibrato { speed, depth } => {
+                let s = if *speed > 0 { *speed } else { self.vibrato_speed };
+                let d = if *depth > 0 { *depth } else { self.vibrato_depth };
+                self.period_mod = build_add_mode_sine_mod(s, d, spt);
+                self.volume_mod = None;
+                self.trigger_mod = None;
+            }
+            Effect::Tremolo { speed, depth } => {
+                let s = if *speed > 0 { *speed } else { self.tremolo_speed };
+                let d = if *depth > 0 { *depth } else { self.tremolo_depth };
+                self.volume_mod = build_add_mode_sine_mod(s, d, spt);
+                self.period_mod = None;
+                self.trigger_mod = None;
+            }
+            Effect::Arpeggio { x, y } => {
+                self.period_mod = build_arpeggio_mod(self.note, self.period, *x, *y, spt);
+                self.volume_mod = None;
+                self.trigger_mod = None;
+            }
+            Effect::RetriggerNote(interval) if *interval > 0 => {
+                let env = retrigger_envelope(*interval, spt);
+                self.trigger_mod = Some(ActiveMod::new(env, ModMode::Trigger));
+                self.period_mod = None;
+                self.volume_mod = None;
+            }
+            Effect::VibratoVolSlide(_) => {
+                // Keep existing period_mod (vibrato continues from previous row)
+                // If no vibrato mod exists, create one from stored params
+                if self.period_mod.is_none() && self.vibrato_speed > 0 {
+                    self.period_mod =
+                        build_add_mode_sine_mod(self.vibrato_speed, self.vibrato_depth, spt);
+                }
+                self.volume_mod = None;
+                self.trigger_mod = None;
+            }
+            _ => {
+                // Non-modulator effects: clear all mods
+                self.period_mod = None;
+                self.volume_mod = None;
+                self.trigger_mod = None;
+            }
+        }
+    }
+}
+
+fn build_add_mode_sine_mod(speed: u8, depth: u8, spt: u32) -> Option<ActiveMod> {
+    if speed == 0 && depth == 0 {
+        return None;
+    }
+    let env = add_mode_sine_envelope(speed, depth, spt);
+    Some(ActiveMod::new(env, ModMode::Add))
+}
+
+fn build_arpeggio_mod(note: u8, period: u16, x: u8, y: u8, spt: u32) -> Option<ActiveMod> {
+    let offset_x = if x == 0 {
+        0.0
+    } else {
+        let target = note_to_period(note.saturating_add(x));
+        if target > 0 { target as f32 - period as f32 } else { 0.0 }
+    };
+    let offset_y = if y == 0 {
+        0.0
+    } else {
+        let target = note_to_period(note.saturating_add(y));
+        if target > 0 { target as f32 - period as f32 } else { 0.0 }
+    };
+    let env = arpeggio_envelope([0.0, offset_x, offset_y], spt);
+    Some(ActiveMod::new(env, ModMode::Add))
 }

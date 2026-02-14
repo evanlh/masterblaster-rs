@@ -7,6 +7,7 @@
 extern crate alloc;
 
 mod channel;
+pub mod envelope_state;
 mod event_queue;
 mod frame;
 mod frequency;
@@ -17,6 +18,7 @@ mod mixer;
 pub mod scheduler;
 
 pub use channel::ChannelState;
+pub use envelope_state::EnvelopeState;
 pub use event_queue::EventQueue;
 pub use frame::{Frame, WideFrame};
 pub use frequency::{note_to_increment, note_to_period, period_to_increment, clamp_period, PERIOD_MIN, PERIOD_MAX};
