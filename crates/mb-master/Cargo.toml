@@ -9,3 +9,4 @@ mb-ir = { workspace = true }
 mb-engine = { workspace = true }
 mb-audio = { workspace = true }
 mb-formats = { workspace = true }
+ringbuf = { workspace = true }

@@ -5,14 +5,19 @@
 
 use mb_audio::{AudioOutput, CpalOutput};
 use mb_engine::Engine;
+use ringbuf::HeapRb;
+use ringbuf::traits::{Consumer, Producer, Split};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
 // Re-export common types so callers don't need mb-ir/mb-engine directly.
 pub use mb_engine::Frame;
-pub use mb_formats::{FormatError, frames_to_wav, write_wav};
-pub use mb_ir::{pack_time, unpack_time, OrderEntry, PlaybackPosition, Song};
+pub use mb_formats::{FormatError, frames_to_wav, load_wav, write_wav};
+pub use mb_ir::{pack_time, unpack_time, Edit, OrderEntry, PlaybackPosition, Song};
+
+/// Ring buffer capacity for edit commands sent to the audio thread.
+const EDIT_RING_CAPACITY: usize = 256;
 
 /// Headless tracker controller — owns a song and manages playback.
 pub struct Controller {
@@ -26,6 +31,7 @@ struct PlaybackHandle {
     current_time: Arc<AtomicU64>,
     finished: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    edit_producer: ringbuf::HeapProd<Edit>,
 }
 
 impl Controller {
@@ -42,10 +48,66 @@ impl Controller {
         &self.song
     }
 
+    pub fn set_song(&mut self, song: Song) {
+        self.stop();
+        self.song = song;
+    }
+
     pub fn load_mod(&mut self, data: &[u8]) -> Result<(), FormatError> {
         self.stop();
         self.song = mb_formats::load_mod(data)?;
         Ok(())
+    }
+
+    /// Create a new empty song with default settings.
+    pub fn new_song(&mut self, channels: u8) {
+        self.stop();
+        let mut song = Song::with_channels("Untitled", channels);
+        let pat = mb_ir::Pattern::new(64, channels);
+        let idx = song.add_pattern(pat);
+        song.add_order(OrderEntry::Pattern(idx));
+        self.song = song;
+    }
+
+    /// Load a WAV file as a sample and add it to the song.
+    /// Returns the 1-based instrument number on success.
+    pub fn load_wav_sample(&mut self, data: &[u8], name: &str) -> Result<u8, FormatError> {
+        let sample = mb_formats::load_wav(data, name)?;
+        let sample_idx = self.song.samples.len() as u8;
+        self.song.samples.push(sample);
+
+        let mut inst = mb_ir::Instrument::new(name);
+        inst.set_single_sample(sample_idx);
+        self.song.instruments.push(inst);
+
+        Ok(self.song.instruments.len() as u8) // 1-based
+    }
+
+    /// Add a new empty pattern and return its index.
+    pub fn add_pattern(&mut self, rows: u16) -> u8 {
+        let channels = self.song.channels.len().max(1) as u8;
+        let pat = mb_ir::Pattern::new(rows, channels);
+        self.song.add_pattern(pat)
+    }
+
+    /// Add an order entry.
+    pub fn add_order(&mut self, pattern_idx: u8) {
+        self.song.add_order(OrderEntry::Pattern(pattern_idx));
+    }
+
+    /// Remove the last order entry (if any).
+    pub fn remove_last_order(&mut self) {
+        self.song.order.pop();
+    }
+
+    // --- Edit dispatch ---
+
+    /// Apply an edit to the local song and push it to the audio thread if playing.
+    pub fn apply_edit(&mut self, edit: Edit) {
+        apply_edit_to_song(&mut self.song, &edit);
+        if let Some(pb) = &mut self.playback {
+            let _ = pb.edit_producer.try_push(edit);
+        }
     }
 
     // --- Real-time playback ---
@@ -65,12 +127,15 @@ impl Controller {
         let current_time = Arc::new(AtomicU64::new(0));
         let finished = Arc::new(AtomicBool::new(false));
 
+        let rb = HeapRb::<Edit>::new(EDIT_RING_CAPACITY);
+        let (edit_producer, edit_consumer) = rb.split();
+
         let stop = stop_signal.clone();
         let time = current_time.clone();
         let done = finished.clone();
 
         let thread = std::thread::spawn(move || {
-            audio_thread(song, stop, time, done);
+            audio_thread(song, stop, time, done, edit_consumer);
         });
 
         self.playback = Some(PlaybackHandle {
@@ -78,6 +143,7 @@ impl Controller {
             current_time,
             finished,
             thread: Some(thread),
+            edit_producer,
         });
     }
 
@@ -142,6 +208,18 @@ impl Default for Controller {
     }
 }
 
+/// Apply an edit directly to song data (no event queue update).
+fn apply_edit_to_song(song: &mut Song, edit: &Edit) {
+    match edit {
+        Edit::SetCell { pattern, row, channel, cell } => {
+            if let Some(pat) = song.patterns.get_mut(*pattern as usize) {
+                if *row < pat.rows && *channel < pat.channels {
+                    *pat.cell_mut(*row, *channel) = *cell;
+                }
+            }
+        }
+    }
+}
 
 fn render_song_frames(song: Song, sample_rate: u32, max_frames: usize) -> Vec<Frame> {
     let mut engine = Engine::new(song, sample_rate);
@@ -166,6 +244,7 @@ fn audio_thread(
     stop_signal: Arc<AtomicBool>,
     current_time: Arc<AtomicU64>,
     finished: Arc<AtomicBool>,
+    mut edit_consumer: ringbuf::HeapCons<Edit>,
 ) {
     let Ok((mut output, consumer)) = CpalOutput::new() else {
         finished.store(true, Ordering::Relaxed);
@@ -185,8 +264,16 @@ fn audio_thread(
 
     let report_interval = (sample_rate / 100) as u64;
     let mut frame_count: u64 = 0;
+    let mut edit_buf = Vec::new();
 
     while !engine.is_finished() && !stop_signal.load(Ordering::Relaxed) {
+        // Drain edits from the ring buffer
+        drain_edits(&mut edit_consumer, &mut edit_buf);
+        if !edit_buf.is_empty() {
+            engine.apply_edits(&edit_buf);
+            edit_buf.clear();
+        }
+
         output.write_park(engine.render_frame());
         frame_count += 1;
         if frame_count % report_interval == 0 {
@@ -199,4 +286,11 @@ fn audio_thread(
     }
 
     finished.store(true, Ordering::Relaxed);
+}
+
+/// Drain all available edits from the consumer into the buffer.
+fn drain_edits(consumer: &mut ringbuf::HeapCons<Edit>, buf: &mut Vec<Edit>) {
+    while let Some(edit) = consumer.try_pop() {
+        buf.push(edit);
+    }
 }

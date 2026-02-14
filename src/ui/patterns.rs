@@ -6,8 +6,8 @@ pub fn patterns_panel(ui: &imgui::Ui, gui: &mut GuiState, pos: Option<mb_ir::Pla
     ui.text("Patterns");
     ui.separator();
 
-    let song = gui.controller.song();
-    for (i, _) in song.patterns.iter().enumerate() {
+    let pattern_count = gui.controller.song().patterns.len();
+    for i in 0..pattern_count {
         let label = format!("Pattern {:02X}", i);
         if ui
             .selectable_config(&label)
@@ -18,12 +18,19 @@ pub fn patterns_panel(ui: &imgui::Ui, gui: &mut GuiState, pos: Option<mb_ir::Pla
         }
     }
 
+    if ui.button("+Pat") {
+        let idx = gui.controller.add_pattern(64);
+        gui.selected_pattern = idx as usize;
+    }
+
     ui.separator();
     ui.text("Order");
     ui.separator();
 
     let playing_order = pos.map(|p| p.order_index);
-    for (i, entry) in song.order.iter().enumerate() {
+    let order_len = gui.controller.song().order.len();
+    for i in 0..order_len {
+        let entry = gui.controller.song().order[i];
         let text = match entry {
             mb_ir::OrderEntry::Pattern(idx) => format!("{:02}: Pat {:02X}", i, idx),
             mb_ir::OrderEntry::Skip => format!("{:02}: +++", i),
@@ -37,5 +44,14 @@ pub fn patterns_panel(ui: &imgui::Ui, gui: &mut GuiState, pos: Option<mb_ir::Pla
         };
         let _token = ui.push_style_color(imgui::StyleColor::Text, color);
         ui.text(&text);
+    }
+
+    // Order editing buttons
+    if ui.button("+Ord") {
+        gui.controller.add_order(gui.selected_pattern as u8);
+    }
+    ui.same_line();
+    if ui.button("-Ord") {
+        gui.controller.remove_last_order();
     }
 }

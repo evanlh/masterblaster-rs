@@ -1,8 +1,15 @@
-//! Transport bar: Load, Play/Stop, view toggle, song info, playback position.
+//! Transport bar: New, Load, Play/Stop, view toggle, song info, playback position.
 
 use super::{CenterView, GuiState};
 
 pub fn transport_panel(ui: &imgui::Ui, gui: &mut GuiState) {
+    if ui.button("New") {
+        gui.controller.new_song(4);
+        gui.selected_pattern = 0;
+        gui.editor.cursor = Default::default();
+        gui.status = "New song".to_string();
+    }
+    ui.same_line();
     if ui.button("Load") {
         load_mod_dialog(gui);
     }

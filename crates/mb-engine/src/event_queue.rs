@@ -66,6 +66,11 @@ impl EventQueue {
     pub fn len(&self) -> usize {
         self.events.len()
     }
+
+    /// Retain only events matching the predicate, removing the rest.
+    pub fn retain<F: FnMut(&Event) -> bool>(&mut self, f: F) {
+        self.events.retain(f);
+    }
 }
 
 #[cfg(test)]

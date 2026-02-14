@@ -159,7 +159,7 @@ fn note_delay_amount(effect: &Effect) -> u32 {
 ///
 /// `speed` and `rpb` are needed for NoteDelay sub-beat computation:
 /// ticks_per_beat = speed * rpb.
-fn schedule_cell(
+pub fn schedule_cell(
     cell: &Cell,
     time: MusicalTime,
     channel: u8,
@@ -332,6 +332,34 @@ fn schedule_effect(effect: &Effect, time: MusicalTime, channel: u8, events: &mut
             ));
         }
     }
+}
+
+/// Find all MusicalTimes at which a given pattern+row appears in the order list.
+///
+/// A pattern can appear multiple times in the order list, so this returns a Vec.
+pub fn time_for_pattern_row(song: &Song, pattern_idx: u8, row: u16) -> Vec<MusicalTime> {
+    let rpb = song.rows_per_beat as u32;
+    let mut result = Vec::new();
+    let mut time = MusicalTime::zero();
+
+    for entry in &song.order {
+        match entry {
+            OrderEntry::Pattern(idx) => {
+                let Some(pattern) = song.patterns.get(*idx as usize) else {
+                    break;
+                };
+                let pat_rpb = pattern.rows_per_beat.map_or(rpb, |r| r as u32);
+                if *idx == pattern_idx && row < pattern.rows {
+                    result.push(time.add_rows(row as u32, pat_rpb));
+                }
+                time = time.add_rows(pattern.rows as u32, pat_rpb);
+            }
+            OrderEntry::Skip => {}
+            OrderEntry::End => break,
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -939,5 +967,41 @@ mod tests {
 
         let events = schedule_events(&song);
         assert!(events.is_empty());
+    }
+
+    // --- time_for_pattern_row tests ---
+
+    #[test]
+    fn time_for_row_single_occurrence() {
+        let song = one_channel_song(Pattern::new(8, 1));
+        let times = time_for_pattern_row(&song, 0, 3);
+        assert_eq!(times, vec![time_at_row(3)]);
+    }
+
+    #[test]
+    fn time_for_row_repeated_pattern() {
+        let mut song = Song::with_channels("test", 1);
+        let idx = song.add_pattern(Pattern::new(4, 1));
+        song.add_order(OrderEntry::Pattern(idx));
+        song.add_order(OrderEntry::Pattern(idx));
+
+        let times = time_for_pattern_row(&song, idx, 0);
+        assert_eq!(times.len(), 2);
+        assert_eq!(times[0], time_at_row(0));
+        assert_eq!(times[1], time_at_row(4)); // after first 4-row pattern
+    }
+
+    #[test]
+    fn time_for_row_nonexistent_pattern() {
+        let song = one_channel_song(Pattern::new(4, 1));
+        let times = time_for_pattern_row(&song, 99, 0);
+        assert!(times.is_empty());
+    }
+
+    #[test]
+    fn time_for_row_out_of_range_row() {
+        let song = one_channel_song(Pattern::new(4, 1));
+        let times = time_for_pattern_row(&song, 0, 100);
+        assert!(times.is_empty());
     }
 }

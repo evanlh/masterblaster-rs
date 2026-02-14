@@ -11,6 +11,7 @@
 extern crate alloc;
 
 mod analysis;
+mod edit;
 mod effects;
 mod event;
 mod graph;
@@ -23,6 +24,7 @@ mod song;
 mod musical_time;
 
 pub use analysis::{analyze, analyze_pattern, time_to_position, PatternFeatures, PlaybackPosition, SongFeatures};
+pub use edit::Edit;
 pub use effects::{Effect, VolumeCommand};
 pub use event::{Event, EventPayload, EventTarget};
 pub use graph::{AudioGraph, Connection, Node, NodeId, NodeType, Parameter};

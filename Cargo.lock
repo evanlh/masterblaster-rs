@@ -1360,6 +1360,7 @@ dependencies = [
  "mb-engine",
  "mb-formats",
  "mb-ir",
+ "ringbuf",
 ]
 
 [[package]]

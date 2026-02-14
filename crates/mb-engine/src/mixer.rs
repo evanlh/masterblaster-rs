@@ -3,7 +3,7 @@
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
-use mb_ir::{Effect, Event, EventPayload, EventTarget, MusicalTime, NodeType, Song, SUB_BEAT_UNIT, sub_beats_per_tick};
+use mb_ir::{Edit, Effect, Event, EventPayload, EventTarget, MusicalTime, NodeType, Song, SUB_BEAT_UNIT, sub_beats_per_tick};
 
 use crate::channel::ChannelState;
 use crate::event_queue::EventQueue;
@@ -536,6 +536,60 @@ impl Engine {
     /// Get a reference to a channel's state (for testing).
     pub fn channel(&self, index: usize) -> Option<&ChannelState> {
         self.channels.get(index)
+    }
+
+    /// Get a reference to the song.
+    pub fn song(&self) -> &Song {
+        &self.song
+    }
+
+    /// Apply a batch of edits to the song data and update the event queue.
+    pub fn apply_edits(&mut self, edits: &[Edit]) {
+        for edit in edits {
+            self.apply_edit(edit);
+        }
+    }
+
+    fn apply_edit(&mut self, edit: &Edit) {
+        match edit {
+            Edit::SetCell { pattern, row, channel, cell } => {
+                self.apply_set_cell(*pattern, *row, *channel, *cell);
+            }
+        }
+    }
+
+    fn apply_set_cell(&mut self, pattern_idx: u8, row: u16, channel: u8, cell: mb_ir::Cell) {
+        // 1. Mutate song data
+        let Some(pat) = self.song.patterns.get_mut(pattern_idx as usize) else {
+            return;
+        };
+        if row >= pat.rows || channel >= pat.channels {
+            return;
+        }
+        *pat.cell_mut(row, channel) = cell;
+
+        // 2. Find all times this pattern+row appears in the order list
+        let times = scheduler::time_for_pattern_row(&self.song, pattern_idx, row);
+        let rpb = self.song.rows_per_beat as u32;
+        let speed = self.speed as u32;
+        let pat_rpb = self.song.patterns.get(pattern_idx as usize)
+            .and_then(|p| p.rows_per_beat)
+            .map_or(rpb, |r| r as u32);
+
+        // 3. For each time: remove old events, schedule new ones
+        let target = EventTarget::Channel(channel);
+        for time in &times {
+            // Remove events at this exact time for this channel
+            let t = *time;
+            self.event_queue.retain(|e| !(e.time == t && e.target == target));
+
+            // Re-schedule from the updated cell
+            let mut new_events = Vec::new();
+            scheduler::schedule_cell(&cell, t, channel, speed, pat_rpb, &mut new_events);
+            for event in new_events {
+                self.event_queue.push(event);
+            }
+        }
     }
 }
 
@@ -1465,5 +1519,82 @@ mod tests {
 
         let pos = engine.channel(0).unwrap().position;
         assert!(pos > 0, "RetriggerNote(0) should not affect playback");
+    }
+
+    // === Edit dispatch tests ===
+
+    use mb_ir::{Cell, Edit, Note, OrderEntry, Pattern};
+
+    /// Build a 1-channel song with one sample and a scheduled pattern.
+    fn song_with_pattern(data: Vec<i8>) -> Song {
+        let mut song = song_with_sample(data, 64);
+        let pat = Pattern::new(4, 1);
+        let idx = song.add_pattern(pat);
+        song.add_order(OrderEntry::Pattern(idx));
+        song
+    }
+
+    #[test]
+    fn set_cell_updates_song_data() {
+        let song = song_with_pattern(vec![127; 1000]);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+
+        let cell = Cell { note: Note::On(60), instrument: 1, ..Cell::empty() };
+        engine.apply_edits(&[Edit::SetCell { pattern: 0, row: 2, channel: 0, cell }]);
+
+        assert_eq!(engine.song().patterns[0].cell(2, 0).note, Note::On(60));
+    }
+
+    #[test]
+    fn set_cell_inserts_events_in_queue() {
+        let song = song_with_pattern(vec![127; 1000]);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.schedule_song();
+
+        let cell = Cell { note: Note::On(60), instrument: 1, ..Cell::empty() };
+        engine.apply_edits(&[Edit::SetCell { pattern: 0, row: 0, channel: 0, cell }]);
+
+        // Should have at least one NoteOn event at time zero
+        engine.play();
+        engine.render_frame();
+        assert!(engine.channel(0).unwrap().playing, "channel should be triggered by SetCell event");
+    }
+
+    #[test]
+    fn set_cell_replaces_old_events() {
+        let song = song_with_pattern(vec![127; 1000]);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.schedule_song();
+
+        // Set a note, then replace with empty cell
+        let cell = Cell { note: Note::On(60), instrument: 1, ..Cell::empty() };
+        engine.apply_edits(&[Edit::SetCell { pattern: 0, row: 0, channel: 0, cell }]);
+
+        let empty = Cell::empty();
+        engine.apply_edits(&[Edit::SetCell { pattern: 0, row: 0, channel: 0, cell: empty }]);
+
+        engine.play();
+        engine.render_frame();
+        assert!(!engine.channel(0).unwrap().playing, "channel should not trigger after clearing cell");
+    }
+
+    #[test]
+    fn set_cell_on_invalid_pattern_is_noop() {
+        let song = song_with_pattern(vec![127; 1000]);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+
+        let cell = Cell { note: Note::On(60), instrument: 1, ..Cell::empty() };
+        // Pattern 99 doesn't exist — should not panic
+        engine.apply_edits(&[Edit::SetCell { pattern: 99, row: 0, channel: 0, cell }]);
+    }
+
+    #[test]
+    fn set_cell_on_invalid_row_is_noop() {
+        let song = song_with_pattern(vec![127; 1000]);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+
+        let cell = Cell { note: Note::On(60), instrument: 1, ..Cell::empty() };
+        // Row 999 out of bounds — should not panic
+        engine.apply_edits(&[Edit::SetCell { pattern: 0, row: 999, channel: 0, cell }]);
     }
 }
