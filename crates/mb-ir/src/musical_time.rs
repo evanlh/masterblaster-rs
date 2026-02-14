@@ -71,6 +71,19 @@ impl Ord for MusicalTime {
     }
 }
 
+/// Pack a MusicalTime into a u64: (beat as u32) << 32 | sub_beat.
+pub fn pack_time(t: MusicalTime) -> u64 {
+    ((t.beat as u32 as u64) << 32) | t.sub_beat as u64
+}
+
+/// Unpack a u64 into a MusicalTime.
+pub fn unpack_time(packed: u64) -> MusicalTime {
+    MusicalTime {
+        beat: (packed >> 32) as u64,
+        sub_beat: packed as u32,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

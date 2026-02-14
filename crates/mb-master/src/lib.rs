@@ -3,8 +3,6 @@
 //! Provides a unified API for loading songs, playback, and rendering
 //! that both the GUI and CLI can share.
 
-mod wav;
-
 use mb_audio::{AudioOutput, CpalOutput};
 use mb_engine::Engine;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -13,10 +11,8 @@ use std::thread::JoinHandle;
 
 // Re-export common types so callers don't need mb-ir/mb-engine directly.
 pub use mb_engine::Frame;
-pub use mb_formats::FormatError;
-pub use mb_ir::{OrderEntry, PlaybackPosition, Song};
-
-pub use wav::{frames_to_wav, write_wav};
+pub use mb_formats::{FormatError, frames_to_wav, write_wav};
+pub use mb_ir::{pack_time, unpack_time, OrderEntry, PlaybackPosition, Song};
 
 /// Headless tracker controller — owns a song and manages playback.
 pub struct Controller {
@@ -146,18 +142,6 @@ impl Default for Controller {
     }
 }
 
-/// Pack a MusicalTime into a u64: (beat as u32) << 32 | sub_beat.
-fn pack_time(t: mb_ir::MusicalTime) -> u64 {
-    ((t.beat as u32 as u64) << 32) | t.sub_beat as u64
-}
-
-/// Unpack a u64 into a MusicalTime.
-fn unpack_time(packed: u64) -> mb_ir::MusicalTime {
-    mb_ir::MusicalTime {
-        beat: (packed >> 32) as u64,
-        sub_beat: packed as u32,
-    }
-}
 
 fn render_song_frames(song: Song, sample_rate: u32, max_frames: usize) -> Vec<Frame> {
     let mut engine = Engine::new(song, sample_rate);
@@ -174,7 +158,7 @@ fn render_song_frames(song: Song, sample_rate: u32, max_frames: usize) -> Vec<Fr
 fn render_song_to_wav(song: Song, sample_rate: u32, max_seconds: u32) -> Vec<u8> {
     let max_frames = (sample_rate * max_seconds) as usize;
     let frames = render_song_frames(song, sample_rate, max_frames);
-    wav::frames_to_wav(&frames, sample_rate)
+    frames_to_wav(&frames, sample_rate)
 }
 
 fn audio_thread(

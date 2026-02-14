@@ -32,10 +32,6 @@ pub struct ChannelState {
     pub position: u32,
     /// Playback increment (16.16 fixed-point)
     pub increment: u32,
-    /// Left channel volume (0-64)
-    pub volume_left: u8,
-    /// Right channel volume (0-64)
-    pub volume_right: u8,
     /// Is the channel currently playing?
     pub playing: bool,
 
@@ -103,8 +99,6 @@ impl ChannelState {
     pub fn new() -> Self {
         Self {
             volume: 64,
-            volume_left: 64,
-            volume_right: 64,
             loop_forward: true,
             ..Default::default()
         }

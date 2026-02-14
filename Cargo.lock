@@ -1340,6 +1340,7 @@ name = "mb-formats"
 version = "0.1.0"
 dependencies = [
  "binrw",
+ "mb-engine",
  "mb-ir",
 ]
 

@@ -6,4 +6,5 @@ description = "Format parsers (MOD, XM, IT, S3M, BMX) for masterblaster tracker"
 
 [dependencies]
 mb-ir = { workspace = true }
+mb-engine = { workspace = true }
 binrw = { workspace = true }
