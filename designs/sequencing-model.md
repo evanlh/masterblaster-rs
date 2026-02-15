@@ -2,14 +2,14 @@
 
 ## Status
 
-- [ ] Core types (Track, Clip, SeqEntry)
-- [ ] Per-track sequencing replacing global patterns + order list
+- [x] Core types (Track, Clip, SeqEntry)
+- [x] Per-track sequencing replacing global patterns + order list
 - [ ] PatternData split (Tracker vs Params)
 - [ ] Automation clips (AutomationLane, AutomationPoint, uses CurveKind from modulator system)
-- [ ] Track group tag + grouped UI display
-- [ ] MOD import (split global patterns into per-track)
+- [x] Track group tag + grouped UI display
+- [x] MOD import (split global patterns into per-track)
 - [ ] MOD export (round-trip validation + recombine)
-- [ ] Scheduler updated for per-track clip walking
+- [x] Scheduler updated for per-track clip walking
 
 ## Problem
 

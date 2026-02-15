@@ -23,4 +23,4 @@ pub use event_queue::EventQueue;
 pub use frame::{Frame, WideFrame};
 pub use frequency::{note_to_increment, note_to_period, period_to_increment, clamp_period, PERIOD_MIN, PERIOD_MAX};
 pub use mixer::Engine;
-pub use scheduler::{schedule_cell, schedule_song, time_for_pattern_row, ScheduleResult};
+pub use scheduler::{schedule_cell, schedule_song, time_for_track_clip_row, ScheduleResult};

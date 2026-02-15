@@ -18,29 +18,51 @@ const SELECTION_BG: [f32; 4] = [0.20, 0.30, 0.50, 0.35];
 pub fn pattern_editor(
     ui: &imgui::Ui,
     gui: &GuiState,
-    pos: Option<mb_ir::PlaybackPosition>,
+    pos: Option<mb_ir::TrackPlaybackPosition>,
 ) {
     let song = gui.controller.song();
-    let Some(pattern) = song.patterns.get(gui.selected_pattern) else {
-        ui.text("No patterns loaded.");
+    let track_indices: Vec<u16> = song.tracks.iter()
+        .enumerate()
+        .filter(|(_, t)| t.group == Some(0))
+        .map(|(i, _)| i as u16)
+        .collect();
+
+    if track_indices.is_empty() {
+        ui.text("No tracks loaded.");
         return;
+    }
+
+    let clip_idx = match song.tracks[track_indices[0] as usize].sequence.get(gui.selected_seq_index) {
+        Some(e) => e.clip_idx,
+        None => {
+            ui.text("No clips at this sequence position.");
+            return;
+        }
     };
 
+    // Get rows from first track's clip
+    let rows = song.tracks[track_indices[0] as usize]
+        .clips.get(clip_idx as usize)
+        .and_then(|c| c.pattern())
+        .map(|p| p.rows)
+        .unwrap_or(0);
+    let num_channels = track_indices.len() as u8;
+
     let playing_row = pos
-        .filter(|p| p.pattern_index as usize == gui.selected_pattern)
+        .filter(|p| p.seq_index == gui.selected_seq_index)
         .map(|p| p.row);
 
     let edit_indicator = if gui.editor.edit_mode { " [EDIT]" } else { "" };
     ui.text(format!(
-        "Pattern {:02X} ({} rows, {} ch) Oct:{} Step:{}{} Inst:{:02X}",
-        gui.selected_pattern, pattern.rows, pattern.channels,
+        "Clip {:02X} ({} rows, {} ch) Oct:{} Step:{}{} Inst:{:02X}",
+        clip_idx, rows, num_channels,
         gui.editor.base_octave, gui.editor.step_size,
         edit_indicator,
         gui.editor.selected_instrument,
     ));
     ui.separator();
 
-    let col_count = 1 + pattern.channels as usize;
+    let col_count = 1 + num_channels as usize;
     let char_width = ui.calc_text_size("0")[0];
 
     let table_flags = imgui::TableFlags::SIZING_FIXED_FIT
@@ -58,7 +80,7 @@ pub fn pattern_editor(
             user_id: imgui::Id::default(),
         });
 
-        for ch in 0..pattern.channels {
+        for ch in 0..num_channels {
             ui.table_setup_column_with(imgui::TableColumnSetup {
                 name: format!("Ch {:02}", ch),
                 flags: imgui::TableColumnFlags::WIDTH_FIXED,
@@ -68,19 +90,18 @@ pub fn pattern_editor(
         }
         ui.table_headers_row();
 
-        // Auto-scroll to keep cursor visible
         let line_height = ui.text_line_height();
         let cursor_row = gui.editor.cursor.row;
-        auto_scroll(ui, cursor_row, pattern.rows, line_height);
+        auto_scroll(ui, cursor_row, rows, line_height);
 
-        let mut clipper = imgui::ListClipper::new(pattern.rows as i32)
+        let mut clipper = imgui::ListClipper::new(rows as i32)
             .items_height(line_height)
             .begin(ui);
 
         while clipper.step() {
             for row_idx in clipper.display_start()..clipper.display_end() {
                 let row = row_idx as u16;
-                render_row(ui, gui, pattern, row, playing_row, char_width, line_height);
+                render_row(ui, gui, song, &track_indices, clip_idx, rows, num_channels, row, playing_row, char_width, line_height);
             }
         }
     }
@@ -89,7 +110,11 @@ pub fn pattern_editor(
 fn render_row(
     ui: &imgui::Ui,
     gui: &GuiState,
-    pattern: &mb_ir::Pattern,
+    song: &mb_ir::Song,
+    track_indices: &[u16],
+    clip_idx: u16,
+    _rows: u16,
+    num_channels: u8,
     row: u16,
     playing_row: Option<u16>,
     char_width: f32,
@@ -111,10 +136,16 @@ fn render_row(
     ui.text(format!("{:02X}", row));
     drop(_token);
 
-    // Channel columns
-    for ch in 0..pattern.channels {
+    // Channel columns — read from each track's clip
+    let empty = mb_ir::Cell::empty();
+    for ch in 0..num_channels {
         ui.table_next_column();
-        let cell = pattern.cell(row, ch);
+        let cell = track_indices.get(ch as usize)
+            .and_then(|&ti| song.tracks.get(ti as usize))
+            .and_then(|t| t.clips.get(clip_idx as usize))
+            .and_then(|c| c.pattern())
+            .map(|p| p.cell(row, 0))
+            .unwrap_or(&empty);
 
         // Background highlights
         if is_playing {

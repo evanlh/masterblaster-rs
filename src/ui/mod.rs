@@ -26,7 +26,8 @@ pub enum CenterView {
 /// No GL/imgui/renderer fields.
 pub struct GuiState {
     pub controller: Controller,
-    pub selected_pattern: usize,
+    /// Which sequence position (clip) is selected in the current group.
+    pub selected_seq_index: usize,
     pub center_view: CenterView,
     pub status: String,
     pub editor: EditorState,
@@ -37,7 +38,7 @@ impl GuiState {
     pub fn new() -> Self {
         Self {
             controller: Controller::new(),
-            selected_pattern: 0,
+            selected_seq_index: 0,
             center_view: CenterView::Pattern,
             status: String::new(),
             editor: EditorState::default(),
@@ -46,8 +47,30 @@ impl GuiState {
     }
 }
 
+/// Get the clip index for the current group at the selected sequence position.
+fn selected_clip_idx(gui: &GuiState) -> Option<u16> {
+    let track = gui.controller.song().tracks.iter().find(|t| t.group == Some(0))?;
+    track.sequence.get(gui.selected_seq_index).map(|e| e.clip_idx)
+}
+
+/// Get the number of tracks in the given group.
+fn group_track_count(gui: &GuiState) -> u8 {
+    gui.controller.song().tracks.iter()
+        .filter(|t| t.group == Some(0))
+        .count() as u8
+}
+
+/// Get the group track indices (positions in song.tracks vec).
+fn group_track_indices(gui: &GuiState) -> Vec<u16> {
+    gui.controller.song().tracks.iter()
+        .enumerate()
+        .filter(|(_, t)| t.group == Some(0))
+        .map(|(i, _)| i as u16)
+        .collect()
+}
+
 pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
-    let pos = gui.controller.position();
+    let pos = gui.controller.track_position(Some(0));
 
     let display_size = ui.io().display_size;
     ui.window("masterblaster")
@@ -140,8 +163,8 @@ fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
                 if gui.controller.is_playing() {
                     gui.controller.stop();
                     gui.status = "Stopped".to_string();
-                } else {
-                    gui.controller.play_pattern(gui.selected_pattern);
+                } else if let Some(clip_idx) = selected_clip_idx(gui) {
+                    gui.controller.play_pattern(clip_idx as usize);
                     gui.status = "Playing pattern...".to_string();
                 }
             }
@@ -189,35 +212,50 @@ fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
 }
 
 fn pattern_bounds(gui: &GuiState) -> (u16, u8) {
-    gui.controller
-        .song()
-        .patterns
-        .get(gui.selected_pattern)
-        .map(|p| (p.rows, p.channels))
-        .unwrap_or((1, 1))
+    let channels = group_track_count(gui).max(1);
+    let rows = selected_clip_idx(gui)
+        .and_then(|ci| {
+            let track = gui.controller.song().tracks.iter().find(|t| t.group == Some(0))?;
+            track.clips.get(ci as usize)?.pattern().map(|p| p.rows)
+        })
+        .unwrap_or(1);
+    (rows, channels)
 }
 
 /// Apply an edit with undo recording: reads old cell, records undo, applies edit.
-fn apply_edit_with_undo(gui: &mut GuiState, pattern: u8, row: u16, channel: u8, cell: mb_ir::Cell) {
-    let old_cell = read_cell(gui, pattern, row, channel);
-    let forward = mb_ir::Edit::SetCell { pattern, row, channel, cell };
-    let reverse = mb_ir::Edit::SetCell { pattern, row, channel, cell: old_cell };
+fn apply_edit_with_undo(gui: &mut GuiState, clip_idx: u16, row: u16, channel: u8, cell: mb_ir::Cell) {
+    let old_cell = read_cell(gui, clip_idx, row, channel);
+    let track_indices = group_track_indices(gui);
+    let track_idx = match track_indices.get(channel as usize) {
+        Some(i) => *i,
+        None => return,
+    };
+    let forward = mb_ir::Edit::SetCell { track: track_idx, clip: clip_idx, row, column: 0, cell };
+    let reverse = mb_ir::Edit::SetCell { track: track_idx, clip: clip_idx, row, column: 0, cell: old_cell };
     gui.undo_stack.push(forward.clone(), reverse);
     gui.controller.apply_edit(forward);
 }
 
-/// Read a cell from the current song, returning empty if out of bounds.
-fn read_cell(gui: &GuiState, pattern: u8, row: u16, channel: u8) -> mb_ir::Cell {
-    gui.controller.song().patterns
-        .get(pattern as usize)
-        .map(|p| *p.cell(row, channel))
+/// Read a cell from a track's clip, returning empty if out of bounds.
+fn read_cell(gui: &GuiState, clip_idx: u16, row: u16, channel: u8) -> mb_ir::Cell {
+    let track_indices = group_track_indices(gui);
+    let track_idx = match track_indices.get(channel as usize) {
+        Some(i) => *i as usize,
+        None => return mb_ir::Cell::empty(),
+    };
+    gui.controller.song().tracks
+        .get(track_idx)
+        .and_then(|t| t.clips.get(clip_idx as usize))
+        .and_then(|c| c.pattern())
+        .map(|p| *p.cell(row, 0))
         .unwrap_or(mb_ir::Cell::empty())
 }
 
 fn enter_note(gui: &mut GuiState, note: u8, max_rows: u16) {
+    let Some(clip_idx) = selected_clip_idx(gui) else { return };
     let cursor = gui.editor.cursor;
     let inst = gui.editor.selected_instrument;
-    let old_cell = read_cell(gui, gui.selected_pattern as u8, cursor.row, cursor.channel);
+    let old_cell = read_cell(gui, clip_idx, cursor.row, cursor.channel);
 
     let cell = mb_ir::Cell {
         note: mb_ir::Note::On(note),
@@ -226,13 +264,14 @@ fn enter_note(gui: &mut GuiState, note: u8, max_rows: u16) {
         effect: old_cell.effect,
     };
 
-    apply_edit_with_undo(gui, gui.selected_pattern as u8, cursor.row, cursor.channel, cell);
+    apply_edit_with_undo(gui, clip_idx, cursor.row, cursor.channel, cell);
     gui.editor.advance_by_step(max_rows);
 }
 
 fn enter_note_off(gui: &mut GuiState, max_rows: u16) {
+    let Some(clip_idx) = selected_clip_idx(gui) else { return };
     let cursor = gui.editor.cursor;
-    let old_cell = read_cell(gui, gui.selected_pattern as u8, cursor.row, cursor.channel);
+    let old_cell = read_cell(gui, clip_idx, cursor.row, cursor.channel);
 
     let cell = mb_ir::Cell {
         note: mb_ir::Note::Off,
@@ -241,22 +280,23 @@ fn enter_note_off(gui: &mut GuiState, max_rows: u16) {
         effect: old_cell.effect,
     };
 
-    apply_edit_with_undo(gui, gui.selected_pattern as u8, cursor.row, cursor.channel, cell);
+    apply_edit_with_undo(gui, clip_idx, cursor.row, cursor.channel, cell);
     gui.editor.advance_by_step(max_rows);
 }
 
 fn delete_cell(gui: &mut GuiState, max_rows: u16) {
+    let Some(clip_idx) = selected_clip_idx(gui) else { return };
     let cursor = gui.editor.cursor;
-    apply_edit_with_undo(gui, gui.selected_pattern as u8, cursor.row, cursor.channel, mb_ir::Cell::empty());
+    apply_edit_with_undo(gui, clip_idx, cursor.row, cursor.channel, mb_ir::Cell::empty());
     gui.editor.advance_by_step(max_rows);
 }
 
 fn enter_hex_digit(gui: &mut GuiState, digit: u8, max_rows: u16) {
     use editor_state::CellColumn;
 
+    let Some(clip_idx) = selected_clip_idx(gui) else { return };
     let cursor = gui.editor.cursor;
-    let pat = gui.selected_pattern as u8;
-    let old_cell = read_cell(gui, pat, cursor.row, cursor.channel);
+    let old_cell = read_cell(gui, clip_idx, cursor.row, cursor.channel);
 
     let cell = match cursor.column {
         CellColumn::Instrument0 => {
@@ -280,7 +320,7 @@ fn enter_hex_digit(gui: &mut GuiState, digit: u8, max_rows: u16) {
         CellColumn::Note => return,
     };
 
-    apply_edit_with_undo(gui, pat, cursor.row, cursor.channel, cell);
+    apply_edit_with_undo(gui, clip_idx, cursor.row, cursor.channel, cell);
 
     let (new_col, wrapped) = cursor.column.move_right();
     gui.editor.cursor.column = new_col;
@@ -292,12 +332,14 @@ fn enter_hex_digit(gui: &mut GuiState, digit: u8, max_rows: u16) {
 // --- Copy / Paste / Selection ---
 
 fn copy_selection(gui: &mut GuiState) {
+    let Some(clip_idx) = selected_clip_idx(gui) else { return };
+
     let sel = match gui.editor.selection {
         Some(s) => s,
         None => {
             // No selection: copy single cell at cursor
             let cursor = &gui.editor.cursor;
-            let cell = read_cell(gui, gui.selected_pattern as u8, cursor.row, cursor.channel);
+            let cell = read_cell(gui, clip_idx, cursor.row, cursor.channel);
             gui.editor.clipboard = Some(Clipboard { rows: 1, channels: 1, cells: vec![cell] });
             gui.status = "Copied cell".to_string();
             return;
@@ -311,7 +353,7 @@ fn copy_selection(gui: &mut GuiState) {
 
     for r in min_row..=max_row {
         for ch in min_ch..=max_ch {
-            cells.push(read_cell(gui, gui.selected_pattern as u8, r, ch));
+            cells.push(read_cell(gui, clip_idx, r, ch));
         }
     }
 
@@ -327,9 +369,10 @@ fn paste_clipboard(gui: &mut GuiState, max_rows: u16, max_channels: u8) {
             return;
         }
     };
+    let Some(clip_idx) = selected_clip_idx(gui) else { return };
 
     let cursor = gui.editor.cursor;
-    let pat = gui.selected_pattern as u8;
+    let track_indices = group_track_indices(gui);
     let mut forward_edits = Vec::new();
     let mut reverse_edits = Vec::new();
 
@@ -344,18 +387,21 @@ fn paste_clipboard(gui: &mut GuiState, max_rows: u16, max_channels: u8) {
                 break;
             }
             let new_cell = *clipboard.cell(r, ch);
-            let old_cell = read_cell(gui, pat, dest_row, dest_ch);
+            let old_cell = read_cell(gui, clip_idx, dest_row, dest_ch);
+            let track_idx = match track_indices.get(dest_ch as usize) {
+                Some(i) => *i,
+                None => continue,
+            };
 
             forward_edits.push(mb_ir::Edit::SetCell {
-                pattern: pat, row: dest_row, channel: dest_ch, cell: new_cell,
+                track: track_idx, clip: clip_idx, row: dest_row, column: 0, cell: new_cell,
             });
             reverse_edits.push(mb_ir::Edit::SetCell {
-                pattern: pat, row: dest_row, channel: dest_ch, cell: old_cell,
+                track: track_idx, clip: clip_idx, row: dest_row, column: 0, cell: old_cell,
             });
         }
     }
 
-    // Record as single undo batch
     gui.undo_stack.push_batch(forward_edits.clone(), reverse_edits);
     for edit in forward_edits {
         gui.controller.apply_edit(edit);
@@ -370,20 +416,25 @@ fn delete_selection(gui: &mut GuiState) {
         Some(s) => s,
         None => return,
     };
+    let Some(clip_idx) = selected_clip_idx(gui) else { return };
 
     let (min_row, min_ch, max_row, max_ch) = sel.bounds();
-    let pat = gui.selected_pattern as u8;
+    let track_indices = group_track_indices(gui);
     let mut forward_edits = Vec::new();
     let mut reverse_edits = Vec::new();
 
     for r in min_row..=max_row {
         for ch in min_ch..=max_ch {
-            let old_cell = read_cell(gui, pat, r, ch);
+            let old_cell = read_cell(gui, clip_idx, r, ch);
+            let track_idx = match track_indices.get(ch as usize) {
+                Some(i) => *i,
+                None => continue,
+            };
             forward_edits.push(mb_ir::Edit::SetCell {
-                pattern: pat, row: r, channel: ch, cell: mb_ir::Cell::empty(),
+                track: track_idx, clip: clip_idx, row: r, column: 0, cell: mb_ir::Cell::empty(),
             });
             reverse_edits.push(mb_ir::Edit::SetCell {
-                pattern: pat, row: r, channel: ch, cell: old_cell,
+                track: track_idx, clip: clip_idx, row: r, column: 0, cell: old_cell,
             });
         }
     }

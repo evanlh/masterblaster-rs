@@ -20,10 +20,10 @@ mod mod_envelope;
 mod modulator;
 mod pattern;
 mod sample;
-mod song;
+pub mod song;
 mod musical_time;
 
-pub use analysis::{analyze, analyze_pattern, time_to_position, PatternFeatures, PlaybackPosition, SongFeatures};
+pub use analysis::{analyze_pattern, time_to_track_position, PatternFeatures, PlaybackPosition, TrackPlaybackPosition};
 pub use edit::Edit;
 pub use effects::{Effect, VolumeCommand};
 pub use event::{Event, EventPayload, EventTarget};
@@ -38,4 +38,4 @@ pub use modulator::{
 pub use musical_time::{unpack_time, pack_time, MusicalTime, SUB_BEAT_UNIT};
 pub use pattern::{Cell, Note, Pattern};
 pub use sample::{AutoVibrato, LoopType, Sample, SampleData};
-pub use song::{ChannelSettings, OrderEntry, Song, Track, TrackEntry};
+pub use song::{build_tracks, ChannelSettings, Clip, OrderEntry, SeqEntry, Song, Track};

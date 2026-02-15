@@ -73,9 +73,10 @@ mod tests {
 
     fn set_cell(row: u16, note: Note) -> Edit {
         Edit::SetCell {
-            pattern: 0,
+            track: 0,
+            clip: 0,
             row,
-            channel: 0,
+            column: 0,
             cell: Cell { note, ..Cell::empty() },
         }
     }

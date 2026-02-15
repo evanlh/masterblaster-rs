@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 use mb_ir::{
-    Cell, Effect, Instrument, Note, OrderEntry, Pattern, Sample, SampleData, Song,
+    build_tracks, Cell, Effect, Instrument, Note, OrderEntry, Pattern, Sample, SampleData, Song,
     VolumeCommand,
 };
 
@@ -54,24 +54,26 @@ pub fn load_mod(data: &[u8]) -> Result<Song, FormatError> {
     // Song length (number of positions in order list)
     let song_length = data[950] as usize;
 
-    // Parse order list
+    // Parse order list into local vec
+    let mut order = Vec::new();
     for i in 0..song_length {
         let pattern_idx = data[952 + i];
-        song.order.push(OrderEntry::Pattern(pattern_idx));
+        order.push(OrderEntry::Pattern(pattern_idx));
     }
 
     // Find highest pattern number to know how many patterns to load
     let max_pattern = data[952..952 + 128].iter().max().copied().unwrap_or(0) as usize;
 
-    // Parse patterns
+    // Parse patterns into local vec
     let pattern_size = 64 * num_channels as usize * 4; // 64 rows, 4 bytes per cell
+    let mut patterns = Vec::new();
     for pat_idx in 0..=max_pattern {
         let pat_offset = 1084 + pat_idx * pattern_size;
         if pat_offset + pattern_size > data.len() {
             break;
         }
         let pattern = parse_pattern(&data[pat_offset..pat_offset + pattern_size], num_channels)?;
-        song.patterns.push(pattern);
+        patterns.push(pattern);
     }
 
     // Load sample data
@@ -96,6 +98,9 @@ pub fn load_mod(data: &[u8]) -> Result<Song, FormatError> {
     // Set initial tempo/speed (MOD defaults)
     song.initial_tempo = 125;
     song.initial_speed = 6;
+
+    // Build per-track clips + sequences from parsed patterns/order
+    build_tracks(&mut song, &patterns, &order);
 
     Ok(song)
 }

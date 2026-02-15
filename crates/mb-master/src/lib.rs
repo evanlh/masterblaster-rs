@@ -14,7 +14,7 @@ use std::thread::JoinHandle;
 // Re-export common types so callers don't need mb-ir/mb-engine directly.
 pub use mb_engine::Frame;
 pub use mb_formats::{FormatError, frames_to_wav, load_wav, write_wav};
-pub use mb_ir::{pack_time, unpack_time, Edit, OrderEntry, PlaybackPosition, Song};
+pub use mb_ir::{pack_time, unpack_time, Edit, PlaybackPosition, Song, TrackPlaybackPosition, time_to_track_position};
 
 /// Ring buffer capacity for edit commands sent to the audio thread.
 const EDIT_RING_CAPACITY: usize = 256;
@@ -63,9 +63,9 @@ impl Controller {
     pub fn new_song(&mut self, channels: u8) {
         self.stop();
         let mut song = Song::with_channels("Untitled", channels);
-        let pat = mb_ir::Pattern::new(64, channels);
-        let idx = song.add_pattern(pat);
-        song.add_order(OrderEntry::Pattern(idx));
+        let patterns = vec![mb_ir::Pattern::new(64, channels)];
+        let order = vec![mb_ir::OrderEntry::Pattern(0)];
+        mb_ir::build_tracks(&mut song, &patterns, &order);
         self.song = song;
     }
 
@@ -83,21 +83,36 @@ impl Controller {
         Ok(self.song.instruments.len() as u8) // 1-based
     }
 
-    /// Add a new empty pattern and return its index.
-    pub fn add_pattern(&mut self, rows: u16) -> u8 {
-        let channels = self.song.channels.len().max(1) as u8;
-        let pat = mb_ir::Pattern::new(rows, channels);
-        self.song.add_pattern(pat)
+    /// Add a new empty clip to all tracks in the given group.
+    /// Returns the clip index (same across all tracks in the group).
+    pub fn add_clip(&mut self, group: Option<u16>, rows: u16) -> u16 {
+        let clip_idx = group_clip_count(&self.song, group);
+        for track in &mut self.song.tracks {
+            if track.group == group {
+                track.clips.push(mb_ir::Clip::Pattern(mb_ir::Pattern::new(rows, 1)));
+            }
+        }
+        clip_idx
     }
 
-    /// Add an order entry.
-    pub fn add_order(&mut self, pattern_idx: u8) {
-        self.song.add_order(OrderEntry::Pattern(pattern_idx));
+    /// Add a sequence entry to all tracks in the given group.
+    pub fn add_seq_entry(&mut self, group: Option<u16>, clip_idx: u16) {
+        let start = group_end_time(&self.song, group);
+        let entry = mb_ir::SeqEntry { start, clip_idx };
+        for track in &mut self.song.tracks {
+            if track.group == group {
+                track.sequence.push(entry);
+            }
+        }
     }
 
-    /// Remove the last order entry (if any).
-    pub fn remove_last_order(&mut self) {
-        self.song.order.pop();
+    /// Remove the last sequence entry from all tracks in the given group.
+    pub fn remove_last_seq_entry(&mut self, group: Option<u16>) {
+        for track in &mut self.song.tracks {
+            if track.group == group {
+                track.sequence.pop();
+            }
+        }
     }
 
     // --- Edit dispatch ---
@@ -116,8 +131,8 @@ impl Controller {
         self.play_song(self.song.clone());
     }
 
-    pub fn play_pattern(&mut self, pattern: usize) {
-        self.play_song(self.single_pattern_song(pattern));
+    pub fn play_pattern(&mut self, clip_idx: usize) {
+        self.play_song(self.single_clip_song(clip_idx as u16));
     }
 
     fn play_song(&mut self, song: Song) {
@@ -168,14 +183,15 @@ impl Controller {
             .is_some_and(|p| p.finished.load(Ordering::Relaxed))
     }
 
-    pub fn position(&self) -> Option<PlaybackPosition> {
+    /// Get the current playback position in per-track coordinates.
+    pub fn track_position(&self, group: Option<u16>) -> Option<TrackPlaybackPosition> {
         let pb = self.playback.as_ref()?;
         if pb.finished.load(Ordering::Relaxed) {
             return None;
         }
         let packed = pb.current_time.load(Ordering::Relaxed);
         let time = unpack_time(packed);
-        mb_ir::time_to_position(&self.song, time)
+        time_to_track_position(&self.song, time, group)
     }
 
     // --- Offline rendering ---
@@ -188,16 +204,16 @@ impl Controller {
         render_song_to_wav(self.song.clone(), sample_rate, max_seconds)
     }
 
-    pub fn render_pattern_to_wav(&self, pattern: usize, sample_rate: u32, max_seconds: u32) -> Vec<u8> {
-        render_song_to_wav(self.single_pattern_song(pattern), sample_rate, max_seconds)
+    pub fn render_pattern_to_wav(&self, clip_idx: usize, sample_rate: u32, max_seconds: u32) -> Vec<u8> {
+        render_song_to_wav(self.single_clip_song(clip_idx as u16), sample_rate, max_seconds)
     }
 
     // --- Helpers ---
 
-    fn single_pattern_song(&self, pattern: usize) -> Song {
+    /// Build a song that plays only the given clip.
+    fn single_clip_song(&self, clip_idx: u16) -> Song {
         let mut song = self.song.clone();
-        song.order.clear();
-        song.order.push(OrderEntry::Pattern(pattern as u8));
+        rebuild_track_sequences(&mut song, clip_idx);
         song
     }
 }
@@ -211,13 +227,27 @@ impl Default for Controller {
 /// Apply an edit directly to song data (no event queue update).
 fn apply_edit_to_song(song: &mut Song, edit: &Edit) {
     match edit {
-        Edit::SetCell { pattern, row, channel, cell } => {
-            if let Some(pat) = song.patterns.get_mut(*pattern as usize) {
-                if *row < pat.rows && *channel < pat.channels {
-                    *pat.cell_mut(*row, *channel) = *cell;
-                }
+        Edit::SetCell { track, clip, row, column, cell } => {
+            let Some(t) = song.tracks.get_mut(*track as usize) else { return };
+            let Some(c) = t.clips.get_mut(*clip as usize) else { return };
+            let Some(pat) = c.pattern_mut() else { return };
+            if *row < pat.rows && *column < pat.channels {
+                *pat.cell_mut(*row, *column) = *cell;
             }
         }
+    }
+}
+
+/// Rebuild track sequences to play only a single clip (by clip index).
+fn rebuild_track_sequences(song: &mut Song, clip_idx: u16) {
+    use mb_ir::SeqEntry;
+    let entry = SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx };
+    for track in &mut song.tracks {
+        track.sequence = if (clip_idx as usize) < track.clips.len() {
+            vec![entry]
+        } else {
+            Vec::new()
+        };
     }
 }
 
@@ -267,7 +297,6 @@ fn audio_thread(
     let mut edit_buf = Vec::new();
 
     while !engine.is_finished() && !stop_signal.load(Ordering::Relaxed) {
-        // Drain edits from the ring buffer
         drain_edits(&mut edit_consumer, &mut edit_buf);
         if !edit_buf.is_empty() {
             engine.apply_edits(&edit_buf);
@@ -293,4 +322,27 @@ fn drain_edits(consumer: &mut ringbuf::HeapCons<Edit>, buf: &mut Vec<Edit>) {
     while let Some(edit) = consumer.try_pop() {
         buf.push(edit);
     }
+}
+
+/// Number of clips in the first track of the given group.
+fn group_clip_count(song: &Song, group: Option<u16>) -> u16 {
+    song.tracks.iter()
+        .find(|t| t.group == group)
+        .map(|t| t.clips.len() as u16)
+        .unwrap_or(0)
+}
+
+/// End time of the group's sequence (after the last clip finishes).
+fn group_end_time(song: &Song, group: Option<u16>) -> mb_ir::MusicalTime {
+    let rpb = song.rows_per_beat as u32;
+    song.tracks.iter()
+        .find(|t| t.group == group)
+        .and_then(|t| {
+            let last = t.sequence.last()?;
+            let clip = t.clips.get(last.clip_idx as usize)?;
+            let pat = clip.pattern()?;
+            let pat_rpb = pat.rows_per_beat.map_or(rpb, |r| r as u32);
+            Some(last.start.add_rows(pat.rows as u32, pat_rpb))
+        })
+        .unwrap_or(mb_ir::MusicalTime::zero())
 }

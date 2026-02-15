@@ -2,20 +2,20 @@
 
 ## Status
 
-- [ ] `Edit` enum in mb-ir (SetNodeParam, SetNodeBypass, SetCell, pattern ops)
+- [x] `Edit` enum in mb-ir (SetCell only; SetNodeParam, SetNodeBypass, pattern ops not yet)
 - [ ] Node bypass field (`Node.bypassed`)
-- [ ] Engine edit consumption
-  - [ ] `Engine.apply_edits()` dispatch
+- [x] Engine edit consumption
+  - [x] `Engine.apply_edits()` dispatch
   - [ ] Bypass pass-through in `render_graph()`
-  - [ ] SetCell surgical queue update
+  - [x] SetCell surgical queue update
   - [ ] Pattern operation bulk apply + full reschedule
-- [ ] EventQueue `retain` method
-- [ ] Scheduler: `schedule_cell` made pub, `time_for_pattern_row` helper
+- [x] EventQueue `retain` method
+- [x] Scheduler: `schedule_cell` made pub, `time_for_pattern_row` helper
 - [ ] Scheduler: `schedule_pattern` made pub (for bulk reschedule)
-- [ ] Controller dispatch
-  - [ ] Ring buffer (SPSC) from Controller to audio thread
-  - [ ] `apply_edit()` routing (playing vs stopped)
-  - [ ] Audio thread drain loop
+- [x] Controller dispatch
+  - [x] Ring buffer (SPSC) from Controller to audio thread
+  - [x] `apply_edit()` routing (playing vs stopped)
+  - [x] Audio thread drain loop
 - [ ] Pattern operations
   - [ ] RotatePattern
   - [ ] ReversePattern

@@ -2,56 +2,88 @@
 
 use super::GuiState;
 
-pub fn patterns_panel(ui: &imgui::Ui, gui: &mut GuiState, pos: Option<mb_ir::PlaybackPosition>) {
-    ui.text("Patterns");
+pub fn patterns_panel(ui: &imgui::Ui, gui: &mut GuiState, pos: Option<mb_ir::TrackPlaybackPosition>) {
+    clips_section(ui, gui);
+    ui.separator();
+    sequence_section(ui, gui, pos);
+}
+
+fn clips_section(ui: &imgui::Ui, gui: &mut GuiState) {
+    ui.text("Clips");
     ui.separator();
 
-    let pattern_count = gui.controller.song().patterns.len();
-    for i in 0..pattern_count {
-        let label = format!("Pattern {:02X}", i);
-        if ui
-            .selectable_config(&label)
-            .selected(gui.selected_pattern == i)
-            .build()
-        {
-            gui.selected_pattern = i;
+    // Gather clip info before rendering (avoids holding borrow across mutation)
+    let clip_info: Vec<(usize, u16, bool)> = {
+        let song = gui.controller.song();
+        let Some(track) = song.tracks.iter().find(|t| t.group == Some(0)) else { return };
+        track.clips.iter().enumerate().map(|(i, clip)| {
+            let rows = clip.pattern().map(|p| p.rows).unwrap_or(0);
+            let is_selected = gui.selected_seq_index < track.sequence.len()
+                && track.sequence[gui.selected_seq_index].clip_idx == i as u16;
+            (i, rows, is_selected)
+        }).collect()
+    };
+
+    for (i, rows, is_selected) in &clip_info {
+        let label = format!("Clip {:02X} ({} rows)", i, rows);
+        if ui.selectable_config(&label).selected(*is_selected).build() {
+            let song = gui.controller.song();
+            if let Some(track) = song.tracks.iter().find(|t| t.group == Some(0)) {
+                if let Some(idx) = track.sequence.iter().position(|e| e.clip_idx == *i as u16) {
+                    gui.selected_seq_index = idx;
+                }
+            }
         }
     }
 
-    if ui.button("+Pat") {
-        let idx = gui.controller.add_pattern(64);
-        gui.selected_pattern = idx as usize;
+    if ui.button("+Clip") {
+        gui.controller.add_clip(Some(0), 64);
     }
+}
 
-    ui.separator();
-    ui.text("Order");
+fn sequence_section(ui: &imgui::Ui, gui: &mut GuiState, pos: Option<mb_ir::TrackPlaybackPosition>) {
+    ui.text("Sequence");
     ui.separator();
 
-    let playing_order = pos.map(|p| p.order_index);
-    let order_len = gui.controller.song().order.len();
-    for i in 0..order_len {
-        let entry = gui.controller.song().order[i];
-        let text = match entry {
-            mb_ir::OrderEntry::Pattern(idx) => format!("{:02}: Pat {:02X}", i, idx),
-            mb_ir::OrderEntry::Skip => format!("{:02}: +++", i),
-            mb_ir::OrderEntry::End => format!("{:02}: ---", i),
-        };
-        let is_playing = playing_order == Some(i);
-        let color = if is_playing {
+    let playing_seq = pos.map(|p| p.seq_index);
+
+    // Gather sequence info before rendering
+    let seq_info: Vec<(usize, u16, bool)> = {
+        let song = gui.controller.song();
+        let Some(track) = song.tracks.iter().find(|t| t.group == Some(0)) else { return };
+        track.sequence.iter().enumerate().map(|(i, entry)| {
+            let is_playing = playing_seq == Some(i);
+            (i, entry.clip_idx, is_playing)
+        }).collect()
+    };
+
+    for (i, clip_idx, is_playing) in &seq_info {
+        let text = format!("{:02}: Clip {:02X}", i, clip_idx);
+        let color = if *is_playing {
             [0.39, 0.78, 0.51, 1.0]
         } else {
             [0.70, 0.70, 0.70, 1.0]
         };
         let _token = ui.push_style_color(imgui::StyleColor::Text, color);
-        ui.text(&text);
+        if ui.selectable_config(&text).selected(gui.selected_seq_index == *i).build() {
+            gui.selected_seq_index = *i;
+        }
     }
 
-    // Order editing buttons
-    if ui.button("+Ord") {
-        gui.controller.add_order(gui.selected_pattern as u8);
+    if ui.button("+Seq") {
+        if let Some(clip_idx) = super::selected_clip_idx(gui) {
+            gui.controller.add_seq_entry(Some(0), clip_idx);
+        }
     }
     ui.same_line();
-    if ui.button("-Ord") {
-        gui.controller.remove_last_order();
+    if ui.button("-Seq") {
+        gui.controller.remove_last_seq_entry(Some(0));
+        let seq_len = gui.controller.song().tracks.iter()
+            .find(|t| t.group == Some(0))
+            .map(|t| t.sequence.len())
+            .unwrap_or(0);
+        if gui.selected_seq_index >= seq_len && seq_len > 0 {
+            gui.selected_seq_index = seq_len - 1;
+        }
     }
 }

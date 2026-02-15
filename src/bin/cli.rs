@@ -49,26 +49,31 @@ fn main() {
     let song = ctrl.song();
     println!("Title:    {}", song.title);
     println!("Channels: {}", song.channels.len());
-    println!("Patterns: {}", song.patterns.len());
-    println!("Orders:   {}", song.order.len());
+    println!("Tracks:   {}", song.tracks.len());
+
+    let clip_count = song.tracks.first().map(|t| t.clips.len()).unwrap_or(0);
+    let seq_len = song.tracks.first().map(|t| t.sequence.len()).unwrap_or(0);
+    println!("Clips:    {}", clip_count);
+    println!("Sequence: {} entries", seq_len);
     println!("Tempo:    {} BPM, Speed: {}", song.initial_tempo, song.initial_speed);
 
     let samples_with_data = song.samples.iter().filter(|s| !s.is_empty()).count();
     println!("Samples:  {} (with data)", samples_with_data);
     println!();
 
-    let features = mb_ir::analyze(song);
-    print!("{}", features);
-
     if let Some(p) = pattern_idx {
-        if p >= song.patterns.len() {
-            eprintln!("Pattern {} out of range (song has {})", p, song.patterns.len());
+        if p >= clip_count {
+            eprintln!("Clip {} out of range (song has {})", p, clip_count);
             std::process::exit(1);
         }
-        println!("\nPattern: {}", p);
+        println!("\nClip: {}", p);
 
-        let pf = mb_ir::analyze_pattern(&song.patterns[p]);
-        print!("{}", pf);
+        if let Some(track) = song.tracks.first() {
+            if let Some(pat) = track.clips[p].pattern() {
+                let pf = mb_ir::analyze_pattern(pat);
+                print!("{}", pf);
+            }
+        }
     }
 
     match (wav_path, pattern_idx) {
@@ -85,10 +90,10 @@ fn play_audio(ctrl: &mut Controller) {
     println!();
 
     while ctrl.is_playing() {
-        if let Some(pos) = ctrl.position() {
+        if let Some(pos) = ctrl.track_position(Some(0)) {
             print!(
-                "\rOrd: {:02X} | Pat: {:02X} | Row: {:02X}",
-                pos.order_index, pos.pattern_index, pos.row
+                "\rSeq: {:02X} | Clip: {:02X} | Row: {:02X}",
+                pos.seq_index, pos.clip_idx, pos.row
             );
             let _ = std::io::stdout().flush();
         }
@@ -100,14 +105,14 @@ fn play_audio(ctrl: &mut Controller) {
 
 fn play_pattern(ctrl: &mut Controller, pattern: usize) {
     ctrl.play_pattern(pattern);
-    println!("Playing pattern {}...", pattern);
+    println!("Playing clip {}...", pattern);
     println!();
 
     while ctrl.is_playing() {
-        if let Some(pos) = ctrl.position() {
+        if let Some(pos) = ctrl.track_position(Some(0)) {
             print!(
-                "\rOrd: {:02X} | Pat: {:02X} | Row: {:02X}",
-                pos.order_index, pos.pattern_index, pos.row
+                "\rSeq: {:02X} | Clip: {:02X} | Row: {:02X}",
+                pos.seq_index, pos.clip_idx, pos.row
             );
             let _ = std::io::stdout().flush();
         }
@@ -120,7 +125,7 @@ fn play_pattern(ctrl: &mut Controller, pattern: usize) {
 fn render_to_wav_pattern(ctrl: &Controller, path: &str, pattern: usize) {
     let sample_rate: u32 = 44100;
     let max_seconds: u32 = 1200;
-    println!("Rendering pattern {} to {} at {} Hz...", pattern, path, sample_rate);
+    println!("Rendering clip {} to {} at {} Hz...", pattern, path, sample_rate);
 
     let wav = ctrl.render_pattern_to_wav(pattern, sample_rate, max_seconds);
     println!("Rendered {} bytes", wav.len());

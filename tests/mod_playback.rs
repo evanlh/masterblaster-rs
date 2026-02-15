@@ -2,7 +2,7 @@
 
 use mb_engine::{Engine, Frame};
 use mb_formats::load_mod;
-use mb_ir::{Note, OrderEntry};
+use mb_ir::Note;
 use std::fs;
 use std::path::PathBuf;
 
@@ -70,7 +70,6 @@ fn kawaik1_has_meaningful_amplitude() {
     let mut engine = load_and_schedule("kawaik1.mod", 44100);
     let frames = engine.render_frames(44100);
     let max = max_amplitude(&frames);
-    // Should be well above noise floor — real samples at volume 64
     assert!(max > 100, "Max amplitude {} too low for real MOD playback", max);
 }
 
@@ -128,33 +127,48 @@ fn musiklinjen_pattern7_diagnostics() {
     let data = fs::read(fixtures_dir().join("musiklinjen.mod")).unwrap();
     let song = load_mod(&data).unwrap();
 
-    // Dump pattern 7 cell data
-    let pat = &song.patterns[7];
-    println!("Pattern 7: {} rows x {} channels", pat.rows, pat.channels);
+    // Get pattern 7 data from the first track's clip 7
+    let track = &song.tracks[0];
+    let pat = track.clips[7].pattern().unwrap();
+    println!("Clip 7 (track 0): {} rows x {} channels", pat.rows, pat.channels);
     println!();
 
-    // Collect effects and samples used
+    // Collect effects and samples used across all tracks' clip 7
     let mut effects_used = std::collections::BTreeSet::new();
     let mut samples_used = std::collections::BTreeSet::new();
 
-    for row in 0..pat.rows {
+    for t in &song.tracks {
+        if let Some(p) = t.clips.get(7).and_then(|c| c.pattern()) {
+            for row in 0..p.rows {
+                let cell = p.cell(row, 0);
+                if cell.effect != mb_ir::Effect::None {
+                    effects_used.insert(cell.effect.name());
+                }
+                if cell.instrument > 0 {
+                    samples_used.insert(cell.instrument);
+                }
+            }
+        }
+    }
+
+    // Print rows with data (all 4 tracks' clip 7, side by side)
+    for row in 0..64u16 {
         let mut row_has_data = false;
-        for ch in 0..pat.channels {
-            let cell = pat.cell(row, ch);
-            if !cell.is_empty() {
-                row_has_data = true;
-            }
-            if cell.effect != mb_ir::Effect::None {
-                effects_used.insert(cell.effect.name());
-            }
-            if cell.instrument > 0 {
-                samples_used.insert(cell.instrument);
+        for t in &song.tracks {
+            if let Some(p) = t.clips.get(7).and_then(|c| c.pattern()) {
+                if !p.cell(row, 0).is_empty() {
+                    row_has_data = true;
+                }
             }
         }
         if row_has_data {
             print!("Row {:02X}: ", row);
-            for ch in 0..pat.channels {
-                let cell = pat.cell(row, ch);
+            for t in &song.tracks {
+                let cell = t.clips.get(7)
+                    .and_then(|c| c.pattern())
+                    .map(|p| p.cell(row, 0))
+                    .copied()
+                    .unwrap_or(mb_ir::Cell::empty());
                 let note_str = match cell.note {
                     Note::On(n) => {
                         let names = ["C-","C#","D-","D#","E-","F-","F#","G-","G#","A-","A#","B-"];
@@ -183,7 +197,6 @@ fn musiklinjen_pattern7_diagnostics() {
     println!("Effects used: {:?}", effects_used);
     println!("Instruments used: {:?}", samples_used);
 
-    // Print sample info for each used instrument
     for &inst in &samples_used {
         let idx = (inst - 1) as usize;
         if let Some(sample) = song.samples.get(idx) {
@@ -195,10 +208,16 @@ fn musiklinjen_pattern7_diagnostics() {
         }
     }
 
-    // Render pattern 7 in isolation and scan for clicks
+    // Render clip 7 in isolation — rebuild sequences to play only clip 7
     let mut isolated = song.clone();
-    isolated.order.clear();
-    isolated.order.push(OrderEntry::Pattern(7));
+    let entry = mb_ir::SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx: 7 };
+    for track in &mut isolated.tracks {
+        track.sequence = if track.clips.len() > 7 {
+            vec![entry]
+        } else {
+            Vec::new()
+        };
+    }
 
     let mut engine = Engine::new(isolated, 44100);
     engine.schedule_song();
@@ -212,8 +231,7 @@ fn musiklinjen_pattern7_diagnostics() {
     println!();
     println!("Rendered {} frames ({:.2}s)", frames.len(), frames.len() as f64 / 44100.0);
 
-    // Scan for clicks: large frame-to-frame deltas
-    let click_threshold = 4000i32; // ~12% of i16 range
+    let click_threshold = 4000i32;
     let mut clicks = Vec::new();
     for i in 1..frames.len() {
         let dl = (frames[i].left as i32 - frames[i-1].left as i32).abs();
@@ -225,7 +243,6 @@ fn musiklinjen_pattern7_diagnostics() {
     }
 
     println!("Clicks detected (delta > {}): {}", click_threshold, clicks.len());
-    // Show first 20
     for &(pos, max_d, dl, dr) in clicks.iter().take(20) {
         let time_ms = pos as f64 / 44.1;
         println!(
@@ -239,7 +256,6 @@ fn musiklinjen_pattern7_diagnostics() {
         println!("  ... and {} more", clicks.len() - 20);
     }
 
-    // Summary stats
     let max_amp = frames.iter()
         .flat_map(|f| [f.left.unsigned_abs(), f.right.unsigned_abs()])
         .max()
@@ -251,7 +267,6 @@ fn musiklinjen_pattern7_diagnostics() {
 #[test]
 fn stop_produces_silence() {
     let mut engine = load_and_schedule("kawaik1.mod", 44100);
-    // Render a bit so channels are active
     engine.render_frames(1000);
     engine.stop();
 
@@ -270,10 +285,16 @@ fn setspeed_produces_ritardando() {
     let data = fs::read(fixtures_dir().join("musiklinjen.mod")).unwrap();
     let song = load_mod(&data).unwrap();
 
-    // Render pattern 20 in isolation
+    // Render clip 20 in isolation
     let mut isolated = song.clone();
-    isolated.order.clear();
-    isolated.order.push(OrderEntry::Pattern(20));
+    let entry = mb_ir::SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx: 20 };
+    for track in &mut isolated.tracks {
+        track.sequence = if track.clips.len() > 20 {
+            vec![entry]
+        } else {
+            Vec::new()
+        };
+    }
 
     let mut engine = Engine::new(isolated, 44100);
     engine.schedule_song();
