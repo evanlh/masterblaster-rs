@@ -105,7 +105,14 @@ pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
                     process_actions(gui, &actions);
 
                     match gui.center_view {
-                        CenterView::Pattern => pattern_editor::pattern_editor(ui, gui, pos),
+                        CenterView::Pattern => {
+                            if let Some((row, ch, col)) = pattern_editor::pattern_editor(ui, gui, pos) {
+                                gui.editor.cursor.row = row;
+                                gui.editor.cursor.channel = ch;
+                                gui.editor.cursor.column = col;
+                                gui.editor.clear_selection();
+                            }
+                        }
                         CenterView::Graph => graph::graph_panel(ui, gui),
                     }
                 });

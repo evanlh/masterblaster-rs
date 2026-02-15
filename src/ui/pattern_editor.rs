@@ -11,15 +11,18 @@ const PLAYING_COLOR: [f32; 4] = [0.39, 0.78, 0.51, 1.0];
 const EMPTY_COLOR: [f32; 4] = [0.24, 0.24, 0.27, 1.0];
 const DATA_COLOR: [f32; 4] = [0.78, 0.78, 0.78, 1.0];
 const PLAYING_BG: [f32; 4] = [0.15, 0.30, 0.20, 1.0];
-const CURSOR_BG: [f32; 4] = [0.25, 0.25, 0.45, 0.6];
-const CURSOR_EDIT_BG: [f32; 4] = [0.45, 0.20, 0.20, 0.6];
+const CURSOR_BG: [f32; 4] = [0.25, 0.25, 0.50, 0.7];
+const CURSOR_EDIT_BG: [f32; 4] = [0.50, 0.20, 0.20, 0.7];
+const CURSOR_ROW_BG: [f32; 4] = [0.18, 0.18, 0.35, 0.40];
+const CURSOR_TEXT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const SELECTION_BG: [f32; 4] = [0.20, 0.30, 0.50, 0.35];
 
+/// Render the pattern editor grid. Returns click target (row, channel, column) if a cell was clicked.
 pub fn pattern_editor(
     ui: &imgui::Ui,
-    gui: &GuiState,
+    gui: &mut GuiState,
     pos: Option<mb_ir::TrackPlaybackPosition>,
-) {
+) -> Option<(u16, u8, CellColumn)> {
     let song = gui.controller.song();
     let track_indices: Vec<u16> = song.tracks.iter()
         .enumerate()
@@ -29,14 +32,14 @@ pub fn pattern_editor(
 
     if track_indices.is_empty() {
         ui.text("No tracks loaded.");
-        return;
+        return None;
     }
 
     let clip_idx = match song.tracks[track_indices[0] as usize].sequence.get(gui.selected_seq_index) {
         Some(e) => e.clip_idx,
         None => {
             ui.text("No clips at this sequence position.");
-            return;
+            return None;
         }
     };
 
@@ -62,6 +65,18 @@ pub fn pattern_editor(
     ));
     ui.separator();
 
+    // Debug modeline
+    let col_name = format!("{:?}", gui.editor.cursor.column);
+    ui.text(format!(
+        "Row {:02X}/{:02X} Ch {:02}/{:02} Col:{} | Vis {:02X}-{:02X} | Scrl {:.0}/{:.0}",
+        gui.editor.cursor.row, rows,
+        gui.editor.cursor.channel, num_channels,
+        col_name,
+        gui.editor.debug_vis_start, gui.editor.debug_vis_end,
+        gui.editor.debug_scroll_y, gui.editor.debug_scroll_max_y,
+    ));
+    ui.separator();
+
     let col_count = 1 + num_channels as usize;
     let char_width = ui.calc_text_size("0")[0];
 
@@ -69,6 +84,8 @@ pub fn pattern_editor(
         | imgui::TableFlags::SCROLL_Y
         | imgui::TableFlags::ROW_BG
         | imgui::TableFlags::BORDERS_V;
+
+    let mut click_target: Option<(u16, u8, CellColumn)> = None;
 
     if let Some(_table) = ui.begin_table_with_flags("##pattern", col_count, table_flags) {
         ui.table_setup_scroll_freeze(0, 1);
@@ -98,13 +115,25 @@ pub fn pattern_editor(
             .items_height(line_height)
             .begin(ui);
 
+        let mut vis_start: i32 = 0;
+        let mut vis_end: i32 = 0;
         while clipper.step() {
-            for row_idx in clipper.display_start()..clipper.display_end() {
+            vis_start = clipper.display_start();
+            vis_end = clipper.display_end();
+            for row_idx in vis_start..vis_end {
                 let row = row_idx as u16;
-                render_row(ui, gui, song, &track_indices, clip_idx, rows, num_channels, row, playing_row, char_width, line_height);
+                render_row(ui, gui, song, &track_indices, clip_idx, rows, num_channels, row, playing_row, char_width, line_height, &mut click_target);
             }
         }
+
+        // Store debug info for next frame's modeline
+        gui.editor.debug_vis_start = vis_start as u16;
+        gui.editor.debug_vis_end = vis_end as u16;
+        gui.editor.debug_scroll_y = ui.scroll_y();
+        gui.editor.debug_scroll_max_y = ui.scroll_max_y();
     }
+
+    click_target
 }
 
 fn render_row(
@@ -119,16 +148,23 @@ fn render_row(
     playing_row: Option<u16>,
     char_width: f32,
     line_height: f32,
+    click_target: &mut Option<(u16, u8, CellColumn)>,
 ) {
     let is_playing = playing_row == Some(row);
     let is_cursor_row = gui.editor.cursor.row == row;
+    let cell_width = char_width * 11.0;
 
     ui.table_next_row();
 
     // Row number column
     ui.table_next_column();
+    if is_cursor_row {
+        draw_rect_bg(ui, char_width * 3.0, line_height, CURSOR_ROW_BG);
+    }
     let row_color = if is_playing {
         PLAYING_COLOR
+    } else if is_cursor_row {
+        [0.55, 0.55, 0.75, 1.0]
     } else {
         row_label_color(row)
     };
@@ -138,8 +174,12 @@ fn render_row(
 
     // Channel columns — read from each track's clip
     let empty = mb_ir::Cell::empty();
+    let mouse_clicked = ui.is_mouse_clicked(imgui::MouseButton::Left);
+
     for ch in 0..num_channels {
         ui.table_next_column();
+        let cell_pos = ui.cursor_screen_pos();
+
         let cell = track_indices.get(ch as usize)
             .and_then(|&ti| song.tracks.get(ti as usize))
             .and_then(|t| t.clips.get(clip_idx as usize))
@@ -147,30 +187,27 @@ fn render_row(
             .map(|p| p.cell(row, 0))
             .unwrap_or(&empty);
 
-        // Background highlights
-        if is_playing {
-            let draw_list = ui.get_window_draw_list();
-            let min = ui.cursor_screen_pos();
-            let max = [min[0] + char_width * 11.0, min[1] + line_height];
-            draw_list.add_rect(min, max, PLAYING_BG).filled(true).build();
-        }
+        let is_cursor_cell = is_cursor_row && gui.editor.cursor.channel == ch;
 
-        // Selection highlight
+        // Background highlights (order: row bg → playing → selection → cursor)
+        if is_cursor_row {
+            draw_rect_bg(ui, cell_width, line_height, CURSOR_ROW_BG);
+        }
+        if is_playing {
+            draw_rect_bg(ui, cell_width, line_height, PLAYING_BG);
+        }
         if let Some(sel) = &gui.editor.selection {
             if sel.contains(row, ch) {
-                let draw_list = ui.get_window_draw_list();
-                let min = ui.cursor_screen_pos();
-                let max = [min[0] + char_width * 11.0, min[1] + line_height];
-                draw_list.add_rect(min, max, SELECTION_BG).filled(true).build();
+                draw_rect_bg(ui, cell_width, line_height, SELECTION_BG);
             }
         }
-
-        // Cursor highlight
-        if is_cursor_row && gui.editor.cursor.channel == ch {
+        if is_cursor_cell {
             draw_cursor(ui, gui, char_width, line_height);
         }
 
-        let color = if is_playing {
+        let color = if is_cursor_cell {
+            CURSOR_TEXT
+        } else if is_playing {
             PLAYING_COLOR
         } else if cell.is_empty() {
             EMPTY_COLOR
@@ -179,6 +216,12 @@ fn render_row(
         };
         let _token = ui.push_style_color(imgui::StyleColor::Text, color);
         ui.text(format_cell(cell));
+
+        // Click detection
+        if mouse_clicked && point_in_rect(ui.io().mouse_pos, cell_pos, cell_width, line_height) {
+            let col = x_to_cell_column(ui.io().mouse_pos[0] - cell_pos[0], char_width);
+            *click_target = Some((row, ch, col));
+        }
     }
 }
 
@@ -236,6 +279,32 @@ fn auto_scroll(ui: &imgui::Ui, cursor_row: u16, total_rows: u16, line_height: f3
     } else if cursor_row + margin > last_visible {
         let target = (cursor_row + margin + 1).saturating_sub(visible_rows) as f32 * line_height + header_offset;
         ui.set_scroll_y(target);
+    }
+}
+
+/// Draw a filled rect background at the current cursor position.
+fn draw_rect_bg(ui: &imgui::Ui, width: f32, height: f32, color: [f32; 4]) {
+    let draw_list = ui.get_window_draw_list();
+    let min = ui.cursor_screen_pos();
+    let max = [min[0] + width, min[1] + height];
+    draw_list.add_rect(min, max, color).filled(true).build();
+}
+
+fn point_in_rect(point: [f32; 2], origin: [f32; 2], width: f32, height: f32) -> bool {
+    point[0] >= origin[0] && point[0] < origin[0] + width
+        && point[1] >= origin[1] && point[1] < origin[1] + height
+}
+
+/// Map an X offset within a cell to the corresponding CellColumn.
+fn x_to_cell_column(x: f32, cw: f32) -> CellColumn {
+    let pos = (x / cw) as i32;
+    match pos {
+        0..=3 => CellColumn::Note,
+        4 => CellColumn::Instrument0,
+        5..=6 => CellColumn::Instrument1,
+        7 => CellColumn::EffectType,
+        8 => CellColumn::EffectParam0,
+        _ => CellColumn::EffectParam1,
     }
 }
 

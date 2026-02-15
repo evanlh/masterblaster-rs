@@ -150,6 +150,14 @@ pub struct EditorState {
     pub selected_instrument: u8,
     pub selection: Option<Selection>,
     pub clipboard: Option<Clipboard>,
+    /// Debug: clipper visible start row (previous frame).
+    pub debug_vis_start: u16,
+    /// Debug: clipper visible end row (previous frame).
+    pub debug_vis_end: u16,
+    /// Debug: raw scroll_y value (previous frame).
+    pub debug_scroll_y: f32,
+    /// Debug: scroll_max_y (previous frame).
+    pub debug_scroll_max_y: f32,
 }
 
 impl Default for EditorState {
@@ -162,6 +170,10 @@ impl Default for EditorState {
             selected_instrument: 1,
             selection: None,
             clipboard: None,
+            debug_vis_start: 0,
+            debug_vis_end: 0,
+            debug_scroll_y: 0.0,
+            debug_scroll_max_y: 0.0,
         }
     }
 }
