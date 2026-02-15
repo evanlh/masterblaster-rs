@@ -67,6 +67,18 @@ rfd = { workspace = true }
 name = "mb-cli"
 path = "src/bin/cli.rs"
 
+[features]
+test-harness = ["png"]
+
+[[test]]
+name = "gui_tests"
+harness = false
+required-features = ["test-harness"]
+
 [dev-dependencies]
 mb-engine = { workspace = true }
 mb-formats = { workspace = true }
+
+[dependencies.png]
+version = "0.17"
+optional = true

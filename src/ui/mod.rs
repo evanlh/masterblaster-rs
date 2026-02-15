@@ -124,7 +124,7 @@ pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
         });
 }
 
-fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
+pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
     let (max_rows, max_channels) = pattern_bounds(gui);
 
     for action in actions {

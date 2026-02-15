@@ -158,6 +158,8 @@ pub struct EditorState {
     pub debug_scroll_y: f32,
     /// Debug: scroll_max_y (previous frame).
     pub debug_scroll_max_y: f32,
+    /// Debug: cursor row's screen Y position (set during rendering). -1 if not rendered.
+    pub debug_cursor_screen_y: f32,
 }
 
 impl Default for EditorState {
@@ -174,6 +176,7 @@ impl Default for EditorState {
             debug_vis_end: 0,
             debug_scroll_y: 0.0,
             debug_scroll_max_y: 0.0,
+            debug_cursor_screen_y: -1.0,
         }
     }
 }

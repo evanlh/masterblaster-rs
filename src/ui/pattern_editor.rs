@@ -107,21 +107,34 @@ pub fn pattern_editor(
         }
         ui.table_headers_row();
 
-        let line_height = ui.text_line_height();
+        // Table row height = text_line_height + cell_padding_y * 2.
+        // text_line_height alone is too short — causes clipper/scroll mismatch.
+        let cell_padding_y = unsafe { (*imgui::sys::igGetStyle()).CellPadding.y };
+        let line_height = ui.text_line_height() + cell_padding_y * 2.0;
         let cursor_row = gui.editor.cursor.row;
-        auto_scroll(ui, cursor_row, rows, line_height);
 
         let mut clipper = imgui::ListClipper::new(rows as i32)
             .items_height(line_height)
             .begin(ui);
 
+        // Force the clipper to include the cursor row even if it's off-screen.
+        // This solves the chicken-and-egg: we need to render the cursor row so
+        // set_scroll_here_y can target it, but the clipper won't include it if
+        // it's outside the visible range.
+        force_clipper_include(&clipper, cursor_row as i32);
+
         let mut vis_start: i32 = 0;
         let mut vis_end: i32 = 0;
+        let mut cursor_screen_y: f32 = -1.0;
         while clipper.step() {
             vis_start = clipper.display_start();
             vis_end = clipper.display_end();
             for row_idx in vis_start..vis_end {
                 let row = row_idx as u16;
+                if row == cursor_row {
+                    cursor_screen_y = ui.cursor_screen_pos()[1];
+                    ui.set_scroll_here_y_with_ratio(0.85);
+                }
                 render_row(ui, gui, song, &track_indices, clip_idx, rows, num_channels, row, playing_row, char_width, line_height, &mut click_target);
             }
         }
@@ -131,6 +144,7 @@ pub fn pattern_editor(
         gui.editor.debug_vis_end = vis_end as u16;
         gui.editor.debug_scroll_y = ui.scroll_y();
         gui.editor.debug_scroll_max_y = ui.scroll_max_y();
+        gui.editor.debug_cursor_screen_y = cursor_screen_y;
     }
 
     click_target
@@ -259,26 +273,18 @@ fn column_geometry(column: CellColumn, cw: f32) -> (f32, f32) {
     }
 }
 
-fn auto_scroll(ui: &imgui::Ui, cursor_row: u16, total_rows: u16, line_height: f32) {
-    let visible_rows = (ui.content_region_avail()[1] / line_height) as u16;
-    if visible_rows == 0 || total_rows == 0 {
-        return;
-    }
-
-    // Header row offset
-    let header_offset = line_height;
-    let scroll_y = ui.scroll_y();
-    let first_visible = ((scroll_y - header_offset).max(0.0) / line_height) as u16;
-    let last_visible = first_visible.saturating_add(visible_rows).min(total_rows - 1);
-
-    // Scroll margin: keep 2 rows of padding
-    let margin: u16 = 2;
-    if cursor_row < first_visible.saturating_add(margin) {
-        let target = cursor_row.saturating_sub(margin) as f32 * line_height + header_offset;
-        ui.set_scroll_y(target);
-    } else if cursor_row + margin > last_visible {
-        let target = (cursor_row + margin + 1).saturating_sub(visible_rows) as f32 * line_height + header_offset;
-        ui.set_scroll_y(target);
+/// Force the clipper to include a specific row even if it's off-screen.
+/// Must be called after `begin()` but BEFORE the first `step()`.
+///
+/// imgui-rs 0.12 doesn't wrap ForceDisplayRangeByIndices, so we extract the
+/// raw ImGuiListClipper pointer from ListClipperToken's first field via transmute.
+/// Layout: ListClipperToken { list_clipper: *mut ImGuiListClipper, ... }
+fn force_clipper_include<T>(clipper: &T, row: i32) {
+    // Read the first field: *mut ImGuiListClipper
+    let raw_ptr: *mut imgui::sys::ImGuiListClipper =
+        unsafe { std::ptr::read(clipper as *const T as *const *mut imgui::sys::ImGuiListClipper) };
+    unsafe {
+        imgui::sys::ImGuiListClipper_ForceDisplayRangeByIndices(raw_ptr, row, row + 1);
     }
 }
 
