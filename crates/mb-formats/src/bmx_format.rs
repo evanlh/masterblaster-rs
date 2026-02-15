@@ -1,0 +1,1015 @@
+//! Buzz BMX format parser.
+//!
+//! Parses BMX (Buzz Machine eXtended) files into the Song IR.
+//! Reference: Buzztrax song-io-buzz.c and BMX wiki.
+
+use alloc::string::String;
+use alloc::vec::Vec;
+use mb_ir::{
+    AudioGraph, Clip, Connection, LoopType, MusicalTime, NodeId, NodeType, Parameter, Pattern,
+    Sample, SampleData, SeqEntry, Song, Track,
+};
+
+use crate::FormatError;
+
+// ---------------------------------------------------------------------------
+// BmxReader — cursor over a byte slice
+// ---------------------------------------------------------------------------
+
+struct BmxReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> BmxReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    fn seek(&mut self, pos: usize) {
+        self.pos = pos;
+    }
+
+    fn skip(&mut self, n: usize) -> Result<(), FormatError> {
+        if self.pos + n > self.data.len() {
+            return Err(FormatError::UnexpectedEof);
+        }
+        self.pos += n;
+        Ok(())
+    }
+
+    fn read_u8(&mut self) -> Result<u8, FormatError> {
+        if self.pos >= self.data.len() {
+            return Err(FormatError::UnexpectedEof);
+        }
+        let v = self.data[self.pos];
+        self.pos += 1;
+        Ok(v)
+    }
+
+    fn read_u16_le(&mut self) -> Result<u16, FormatError> {
+        if self.pos + 2 > self.data.len() {
+            return Err(FormatError::UnexpectedEof);
+        }
+        let v = u16::from_le_bytes([self.data[self.pos], self.data[self.pos + 1]]);
+        self.pos += 2;
+        Ok(v)
+    }
+
+    fn read_u32_le(&mut self) -> Result<u32, FormatError> {
+        if self.pos + 4 > self.data.len() {
+            return Err(FormatError::UnexpectedEof);
+        }
+        let v = u32::from_le_bytes([
+            self.data[self.pos],
+            self.data[self.pos + 1],
+            self.data[self.pos + 2],
+            self.data[self.pos + 3],
+        ]);
+        self.pos += 4;
+        Ok(v)
+    }
+
+    fn read_i32_le(&mut self) -> Result<i32, FormatError> {
+        Ok(self.read_u32_le()? as i32)
+    }
+
+    fn read_f32_le(&mut self) -> Result<f32, FormatError> {
+        if self.pos + 4 > self.data.len() {
+            return Err(FormatError::UnexpectedEof);
+        }
+        let v = f32::from_le_bytes([
+            self.data[self.pos],
+            self.data[self.pos + 1],
+            self.data[self.pos + 2],
+            self.data[self.pos + 3],
+        ]);
+        self.pos += 4;
+        Ok(v)
+    }
+
+    fn read_null_string(&mut self) -> Result<String, FormatError> {
+        let start = self.pos;
+        while self.pos < self.data.len() && self.data[self.pos] != 0 {
+            self.pos += 1;
+        }
+        let s = String::from_utf8_lossy(&self.data[start..self.pos]).into_owned();
+        if self.pos < self.data.len() {
+            self.pos += 1; // skip null terminator
+        }
+        Ok(s)
+    }
+
+    fn read_bytes(&mut self, n: usize) -> Result<&'a [u8], FormatError> {
+        if self.pos + n > self.data.len() {
+            return Err(FormatError::UnexpectedEof);
+        }
+        let slice = &self.data[self.pos..self.pos + n];
+        self.pos += n;
+        Ok(slice)
+    }
+
+    fn read_var_uint(&mut self, width: u8) -> Result<u32, FormatError> {
+        match width {
+            1 => Ok(self.read_u8()? as u32),
+            2 => Ok(self.read_u16_le()? as u32),
+            4 => self.read_u32_le(),
+            _ => Err(FormatError::UnsupportedVersion),
+        }
+    }
+
+    /// Read a parameter value based on its type (1 byte or 2 bytes).
+    fn read_param_value(&mut self, param_type: u8) -> Result<u16, FormatError> {
+        match param_type {
+            PT_WORD => Ok(self.read_u16_le()?),
+            _ => Ok(self.read_u8()? as u16), // NOTE, SWITCH, BYTE, ENUM
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parameter type constants
+// ---------------------------------------------------------------------------
+
+const PT_BYTE: u8 = 2;
+const PT_WORD: u8 = 3;
+
+// ---------------------------------------------------------------------------
+// Intermediate types
+// ---------------------------------------------------------------------------
+
+struct SectionEntry {
+    name: [u8; 4],
+    offset: u32,
+    #[allow(dead_code)]
+    size: u32,
+}
+
+struct BmxParam {
+    param_type: u8,
+    name: String,
+    min: i32,
+    max: i32,
+    #[allow(dead_code)]
+    no_value: i32,
+    #[allow(dead_code)]
+    flags: i32,
+    default: i32,
+}
+
+struct BmxParaDef {
+    global_params: Vec<BmxParam>,
+    track_params: Vec<BmxParam>,
+}
+
+impl BmxParaDef {
+    /// Total bytes per row of global parameter state.
+    fn global_byte_size(&self) -> usize {
+        self.global_params.iter().map(|p| param_byte_size(p.param_type)).sum()
+    }
+
+    /// Total bytes per row of track parameter state.
+    fn track_byte_size(&self) -> usize {
+        self.track_params.iter().map(|p| param_byte_size(p.param_type)).sum()
+    }
+}
+
+fn param_byte_size(param_type: u8) -> usize {
+    if param_type == PT_WORD { 2 } else { 1 }
+}
+
+struct BmxMachine {
+    name: String,
+    #[allow(dead_code)]
+    machine_type: u8,
+    #[allow(dead_code)]
+    dll_name: Option<String>,
+    node_id: NodeId,
+    num_inputs: u16,
+}
+
+struct BmxPattern {
+    name: String,
+    ticks: u16,
+}
+
+struct BmxWaveLevel {
+    num_samples: u32,
+    loop_start: u32,
+    loop_end: u32,
+    sample_rate: u32,
+    #[allow(dead_code)]
+    root_note: u8,
+}
+
+struct BmxWave {
+    index: u16,
+    name: String,
+    volume: f32,
+    flags: u8,
+    levels: Vec<BmxWaveLevel>,
+}
+
+// ---------------------------------------------------------------------------
+// Known machine parameter database (fallback when no PARA section)
+// ---------------------------------------------------------------------------
+
+/// Byte sizes for known Buzz machines: (global_bytes, track_bytes).
+/// Derived from open-source buzzmachines and hex analysis.
+fn known_machine_byte_sizes(dll_name: &str) -> Option<(usize, usize)> {
+    match dll_name {
+        "Jeskola Tracker" => Some((1, 5)),
+        "Matilde Tracker" => Some((1, 5)),
+        "Matilde Tracker 2" => Some((4, 7)),
+        "Geonik's Compressor" => Some((7, 0)),
+        "Geonik's Overdrive 2" => Some((5, 0)),
+        "Jeskola Reverb 2" => Some((10, 0)),
+        "Jeskola Filter 2" => Some((3, 0)),
+        "Jeskola Delay" => Some((6, 0)),
+        "Jeskola Racer" => Some((3, 0)),
+        "Jeskola Mixer" => Some((1, 0)),
+        "Jeskola Noise" => Some((2, 0)),
+        "Jeskola Kick XP" => Some((9, 0)),
+        _ => None,
+    }
+}
+
+/// Build a synthetic BmxParaDef from known byte sizes (all BYTE params).
+fn synthetic_para_def(global_bytes: usize, track_bytes: usize) -> BmxParaDef {
+    let global_params = (0..global_bytes)
+        .map(|i| BmxParam {
+            param_type: PT_BYTE,
+            name: alloc::format!("G{}", i),
+            min: 0, max: 255, no_value: 0xFF, flags: 0, default: 0,
+        })
+        .collect();
+    let track_params = (0..track_bytes)
+        .map(|i| BmxParam {
+            param_type: PT_BYTE,
+            name: alloc::format!("T{}", i),
+            min: 0, max: 255, no_value: 0xFF, flags: 0, default: 0,
+        })
+        .collect();
+    BmxParaDef { global_params, track_params }
+}
+
+// ---------------------------------------------------------------------------
+// Section directory
+// ---------------------------------------------------------------------------
+
+fn parse_header(r: &mut BmxReader) -> Result<Vec<SectionEntry>, FormatError> {
+    let magic = r.read_bytes(4)?;
+    if magic != b"Buzz" {
+        return Err(FormatError::InvalidHeader);
+    }
+    let num_sections = r.read_u32_le()? as usize;
+    let mut sections = Vec::with_capacity(num_sections);
+    for _ in 0..num_sections {
+        let name_bytes = r.read_bytes(4)?;
+        let mut name = [0u8; 4];
+        name.copy_from_slice(name_bytes);
+        let offset = r.read_u32_le()?;
+        let size = r.read_u32_le()?;
+        sections.push(SectionEntry { name, offset, size });
+    }
+    Ok(sections)
+}
+
+fn find_section<'a>(sections: &'a [SectionEntry], name: &[u8; 4]) -> Option<&'a SectionEntry> {
+    sections.iter().find(|s| &s.name == name)
+}
+
+// ---------------------------------------------------------------------------
+// BVER
+// ---------------------------------------------------------------------------
+
+fn parse_bver(r: &mut BmxReader, entry: &SectionEntry) -> Result<String, FormatError> {
+    r.seek(entry.offset as usize);
+    let version = r.read_null_string()?;
+    eprintln!("[BMX] Version: {}", version);
+    Ok(version)
+}
+
+// ---------------------------------------------------------------------------
+// PARA
+// ---------------------------------------------------------------------------
+
+fn parse_para(r: &mut BmxReader, entry: &SectionEntry) -> Result<Vec<BmxParaDef>, FormatError> {
+    r.seek(entry.offset as usize);
+    let num_machines = r.read_u32_le()? as usize;
+    let mut defs = Vec::with_capacity(num_machines);
+    for _ in 0..num_machines {
+        let _name = r.read_null_string()?;
+        let _long_name = r.read_null_string()?;
+        let num_global = r.read_u32_le()? as usize;
+        let num_track = r.read_u32_le()? as usize;
+        let global_params = read_param_defs(r, num_global)?;
+        let track_params = read_param_defs(r, num_track)?;
+        defs.push(BmxParaDef { global_params, track_params });
+    }
+    eprintln!("[BMX] PARA: {} machine parameter definitions", defs.len());
+    Ok(defs)
+}
+
+fn read_param_defs(r: &mut BmxReader, count: usize) -> Result<Vec<BmxParam>, FormatError> {
+    let mut params = Vec::with_capacity(count);
+    for _ in 0..count {
+        let param_type = r.read_u8()?;
+        let name = r.read_null_string()?;
+        let min = r.read_i32_le()?;
+        let max = r.read_i32_le()?;
+        let no_value = r.read_i32_le()?;
+        let flags = r.read_i32_le()?;
+        let default = r.read_i32_le()?;
+        params.push(BmxParam { param_type, name, min, max, no_value, flags, default });
+    }
+    Ok(params)
+}
+
+// ---------------------------------------------------------------------------
+// Master fallback PARA (hardcoded when no PARA section)
+// ---------------------------------------------------------------------------
+
+fn master_para_def() -> BmxParaDef {
+    BmxParaDef {
+        global_params: alloc::vec![
+            BmxParam { param_type: PT_WORD, name: String::from("Volume"), min: 0, max: 0x4000, no_value: 0xFFFF, flags: 2, default: 0 },
+            BmxParam { param_type: PT_WORD, name: String::from("BPM"),    min: 0x10, max: 0x200, no_value: 0xFFFF, flags: 2, default: 126 },
+            BmxParam { param_type: PT_BYTE, name: String::from("TPB"),    min: 1, max: 32, no_value: 0xFF, flags: 2, default: 4 },
+        ],
+        track_params: Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MACH
+// ---------------------------------------------------------------------------
+
+/// Resolve the PARA def for a single machine: use PARA section if available,
+/// otherwise fall back to the known machine database.
+fn resolve_para_def(machine_type: u8, dll_name: &Option<String>, para_defs: &Option<Vec<BmxParaDef>>, index: usize) -> BmxParaDef {
+    if let Some(defs) = para_defs {
+        if let Some(d) = defs.get(index) {
+            return BmxParaDef {
+                global_params: d.global_params.iter().map(|p| BmxParam {
+                    param_type: p.param_type, name: p.name.clone(),
+                    min: p.min, max: p.max, no_value: p.no_value,
+                    flags: p.flags, default: p.default,
+                }).collect(),
+                track_params: d.track_params.iter().map(|p| BmxParam {
+                    param_type: p.param_type, name: p.name.clone(),
+                    min: p.min, max: p.max, no_value: p.no_value,
+                    flags: p.flags, default: p.default,
+                }).collect(),
+            };
+        }
+    }
+    // Fallback
+    if machine_type == 0 {
+        return master_para_def();
+    }
+    if let Some(dll) = dll_name {
+        if let Some((gb, tb)) = known_machine_byte_sizes(dll) {
+            return synthetic_para_def(gb, tb);
+        }
+        eprintln!("[BMX] WARNING: unknown machine \"{}\", assuming 0 params", dll);
+    }
+    BmxParaDef { global_params: Vec::new(), track_params: Vec::new() }
+}
+
+fn parse_mach(
+    r: &mut BmxReader,
+    entry: &SectionEntry,
+    para_from_section: &Option<Vec<BmxParaDef>>,
+    graph: &mut AudioGraph,
+) -> Result<(Vec<BmxMachine>, Vec<BmxParaDef>), FormatError> {
+    r.seek(entry.offset as usize);
+    let num_machines = r.read_u16_le()? as usize;
+    let mut machines = Vec::with_capacity(num_machines);
+    let mut para_defs = Vec::with_capacity(num_machines);
+
+    for i in 0..num_machines {
+        let name = r.read_null_string()?;
+        let machine_type = r.read_u8()?;
+        let type_str = match machine_type {
+            0 => "Master", 1 => "Generator", 2 => "Effect", _ => "Unknown",
+        };
+
+        let dll_name = if machine_type != 0 {
+            Some(r.read_null_string()?)
+        } else {
+            None
+        };
+
+        let x = r.read_f32_le()?;
+        let y = r.read_f32_le()?;
+
+        // Skip machine-specific init data
+        let data_size = r.read_u32_le()? as usize;
+        r.skip(data_size)?;
+
+        // Skip attributes
+        let num_attrs = r.read_u16_le()? as usize;
+        for _ in 0..num_attrs {
+            let _attr_name = r.read_null_string()?;
+            let _attr_val = r.read_u32_le()?;
+        }
+
+        // Resolve param defs and skip global param state
+        let para = resolve_para_def(machine_type, &dll_name, para_from_section, i);
+        r.skip(para.global_byte_size())?;
+
+        // Skip track param state
+        let num_tracks = r.read_u16_le()? as usize;
+        r.skip(num_tracks * para.track_byte_size())?;
+
+        // Create graph node
+        let node_id = if machine_type == 0 {
+            0
+        } else {
+            graph.add_node(NodeType::BuzzMachine { machine_name: name.clone() })
+        };
+
+        // Add IR parameters to graph node
+        if let Some(node) = graph.node_mut(node_id) {
+            for (j, p) in para.global_params.iter().enumerate() {
+                node.parameters.push(Parameter::new(
+                    j as u16, &p.name, p.min, p.max, p.default,
+                ));
+            }
+        }
+
+        eprintln!(
+            "[BMX] Machine {}: \"{}\" type={} dll={} pos=({:.0},{:.0})",
+            i, name, type_str, dll_name.as_deref().unwrap_or("(none)"), x, y
+        );
+
+        machines.push(BmxMachine {
+            name, machine_type, dll_name, node_id, num_inputs: 0,
+        });
+        para_defs.push(para);
+    }
+
+    eprintln!("[BMX] MACH: {} machines", machines.len());
+    Ok((machines, para_defs))
+}
+
+// ---------------------------------------------------------------------------
+// CONN
+// ---------------------------------------------------------------------------
+
+fn parse_conn(
+    r: &mut BmxReader,
+    entry: &SectionEntry,
+    machines: &mut [BmxMachine],
+    graph: &mut AudioGraph,
+) -> Result<(), FormatError> {
+    r.seek(entry.offset as usize);
+    let num_wires = r.read_u16_le()? as usize;
+
+    for _ in 0..num_wires {
+        let src_idx = r.read_u16_le()? as usize;
+        let dst_idx = r.read_u16_le()? as usize;
+        let amp = r.read_u16_le()?;
+        let pan = r.read_u16_le()?;
+
+        if src_idx < machines.len() && dst_idx < machines.len() {
+            let from_id = machines[src_idx].node_id;
+            let to_id = machines[dst_idx].node_id;
+            let gain = amplitude_to_gain(amp);
+
+            graph.connections.push(Connection {
+                from: from_id, to: to_id,
+                from_channel: 0, to_channel: 0, gain,
+            });
+
+            machines[dst_idx].num_inputs += 1;
+
+            eprintln!(
+                "[BMX] Wire: {} -> {} amp=0x{:04X} pan=0x{:04X}",
+                machines[src_idx].name, machines[dst_idx].name, amp, pan
+            );
+        }
+    }
+
+    eprintln!("[BMX] CONN: {} wires", num_wires);
+    Ok(())
+}
+
+/// Convert Buzz amplitude (0..0x4000) to gain in fixed-point dB.
+fn amplitude_to_gain(amp: u16) -> i16 {
+    if amp == 0 { return i16::MIN; }
+    let ratio = amp as f32 / 0x4000 as f32;
+    (ratio * 100.0 - 100.0) as i16
+}
+
+// ---------------------------------------------------------------------------
+// PATT
+// ---------------------------------------------------------------------------
+
+fn parse_patt(
+    r: &mut BmxReader,
+    entry: &SectionEntry,
+    machines: &[BmxMachine],
+    para_defs: &[BmxParaDef],
+) -> Result<Vec<Vec<BmxPattern>>, FormatError> {
+    r.seek(entry.offset as usize);
+    let empty = BmxParaDef { global_params: Vec::new(), track_params: Vec::new() };
+    let mut all_patterns: Vec<Vec<BmxPattern>> = Vec::with_capacity(machines.len());
+
+    for (mi, mach) in machines.iter().enumerate() {
+        let num_patterns = r.read_u16_le()? as usize;
+        let num_tracks = r.read_u16_le()? as usize;
+        let para = para_defs.get(mi).unwrap_or(&empty);
+        let mut patterns = Vec::with_capacity(num_patterns);
+
+        for _ in 0..num_patterns {
+            let name = r.read_null_string()?;
+            let num_ticks = r.read_u16_le()?;
+
+            // Skip wire parameters: per input × (u16 src + num_ticks × (u16 amp + u16 pan))
+            for _ in 0..mach.num_inputs {
+                let _src_idx = r.read_u16_le()?;
+                r.skip(num_ticks as usize * 4)?;
+            }
+
+            // Skip global parameters: num_ticks × global_byte_size
+            r.skip(num_ticks as usize * para.global_byte_size())?;
+
+            // Skip track parameters: num_tracks × num_ticks × track_byte_size
+            r.skip(num_tracks * num_ticks as usize * para.track_byte_size())?;
+
+            patterns.push(BmxPattern { name, ticks: num_ticks });
+        }
+
+        if !patterns.is_empty() {
+            eprintln!(
+                "[BMX] PATT: machine \"{}\" has {} patterns",
+                mach.name, patterns.len()
+            );
+            for p in &patterns {
+                eprintln!("  - \"{}\" ({} ticks)", p.name, p.ticks);
+            }
+        }
+
+        all_patterns.push(patterns);
+    }
+
+    Ok(all_patterns)
+}
+
+// ---------------------------------------------------------------------------
+// SEQU
+// ---------------------------------------------------------------------------
+
+fn parse_sequ(
+    r: &mut BmxReader,
+    entry: &SectionEntry,
+    machines: &[BmxMachine],
+    all_patterns: &[Vec<BmxPattern>],
+    rows_per_beat: u8,
+) -> Result<Vec<Track>, FormatError> {
+    r.seek(entry.offset as usize);
+    let end_of_song = r.read_u32_le()?;
+    let loop_start = r.read_u32_le()?;
+    let loop_end = r.read_u32_le()?;
+    let num_sequences = r.read_u16_le()? as usize;
+
+    eprintln!(
+        "[BMX] SEQU: end={} loop={}..{} sequences={}",
+        end_of_song, loop_start, loop_end, num_sequences
+    );
+
+    let rpb = rows_per_beat as u32;
+    let mut tracks = Vec::with_capacity(num_sequences);
+
+    for _ in 0..num_sequences {
+        let machine_idx = r.read_u16_le()? as usize;
+        let num_events = r.read_u32_le()? as usize;
+
+        let (bpep, bpe) = if num_events > 0 {
+            (r.read_u8()?, r.read_u8()?)
+        } else {
+            (0, 0)
+        };
+
+        let mach = machines.get(machine_idx);
+        let node_id = mach.map_or(0, |m| m.node_id);
+        let mach_name = mach.map_or("?", |m| &m.name);
+
+        let mut track = Track::new(node_id, mach_name);
+        track.group = Some(0);
+
+        // Add clips from this machine's pattern pool
+        if let Some(pats) = all_patterns.get(machine_idx) {
+            for bp in pats {
+                track.clips.push(Clip::Pattern(Pattern::new(bp.ticks, 1)));
+            }
+        }
+
+        // Parse sequence events
+        let mut seq_entries = Vec::new();
+        for _ in 0..num_events {
+            let position = r.read_var_uint(bpep)?;
+            let raw_event = r.read_var_uint(bpe)?;
+            let event_id = extract_event_id(raw_event, bpe);
+
+            if event_id >= 16 {
+                let pat_idx = (event_id - 16) as u16;
+                let start = MusicalTime::zero().add_rows(position, rpb);
+                seq_entries.push(SeqEntry { start, clip_idx: pat_idx });
+            }
+        }
+
+        track.sequence = seq_entries;
+
+        if num_events > 0 {
+            eprintln!(
+                "[BMX] Sequence for \"{}\": {} events, {} pattern refs",
+                mach_name, num_events, track.sequence.len()
+            );
+        }
+
+        tracks.push(track);
+    }
+
+    Ok(tracks)
+}
+
+fn extract_event_id(raw: u32, bpe: u8) -> u32 {
+    match bpe {
+        1 => raw & 0x7F,
+        2 => raw & 0x7FFF,
+        4 => raw & 0x7FFF_FFFF,
+        _ => raw,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WAVT
+// ---------------------------------------------------------------------------
+
+fn parse_wavt(
+    r: &mut BmxReader,
+    entry: &SectionEntry,
+) -> Result<Vec<BmxWave>, FormatError> {
+    r.seek(entry.offset as usize);
+    let num_waves = r.read_u16_le()? as usize;
+    let mut waves = Vec::with_capacity(num_waves);
+
+    for _ in 0..num_waves {
+        let index = r.read_u16_le()?;
+        let file_name = r.read_null_string()?;
+        let name = r.read_null_string()?;
+        let volume = r.read_f32_le()?;
+        let flags = r.read_u8()?;
+
+        let loop_enabled = flags & 0x01 != 0;
+        let is_stereo = flags & 0x08 != 0;
+        let bidi_loop = flags & 0x10 != 0;
+        let has_envelopes = flags & 0x80 != 0;
+
+        eprintln!(
+            "[BMX] Wave {}: \"{}\" file=\"{}\" vol={:.2} loop={} stereo={} bidi={}",
+            index, name, file_name, volume, loop_enabled, is_stereo, bidi_loop
+        );
+
+        if has_envelopes {
+            skip_envelopes(r)?;
+        }
+
+        let num_levels = r.read_u8()? as usize;
+        let mut levels = Vec::with_capacity(num_levels);
+        for _ in 0..num_levels {
+            let num_samples = r.read_u32_le()?;
+            let loop_start = r.read_u32_le()?;
+            let loop_end = r.read_u32_le()?;
+            let sample_rate = r.read_u32_le()?;
+            let root_note = r.read_u8()?;
+
+            eprintln!(
+                "  Level: {} samples, rate={} Hz, root={}",
+                num_samples, sample_rate, root_note
+            );
+
+            levels.push(BmxWaveLevel {
+                num_samples, loop_start, loop_end, sample_rate, root_note,
+            });
+        }
+
+        waves.push(BmxWave { index, name, volume, flags, levels });
+    }
+
+    eprintln!("[BMX] WAVT: {} waves", waves.len());
+    Ok(waves)
+}
+
+fn skip_envelopes(r: &mut BmxReader) -> Result<(), FormatError> {
+    let num_envelopes = r.read_u16_le()? as usize;
+    for _ in 0..num_envelopes {
+        r.skip(10)?; // envelope header
+        let raw_num_points = r.read_u16_le()?;
+        let num_points = (raw_num_points & 0x7FFF) as usize;
+        r.skip(num_points * 5)?; // each point: u16 x + u16 y + u8 flags
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// CWAV / WAVE — audio sample data
+// ---------------------------------------------------------------------------
+
+fn parse_cwav(
+    r: &mut BmxReader,
+    entry: &SectionEntry,
+    bmx_waves: &[BmxWave],
+) -> Result<Vec<(u16, SampleData)>, FormatError> {
+    r.seek(entry.offset as usize);
+    let num_waves = r.read_u16_le()? as usize;
+    let mut wave_data = Vec::with_capacity(num_waves);
+
+    for _ in 0..num_waves {
+        let index = r.read_u16_le()?;
+        let format = r.read_u8()?;
+
+        let bw = bmx_waves.iter().find(|w| w.index == index);
+        let is_stereo = bw.map_or(false, |w| w.flags & 0x08 != 0);
+
+        if format == 0 {
+            // Raw uncompressed
+            let _size_field = r.read_u32_le()?;
+
+            if let Some(bw) = bw {
+                for level in &bw.levels {
+                    let channels: usize = if is_stereo { 2 } else { 1 };
+                    let total_samples = level.num_samples as usize * channels;
+                    let byte_count = total_samples * 2;
+
+                    if r.pos + byte_count > r.data.len() {
+                        eprintln!("[BMX] CWAV: truncated wave data for index {}", index);
+                        break;
+                    }
+
+                    let data = read_i16_samples(r, total_samples)?;
+                    let sample_data = if is_stereo {
+                        deinterleave_stereo(&data)
+                    } else {
+                        SampleData::Mono16(data)
+                    };
+                    wave_data.push((index, sample_data));
+                }
+            }
+        } else {
+            eprintln!(
+                "[BMX] CWAV: wave {} uses compression (format={}), skipping remaining",
+                index, format
+            );
+            break;
+        }
+    }
+
+    eprintln!("[BMX] CWAV: loaded {} wave data entries", wave_data.len());
+    Ok(wave_data)
+}
+
+fn read_i16_samples(r: &mut BmxReader, count: usize) -> Result<Vec<i16>, FormatError> {
+    let mut samples = Vec::with_capacity(count);
+    for _ in 0..count {
+        samples.push(r.read_u16_le()? as i16);
+    }
+    Ok(samples)
+}
+
+fn deinterleave_stereo(interleaved: &[i16]) -> SampleData {
+    let half = interleaved.len() / 2;
+    let mut left = Vec::with_capacity(half);
+    let mut right = Vec::with_capacity(half);
+    for chunk in interleaved.chunks(2) {
+        left.push(chunk[0]);
+        if chunk.len() > 1 {
+            right.push(chunk[1]);
+        }
+    }
+    SampleData::Stereo16(left, right)
+}
+
+// ---------------------------------------------------------------------------
+// Song IR assembly
+// ---------------------------------------------------------------------------
+
+fn build_samples(bmx_waves: &[BmxWave], wave_data: &[(u16, SampleData)]) -> Vec<Sample> {
+    bmx_waves.iter().map(|bw| {
+        let loop_type = match (bw.flags & 0x01 != 0, bw.flags & 0x10 != 0) {
+            (false, _) => LoopType::None,
+            (true, true) => LoopType::PingPong,
+            (true, false) => LoopType::Forward,
+        };
+
+        let level = bw.levels.first();
+        let data = wave_data
+            .iter()
+            .find(|(idx, _)| *idx == bw.index)
+            .map(|(_, d)| d.clone())
+            .unwrap_or_else(|| SampleData::Mono16(Vec::new()));
+
+        let mut sample = Sample::new(&bw.name);
+        sample.data = data;
+        sample.loop_type = loop_type;
+        sample.loop_start = level.map_or(0, |l| l.loop_start);
+        sample.loop_end = level.map_or(0, |l| l.loop_end);
+        sample.c4_speed = level.map_or(44100, |l| l.sample_rate);
+        sample.default_volume = (bw.volume * 64.0).clamp(0.0, 64.0) as u8;
+        sample
+    }).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Load a BMX file from bytes into a Song IR.
+pub fn load_bmx(data: &[u8]) -> Result<Song, FormatError> {
+    let mut r = BmxReader::new(data);
+
+    // 1. Parse header and section directory
+    let sections = parse_header(&mut r)?;
+    eprintln!(
+        "[BMX] {} sections: {}",
+        sections.len(),
+        sections.iter()
+            .map(|s| String::from_utf8_lossy(&s.name).into_owned())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    // 2. BVER (optional)
+    if let Some(entry) = find_section(&sections, b"BVER") {
+        let _version = parse_bver(&mut r, entry)?;
+    }
+
+    // 3. PARA (optional)
+    let para_from_section = if let Some(entry) = find_section(&sections, b"PARA") {
+        Some(parse_para(&mut r, entry)?)
+    } else {
+        None
+    };
+
+    // 4. MACH (required) — resolves PARA defs inline (fallback if no PARA section)
+    let mach_entry = find_section(&sections, b"MACH").ok_or(FormatError::InvalidHeader)?;
+    let mut graph = AudioGraph::with_master();
+    let (mut machines, para_defs) = parse_mach(&mut r, mach_entry, &para_from_section, &mut graph)?;
+
+    // 5. CONN (required)
+    let conn_entry = find_section(&sections, b"CONN").ok_or(FormatError::InvalidHeader)?;
+    parse_conn(&mut r, conn_entry, &mut machines, &mut graph)?;
+
+    // 6. PATT (required)
+    let patt_entry = find_section(&sections, b"PATT").ok_or(FormatError::InvalidHeader)?;
+    let all_patterns = parse_patt(&mut r, patt_entry, &machines, &para_defs)?;
+
+    // 7. SEQU (required)
+    let rows_per_beat: u8 = 4;
+    let sequ_entry = find_section(&sections, b"SEQU").ok_or(FormatError::InvalidHeader)?;
+    let tracks = parse_sequ(&mut r, sequ_entry, &machines, &all_patterns, rows_per_beat)?;
+
+    // 8. WAVT (optional)
+    let bmx_waves = if let Some(entry) = find_section(&sections, b"WAVT") {
+        parse_wavt(&mut r, entry)?
+    } else {
+        Vec::new()
+    };
+
+    // 9. CWAV / WAVE (optional)
+    let wave_data = find_section(&sections, b"CWAV")
+        .or_else(|| find_section(&sections, b"WAVE"))
+        .map(|entry| parse_cwav(&mut r, entry, &bmx_waves))
+        .transpose()?
+        .unwrap_or_default();
+
+    // Assemble Song
+    let mut song = Song::new("BMX Song");
+    song.initial_tempo = 126;
+    song.initial_speed = 1;
+    song.rows_per_beat = rows_per_beat;
+    song.graph = graph;
+    song.tracks = tracks;
+    song.samples = build_samples(&bmx_waves, &wave_data);
+
+    let total = song.total_time();
+    eprintln!(
+        "[BMX] Song loaded: {} nodes, {} connections, {} tracks, {} samples, total={} beats",
+        song.graph.nodes.len(),
+        song.graph.connections.len(),
+        song.tracks.len(),
+        song.samples.len(),
+        total.beat,
+    );
+
+    Ok(song)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_minimal_bmx() -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"Buzz");
+        buf.extend_from_slice(&4u32.to_le_bytes());
+
+        let dir_end = 8 + 4 * 12;
+
+        // MACH: 1 machine (Master only)
+        let mut mach_data = Vec::new();
+        mach_data.extend_from_slice(&1u16.to_le_bytes());
+        mach_data.extend_from_slice(b"Master\0");
+        mach_data.push(0); // type=0
+        mach_data.extend_from_slice(&0f32.to_le_bytes());
+        mach_data.extend_from_slice(&0f32.to_le_bytes());
+        mach_data.extend_from_slice(&0u32.to_le_bytes()); // data_size
+        mach_data.extend_from_slice(&0u16.to_le_bytes()); // num_attrs
+        // Master params: vol(u16) + bpm(u16) + tpb(u8)
+        mach_data.extend_from_slice(&0x4000u16.to_le_bytes());
+        mach_data.extend_from_slice(&126u16.to_le_bytes());
+        mach_data.push(4);
+        mach_data.extend_from_slice(&0u16.to_le_bytes()); // num_tracks
+
+        let mut conn_data = Vec::new();
+        conn_data.extend_from_slice(&0u16.to_le_bytes());
+
+        let mut patt_data = Vec::new();
+        patt_data.extend_from_slice(&0u16.to_le_bytes());
+        patt_data.extend_from_slice(&0u16.to_le_bytes());
+
+        let mut sequ_data = Vec::new();
+        sequ_data.extend_from_slice(&0u32.to_le_bytes());
+        sequ_data.extend_from_slice(&0u32.to_le_bytes());
+        sequ_data.extend_from_slice(&0u32.to_le_bytes());
+        sequ_data.extend_from_slice(&0u16.to_le_bytes());
+
+        let mach_off = dir_end;
+        let conn_off = mach_off + mach_data.len();
+        let patt_off = conn_off + conn_data.len();
+        let sequ_off = patt_off + patt_data.len();
+
+        // Section directory
+        for (name, off, data) in [
+            (b"MACH", mach_off, &mach_data),
+            (b"CONN", conn_off, &conn_data),
+            (b"PATT", patt_off, &patt_data),
+            (b"SEQU", sequ_off, &sequ_data),
+        ] {
+            buf.extend_from_slice(name);
+            buf.extend_from_slice(&(off as u32).to_le_bytes());
+            buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        }
+
+        buf.extend_from_slice(&mach_data);
+        buf.extend_from_slice(&conn_data);
+        buf.extend_from_slice(&patt_data);
+        buf.extend_from_slice(&sequ_data);
+        buf
+    }
+
+    #[test]
+    fn minimal_bmx_loads() {
+        let data = make_minimal_bmx();
+        let song = load_bmx(&data).unwrap();
+        assert_eq!(song.graph.nodes.len(), 1);
+        assert!(song.graph.connections.is_empty());
+        assert!(song.tracks.is_empty());
+    }
+
+    #[test]
+    fn invalid_magic_rejected() {
+        assert!(load_bmx(b"NotBuzz\x00").is_err());
+    }
+
+    #[test]
+    fn too_short_rejected() {
+        assert!(load_bmx(b"Buz").is_err());
+    }
+
+    #[test]
+    fn extract_event_id_masks_loop_flag() {
+        assert_eq!(extract_event_id(0x90, 1), 0x10);
+        assert_eq!(extract_event_id(0x8010, 2), 0x10);
+        assert_eq!(extract_event_id(0x8000_0010, 4), 0x10);
+    }
+
+    #[test]
+    fn amplitude_to_gain_unity() {
+        assert_eq!(amplitude_to_gain(0x4000), 0);
+    }
+
+    #[test]
+    fn amplitude_to_gain_half() {
+        assert!(amplitude_to_gain(0x2000) < 0);
+    }
+
+    #[test]
+    fn known_machine_lookup() {
+        assert_eq!(known_machine_byte_sizes("Jeskola Tracker"), Some((1, 5)));
+        assert_eq!(known_machine_byte_sizes("Unknown Machine"), None);
+    }
+}

@@ -59,6 +59,12 @@ impl Controller {
         Ok(())
     }
 
+    pub fn load_bmx(&mut self, data: &[u8]) -> Result<(), FormatError> {
+        self.stop();
+        self.song = mb_formats::load_bmx(data)?;
+        Ok(())
+    }
+
     /// Create a new empty song with default settings.
     pub fn new_song(&mut self, channels: u8) {
         self.stop();

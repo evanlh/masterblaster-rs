@@ -79,22 +79,35 @@ pub fn transport_panel(ui: &imgui::Ui, gui: &mut GuiState) {
 
 fn load_mod_dialog(gui: &mut GuiState) {
     let file = rfd::FileDialog::new()
+        .add_filter("Tracker files", &["mod", "MOD", "bmx", "BMX"])
         .add_filter("MOD files", &["mod", "MOD"])
+        .add_filter("BMX files", &["bmx", "BMX"])
         .pick_file();
 
     let Some(path) = file else { return };
 
     gui.controller.stop();
 
+    let ext = path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
     match std::fs::read(&path) {
         Err(e) => gui.status = format!("Read error: {}", e),
-        Ok(data) => match gui.controller.load_mod(&data) {
-            Err(e) => gui.status = format!("Parse error: {:?}", e),
-            Ok(()) => {
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                gui.status = format!("Loaded {}", name);
-                gui.selected_seq_index = 0;
+        Ok(data) => {
+            let result = match ext.as_str() {
+                "bmx" => gui.controller.load_bmx(&data),
+                _ => gui.controller.load_mod(&data),
+            };
+            match result {
+                Err(e) => gui.status = format!("Parse error: {:?}", e),
+                Ok(()) => {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    gui.status = format!("Loaded {}", name);
+                    gui.selected_seq_index = 0;
+                }
             }
-        },
+        }
     }
 }
