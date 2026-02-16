@@ -2,14 +2,14 @@
 
 ## Checklist
 
-- [ ] 1. Add `assert_no_alloc` test infrastructure and setup/realtime phase boundary
-  - [ ] 1a. `mixer.rs`: make `schedule_song()` the prepare boundary (`prepared` flag, cursor reset)
-  - [ ] 1b. `mixer.rs`: wrap `render_frame` body with `assert_no_alloc`
-  - [ ] 1c. `tests/alloc_free.rs`: fixture-based integration tests under no-alloc
-- [ ] 2. Fix hot-path allocations (make the tests pass)
-  - [ ] 2a. `mixer.rs`: stop cloning topo_order per frame (index loop or pre-compute)
-  - [ ] 2b. `event_queue.rs`: cursor-based drain replacing `pop_until` + `Vec<Event>`
-  - [ ] 2c. `mixer.rs`: `render_frames_into(&mut [Frame])` to avoid collect
+- [x] 1. Add `assert_no_alloc` test infrastructure and setup/realtime phase boundary
+  - [x] 1a. `mixer.rs`: make `schedule_song()` the prepare boundary (`prepared` flag, cursor reset)
+  - [x] 1b. `mixer.rs`: wrap `render_frame` body with `assert_no_alloc`
+  - [x] 1c. `tests/alloc_free.rs`: fixture-based integration tests under no-alloc
+- [x] 2. Fix hot-path allocations (make the tests pass)
+  - [x] 2a. `mixer.rs`: stop cloning topo_order per frame (index loop or pre-compute)
+  - [x] 2b. `event_queue.rs`: cursor-based drain replacing `pop_until` + `Vec<Event>`
+  - [x] 2c. `mixer.rs`: `render_frames_into(&mut [Frame])` to avoid collect
 - [ ] 3. SmallVec for ModEnvelope — resolves tension with instrument envelope plan
 - [ ] 4. Introduce slotmap for AudioGraph
   - [ ] 4a. `graph.rs`: `SlotMap<NodeKey, Node>`, remove `Node.id`, update `Connection`

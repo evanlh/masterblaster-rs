@@ -69,6 +69,7 @@ path = "src/bin/cli.rs"
 
 [features]
 test-harness = ["png"]
+alloc_check = ["mb-engine/alloc_check"]
 
 [[test]]
 name = "gui_tests"
@@ -78,6 +79,7 @@ required-features = ["test-harness"]
 [dev-dependencies]
 mb-engine = { workspace = true }
 mb-formats = { workspace = true }
+assert_no_alloc = "1.1"
 
 [dependencies.png]
 version = "0.17"

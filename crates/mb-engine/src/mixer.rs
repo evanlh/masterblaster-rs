@@ -163,13 +163,32 @@ impl Engine {
     }
 
     /// Generate one frame of audio.
+    ///
+    /// When the `alloc_check` feature is enabled, this wraps the inner
+    /// implementation with `assert_no_alloc` to catch any heap allocations
+    /// in the realtime path.
     pub fn render_frame(&mut self) -> Frame {
+        #[cfg(feature = "alloc_check")]
+        {
+            assert_no_alloc::assert_no_alloc(|| self.render_frame_inner())
+        }
+        #[cfg(not(feature = "alloc_check"))]
+        {
+            self.render_frame_inner()
+        }
+    }
+
+    fn render_frame_inner(&mut self) -> Frame {
         if !self.playing {
             return Frame::silence();
         }
 
-        // 1. Process events at current time
-        for event in self.event_queue.pop_until(self.current_time) {
+        // 1. Process events at current time (cursor-based, zero allocation)
+        let event_range = self.event_queue.drain_until(self.current_time);
+        for i in event_range {
+            // Clone the event to avoid borrow conflict with &mut self.
+            // Event is Copy-sized (no heap data), so this is stack-only.
+            let event = self.event_queue.get(i).unwrap().clone();
             self.dispatch_event(&event);
         }
 
@@ -435,10 +454,9 @@ impl Engine {
     fn render_graph(&mut self) -> Frame {
         self.graph_state.clear_outputs();
 
-        // Clone topo_order to avoid borrow conflict with &mut self
-        let topo_order = self.graph_state.topo_order.clone();
-
-        for &node_id in &topo_order {
+        // Index loop avoids cloning topo_order (allocation-free).
+        for i in 0..self.graph_state.topo_order.len() {
+            let node_id = self.graph_state.topo_order[i];
             let node = match self.song.graph.node(node_id) {
                 Some(n) => n,
                 None => continue,
@@ -522,17 +540,28 @@ impl Engine {
     }
 
     /// Schedule all events from the song's track clips + sequences.
+    ///
+    /// This is the prepare boundary: after this call, `render_frame()` is
+    /// guaranteed allocation-free (when all hot-path fixes are in place).
     pub fn schedule_song(&mut self) {
         let result = scheduler::schedule_song(&self.song);
         self.song_end_time = Some(result.total_time);
         for event in result.events {
             self.event_queue.push(event);
         }
+        self.event_queue.reset_cursor();
     }
 
-    /// Render multiple frames into a buffer.
+    /// Render multiple frames, returning a new Vec (offline rendering).
     pub fn render_frames(&mut self, count: usize) -> Vec<Frame> {
         (0..count).map(|_| self.render_frame()).collect()
+    }
+
+    /// Render frames into a caller-provided buffer (allocation-free).
+    pub fn render_frames_into(&mut self, buf: &mut [Frame]) {
+        for frame in buf.iter_mut() {
+            *frame = self.render_frame();
+        }
     }
 
     /// Get a reference to a channel's state (for testing).
