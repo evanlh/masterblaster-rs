@@ -290,8 +290,10 @@ impl Engine {
         if instrument > 0 {
             self.resolve_sample(instrument, note)
         } else {
-            let channel = &self.channels[ch as usize];
-            (channel.instrument, channel.sample_index)
+            match self.channels.get(ch as usize) {
+                Some(channel) => (channel.instrument, channel.sample_index),
+                None => self.resolve_sample(instrument, note),
+            }
         }
     }
 

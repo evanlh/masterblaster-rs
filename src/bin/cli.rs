@@ -40,9 +40,19 @@ fn main() {
         std::process::exit(1);
     });
 
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
     let mut ctrl = Controller::new();
-    ctrl.load_mod(&data).unwrap_or_else(|e| {
-        eprintln!("Failed to parse MOD: {:?}", e);
+    let load_result = match ext.as_str() {
+        "bmx" => ctrl.load_bmx(&data),
+        _ => ctrl.load_mod(&data),
+    };
+    load_result.unwrap_or_else(|e| {
+        eprintln!("Failed to parse {}: {:?}", ext.to_uppercase(), e);
         std::process::exit(1);
     });
 

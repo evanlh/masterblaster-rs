@@ -443,6 +443,7 @@ fn parse_mach(
     let num_machines = r.read_u16_le()? as usize;
     let mut machines = Vec::with_capacity(num_machines);
     let mut para_defs = Vec::with_capacity(num_machines);
+    let mut next_channel_idx: u8 = 0;
 
     for i in 0..num_machines {
         let name = r.read_null_string()?;
@@ -487,12 +488,13 @@ fn parse_mach(
             (0, Vec::new())
         } else if is_tracker {
             // Create one TrackerChannel node per track
+            // Channel index is sequential (0-based), NOT the graph node ID
             let mut ids = Vec::with_capacity(num_tracks);
-            let first_idx = graph.nodes.len() as u8;
             for t in 0..num_tracks {
-                let ch_idx = first_idx + t as u8;
+                let ch_idx = next_channel_idx + t as u8;
                 ids.push(graph.add_node(NodeType::TrackerChannel { index: ch_idx }));
             }
+            next_channel_idx += num_tracks as u8;
             let primary = ids.first().copied().unwrap_or(0);
             (primary, ids)
         } else {

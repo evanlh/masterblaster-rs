@@ -97,6 +97,35 @@ fn tribal_60_tracker_tracks_have_cell_data() {
 }
 
 #[test]
+fn tribal_60_channel_indices_are_sequential() {
+    let song = load_fixture("tribal-60.bmx");
+    let mut indices: Vec<u8> = song.graph.nodes.iter()
+        .filter_map(|n| match &n.node_type {
+            NodeType::TrackerChannel { index } => Some(*index),
+            _ => None,
+        })
+        .collect();
+    indices.sort();
+    // Indices should be 0..N, matching song.channels length
+    let expected: Vec<u8> = (0..indices.len() as u8).collect();
+    assert_eq!(indices, expected, "channel indices should be 0-based sequential");
+    assert_eq!(song.channels.len(), indices.len(),
+        "song.channels count should match TrackerChannel count");
+}
+
+#[test]
+fn tribal_60_renders_without_panic() {
+    let song = load_fixture("tribal-60.bmx");
+    let ctrl = mb_master::Controller::new();
+    // Use a mutable controller with the song loaded
+    let mut ctrl = ctrl;
+    ctrl.set_song(song);
+    // Render a short segment — this would panic before the channel index fix
+    let frames = ctrl.render_frames(44100, 44100); // 1 second
+    assert!(!frames.is_empty(), "should render frames");
+}
+
+#[test]
 fn load_all_bmx_fixtures() {
     for name in &["tribal-60.bmx", "acousticelectro-drumloop-100.bmx", "Insomnium - Skooled RMX.bmx"] {
         let path = fixtures_dir().join(name);
