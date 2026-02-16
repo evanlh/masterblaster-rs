@@ -55,11 +55,56 @@ impl WideFrame {
         self.right += frame.right as i32;
     }
 
+    /// Accumulate a narrow frame with wire gain applied.
+    ///
+    /// `gain` is stored as `(ratio * 100 - 100)` where 0 = unity.
+    /// We convert back: `linear = (gain + 100) / 100`.
+    pub fn accumulate_with_gain(&mut self, frame: Frame, gain: i16) {
+        if gain == 0 {
+            self.accumulate(frame);
+        } else {
+            let scale = (gain as i32) + 100;
+            self.left += (frame.left as i32 * scale) / 100;
+            self.right += (frame.right as i32 * scale) / 100;
+        }
+    }
+
     /// Attenuate and clamp to i16 Frame.
     pub fn to_frame(self, shift: u32) -> Frame {
         Frame {
             left: (self.left >> shift).clamp(-32768, 32767) as i16,
             right: (self.right >> shift).clamp(-32768, 32767) as i16,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accumulate_with_gain_unity() {
+        let mut wide = WideFrame::silence();
+        wide.accumulate_with_gain(Frame { left: 1000, right: -500 }, 0);
+        assert_eq!(wide.left, 1000);
+        assert_eq!(wide.right, -500);
+    }
+
+    #[test]
+    fn accumulate_with_gain_half() {
+        let mut wide = WideFrame::silence();
+        // gain = -50 → scale = 50 → 50/100 = 0.5x
+        wide.accumulate_with_gain(Frame { left: 1000, right: -1000 }, -50);
+        assert_eq!(wide.left, 500);
+        assert_eq!(wide.right, -500);
+    }
+
+    #[test]
+    fn accumulate_with_gain_muted() {
+        let mut wide = WideFrame::silence();
+        // gain = -100 → scale = 0 → muted
+        wide.accumulate_with_gain(Frame { left: 1000, right: 1000 }, -100);
+        assert_eq!(wide.left, 0);
+        assert_eq!(wide.right, 0);
     }
 }

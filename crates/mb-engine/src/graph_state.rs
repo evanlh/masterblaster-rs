@@ -94,6 +94,7 @@ pub fn gather_inputs(
 }
 
 /// Gather input frames at i32 precision (no intermediate clamping).
+/// Applies per-wire gain from `Connection.gain`.
 pub fn gather_inputs_wide(
     graph: &AudioGraph,
     node_outputs: &[Frame],
@@ -103,7 +104,7 @@ pub fn gather_inputs_wide(
     for conn in &graph.connections {
         if conn.to == node_id {
             if let Some(&src_output) = node_outputs.get(conn.from as usize) {
-                wide.accumulate(src_output);
+                wide.accumulate_with_gain(src_output, conn.gain);
             }
         }
     }
