@@ -142,6 +142,9 @@ pub fn time_to_track_position(song: &Song, time: MusicalTime, group: Option<u16>
 
 /// Find which row contains `time`, given that the pattern starts at `base`.
 fn find_row_at(base: MusicalTime, time: MusicalTime, rpb: u32, max_rows: u16) -> u16 {
+    if time < base || rpb == 0 || max_rows == 0 {
+        return 0;
+    }
     let sub_per_row = crate::musical_time::SUB_BEAT_UNIT / rpb;
     let elapsed_beats = time.beat - base.beat;
     let elapsed_sub = elapsed_beats * crate::musical_time::SUB_BEAT_UNIT as u64
