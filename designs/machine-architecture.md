@@ -5,6 +5,11 @@
 - [x] Machine trait (`Machine`, `MachineInfo`, `MachineType`, `ParamInfo`, `WorkMode`)
 - [x] Graph integration (`NodeType::BuzzMachine`, `render_graph()`)
 - [x] AmigaFilter (one-pole RC LPF, first built-in machine)
+- [x] Phase 0 — BMX graph fidelity & passthrough machines
+  - [x] 0a. PassthroughMachine for unimplemented Buzz machines
+  - [x] 0b. Wire gain applied from Connection.gain
+  - [x] 0c. Master BPM/TPB extracted from BMX global params
+  - [x] 0d. Wave root_note → c4_speed pitch correction
 - [ ] Shared DSP primitives (Biquad, FilterCascade, DelayLine, Envelope, Smoother, Oscillator)
 - [ ] Phase 1 — Foundation machines
   - [ ] 1. Jeskola Distortion
@@ -268,6 +273,39 @@ band-limiting), but the phase accumulator pattern is the same.
 
 Ordered by complexity. Each phase builds on the DSP primitives established
 in prior phases.
+
+### Phase 0 — BMX Graph Fidelity (Complete)
+
+Ensures the audio graph shape matches the original Buzz song before any DSP
+porting begins. Every node has a machine instance, wire gains are applied,
+and song timing is correct.
+
+**0a. PassthroughMachine** (`machines/passthrough.rs`)
+- Built-in machine that passes input to output unchanged.
+- `create_machine()` returns this for any unrecognized DLL name.
+- Graph shape now matches Buzz exactly — every BuzzMachine node has an instance.
+- The node's `NodeType::BuzzMachine { machine_name }` carries the original
+  DLL label for display. As real machine implementations are added, they
+  replace the passthrough one-by-one.
+
+**0b. Wire gain** (`graph_state.rs`, `frame.rs`)
+- `gather_inputs_wide()` now applies `Connection.gain` per wire via
+  `WideFrame::accumulate_with_gain()`.
+- Gain encoding: `(ratio * 100 - 100)` where 0 = unity. Linear multiply.
+- Buzz wire amplitude (0..0x4000, unity at 0x4000) is converted to this
+  format in `amplitude_to_gain()` during BMX parsing.
+
+**0c. Master tempo** (`bmx_format.rs`)
+- `parse_mach()` reads the Master machine's global param state:
+  `volume(u16) + bpm(u16) + tpb(u8)`.
+- BPM and TPB feed into `song.initial_tempo` and `song.rows_per_beat`.
+- Previously hardcoded to 126 BPM / 4 TPB.
+
+**0d. Wave root_note** (`bmx_format.rs`)
+- Buzz waves store `root_note` (Buzz note at which the sample plays at
+  native rate). 0x41 = C-4 = our MIDI 48 baseline.
+- When root_note ≠ C-4, `c4_speed` is adjusted:
+  `c4_speed = sample_rate * 2^((midi_offset) / 12.0)`.
 
 ### Phase 1 — Foundation
 
