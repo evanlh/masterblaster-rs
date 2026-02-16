@@ -52,7 +52,7 @@ pub fn pattern_editor(
     let num_channels = track_indices.len() as u8;
 
     let playing_row = pos
-        .filter(|p| p.seq_index == gui.selected_seq_index)
+        .filter(|p| p.clip_idx == clip_idx)
         .map(|p| p.row);
 
     let edit_indicator = if gui.editor.edit_mode { " [EDIT]" } else { "" };
@@ -198,6 +198,7 @@ fn render_row(
             .and_then(|&ti| song.tracks.get(ti as usize))
             .and_then(|t| t.clips.get(clip_idx as usize))
             .and_then(|c| c.pattern())
+            .filter(|p| row < p.rows)
             .map(|p| p.cell(row, 0))
             .unwrap_or(&empty);
 

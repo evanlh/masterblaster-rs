@@ -787,7 +787,8 @@ fn parse_sequ(
         } else {
             let node_id = mach.map_or(0, |m| m.node_id);
             let mut track = Track::new(node_id, mach_name);
-            track.group = Some(0);
+            // Non-tracker machines have independent sequences/patterns —
+            // they don't belong in the tracker pattern editor group.
 
             // Add empty clips from this machine's pattern pool
             if let Some(pats) = all_patterns.get(machine_idx) {
