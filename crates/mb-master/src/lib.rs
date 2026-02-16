@@ -19,6 +19,28 @@ pub use mb_ir::{pack_time, unpack_time, Edit, PlaybackPosition, Song, TrackPlayb
 /// Ring buffer capacity for edit commands sent to the audio thread.
 const EDIT_RING_CAPACITY: usize = 256;
 
+// ---------------------------------------------------------------------------
+// Allocation guards — no-ops without the `alloc_check` feature.
+// ---------------------------------------------------------------------------
+
+/// Wrap `f` in assert_no_alloc (aborts on heap allocation).
+#[cfg(feature = "alloc_check")]
+fn alloc_guard<R>(f: impl FnOnce() -> R) -> R {
+    assert_no_alloc::assert_no_alloc(f)
+}
+#[cfg(not(feature = "alloc_check"))]
+#[inline(always)]
+fn alloc_guard<R>(f: impl FnOnce() -> R) -> R { f() }
+
+/// Temporarily permit allocations inside an `alloc_guard` block.
+#[cfg(feature = "alloc_check")]
+fn alloc_permit<R>(f: impl FnOnce() -> R) -> R {
+    assert_no_alloc::permit_alloc(f)
+}
+#[cfg(not(feature = "alloc_check"))]
+#[inline(always)]
+fn alloc_permit<R>(f: impl FnOnce() -> R) -> R { f() }
+
 /// Headless tracker controller — owns a song and manages playback.
 pub struct Controller {
     song: Song,
@@ -290,37 +312,66 @@ fn audio_thread(
     let sample_rate = output.sample_rate();
     let mut engine = Engine::new(song, sample_rate);
     engine.schedule_song();
-    engine.play();
 
-    if output.build_stream(consumer, std::thread::current()).is_err() {
-        finished.store(true, Ordering::Relaxed);
-        return;
-    }
-    let _ = output.start();
+    alloc_guard(|| {
+        engine.play();
 
+        alloc_permit(|| {
+            if output.build_stream(consumer, std::thread::current()).is_err() {
+                return;
+            }
+            let _ = output.start();
+        });
+
+        run_audio_loop(
+            &mut engine, &mut output, &stop_signal, &current_time,
+            &mut edit_consumer, sample_rate,
+        );
+    });
+
+    finished.store(true, Ordering::Relaxed);
+}
+
+/// Main audio render loop. Must be called inside `alloc_guard`.
+fn run_audio_loop(
+    engine: &mut Engine,
+    output: &mut CpalOutput,
+    stop_signal: &AtomicBool,
+    current_time: &AtomicU64,
+    edit_consumer: &mut ringbuf::HeapCons<Edit>,
+    sample_rate: u32,
+) {
+    const BATCH_SIZE: usize = 256;
     let report_interval = (sample_rate / 100) as u64;
     let mut frame_count: u64 = 0;
-    let mut edit_buf = Vec::new();
+    let mut edit_buf: Vec<Edit> = alloc_permit(|| Vec::new());
+    let mut batch = [Frame::silence(); BATCH_SIZE];
 
     while !engine.is_finished() && !stop_signal.load(Ordering::Relaxed) {
-        drain_edits(&mut edit_consumer, &mut edit_buf);
+        alloc_permit(|| drain_edits(edit_consumer, &mut edit_buf));
         if !edit_buf.is_empty() {
             engine.apply_edits(&edit_buf);
             edit_buf.clear();
         }
 
-        output.write_park(engine.render_frame());
-        frame_count += 1;
+        let n = frames_until_report(frame_count, report_interval, BATCH_SIZE);
+        engine.render_frames_into(&mut batch[..n]);
+        output.write_batch_park(&batch[..n]);
+
+        frame_count += n as u64;
         if frame_count % report_interval == 0 {
             current_time.store(pack_time(engine.position()), Ordering::Relaxed);
         }
     }
 
-    for _ in 0..sample_rate {
-        output.write_park(Frame::silence());
+    let silence = [Frame::silence(); BATCH_SIZE];
+    let tail_frames = sample_rate as usize;
+    let mut written = 0;
+    while written < tail_frames {
+        let n = (tail_frames - written).min(BATCH_SIZE);
+        output.write_batch_park(&silence[..n]);
+        written += n;
     }
-
-    finished.store(true, Ordering::Relaxed);
 }
 
 /// Drain all available edits from the consumer into the buffer.
@@ -328,6 +379,12 @@ fn drain_edits(consumer: &mut ringbuf::HeapCons<Edit>, buf: &mut Vec<Edit>) {
     while let Some(edit) = consumer.try_pop() {
         buf.push(edit);
     }
+}
+
+/// Frames to render before the next position report, clamped to batch_size.
+fn frames_until_report(frame_count: u64, interval: u64, batch_size: usize) -> usize {
+    let remaining = interval - (frame_count % interval);
+    (remaining as usize).min(batch_size)
 }
 
 /// Number of clips in the first track of the given group.

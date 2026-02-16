@@ -178,6 +178,18 @@ impl Engine {
         }
     }
 
+    /// Render multiple frames, returning a new Vec (offline rendering).
+    pub fn render_frames(&mut self, count: usize) -> Vec<Frame> {
+        (0..count).map(|_| self.render_frame()).collect()
+    }
+
+    /// Render frames into a caller-provided buffer (allocation-free).
+    pub fn render_frames_into(&mut self, buf: &mut [Frame]) {
+        for frame in buf.iter_mut() {
+            *frame = self.render_frame();
+        }
+    }
+
     fn render_frame_inner(&mut self) -> Frame {
         if !self.playing {
             return Frame::silence();
@@ -550,18 +562,6 @@ impl Engine {
             self.event_queue.push(event);
         }
         self.event_queue.reset_cursor();
-    }
-
-    /// Render multiple frames, returning a new Vec (offline rendering).
-    pub fn render_frames(&mut self, count: usize) -> Vec<Frame> {
-        (0..count).map(|_| self.render_frame()).collect()
-    }
-
-    /// Render frames into a caller-provided buffer (allocation-free).
-    pub fn render_frames_into(&mut self, buf: &mut [Frame]) {
-        for frame in buf.iter_mut() {
-            *frame = self.render_frame();
-        }
     }
 
     /// Get a reference to a channel's state (for testing).

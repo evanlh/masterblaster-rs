@@ -69,7 +69,7 @@ path = "src/bin/cli.rs"
 
 [features]
 test-harness = ["png"]
-alloc_check = ["mb-engine/alloc_check"]
+alloc_check = ["mb-master/alloc_check"]
 
 [[test]]
 name = "gui_tests"

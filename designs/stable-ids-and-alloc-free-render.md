@@ -16,7 +16,7 @@
   - [ ] 4b. `graph_state.rs`: `SecondaryMap<NodeKey, Frame>` for node outputs
   - [ ] 4c. `machine.rs` / `mixer.rs`: machine storage keyed by `NodeKey`
   - [ ] 4d. Update all `NodeId` references across codebase
-- [ ] 5. Batch rendering in audio thread — replace per-frame `write_park` with `render_frames_into` batches
+- [x] 5. Batch rendering in audio thread — replace per-frame `write_park` with `render_frames_into` batches
 
 ---
 

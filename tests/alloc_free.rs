@@ -32,14 +32,19 @@ fn load_bmx(name: &str) -> mb_ir::Song {
 }
 
 /// Render a song for `duration_frames`, aborting on any heap allocation.
+/// Exercises the full audio-thread hot path: render + position + is_finished.
 fn assert_render_alloc_free(song: mb_ir::Song, duration_frames: usize) {
     let mut engine = Engine::new(song, 44100);
     engine.schedule_song();
     engine.play();
 
     assert_no_alloc(|| {
-        for _ in 0..duration_frames {
+        for i in 0..duration_frames {
+            if engine.is_finished() { break; }
             engine.render_frame();
+            if i % 441 == 0 {
+                let _ = engine.position();
+            }
         }
     });
 }
