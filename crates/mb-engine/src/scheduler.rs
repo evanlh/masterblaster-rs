@@ -304,6 +304,11 @@ fn schedule_group(
         .filter_map(|&ti| track_channel_index(&song.tracks[ti], song).map(|ch| (ti, ch)))
         .collect();
 
+    // Skip non-tracker tracks (e.g. BuzzMachine nodes without TrackerChannel mapping)
+    if channels.is_empty() {
+        return MusicalTime::zero();
+    }
+
     let song_rpb = song.rows_per_beat as u32;
     let mut speed: u32 = song.initial_speed as u32;
     let mut seq_idx: usize = 0;

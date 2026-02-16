@@ -60,6 +60,43 @@ fn tribal_60_has_samples() {
 }
 
 #[test]
+fn tribal_60_has_tracker_channels() {
+    let song = load_fixture("tribal-60.bmx");
+    let tracker_nodes: Vec<_> = song.graph.nodes.iter()
+        .filter(|n| matches!(n.node_type, NodeType::TrackerChannel { .. }))
+        .collect();
+    assert!(!tracker_nodes.is_empty(), "should have TrackerChannel nodes");
+}
+
+#[test]
+fn tribal_60_has_channel_settings() {
+    let song = load_fixture("tribal-60.bmx");
+    assert!(!song.channels.is_empty(), "should have ChannelSettings");
+}
+
+#[test]
+fn tribal_60_has_instruments() {
+    let song = load_fixture("tribal-60.bmx");
+    assert!(!song.instruments.is_empty(), "should have instruments");
+}
+
+#[test]
+fn tribal_60_tracker_tracks_have_cell_data() {
+    let song = load_fixture("tribal-60.bmx");
+    // Find tracks targeting TrackerChannel nodes
+    let has_notes = song.tracks.iter().any(|track| {
+        let is_tracker = song.graph.node(track.target)
+            .map_or(false, |n| matches!(n.node_type, NodeType::TrackerChannel { .. }));
+        is_tracker && track.clips.iter().any(|clip| {
+            clip.pattern().map_or(false, |pat| {
+                pat.data.iter().any(|cell| !cell.is_empty())
+            })
+        })
+    });
+    assert!(has_notes, "tracker tracks should have cell data");
+}
+
+#[test]
 fn load_all_bmx_fixtures() {
     for name in &["tribal-60.bmx", "acousticelectro-drumloop-100.bmx", "Insomnium - Skooled RMX.bmx"] {
         let path = fixtures_dir().join(name);

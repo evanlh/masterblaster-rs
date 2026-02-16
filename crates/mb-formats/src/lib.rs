@@ -4,6 +4,7 @@
 
 #[allow(dead_code)]
 mod bmx_format;
+mod effect_parser;
 mod mod_format;
 mod wav_format;
 

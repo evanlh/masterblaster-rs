@@ -6,11 +6,13 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use mb_ir::{
-    AudioGraph, Clip, Connection, LoopType, MusicalTime, NodeId, NodeType, Parameter, Pattern,
-    Sample, SampleData, SeqEntry, Song, Track,
+    AudioGraph, Cell, ChannelSettings, Clip, Connection, Instrument, LoopType,
+    MusicalTime, NodeId, NodeType, Note, Parameter, Pattern, Sample, SampleData, SeqEntry, Song,
+    Track, VolumeCommand,
 };
 
 use crate::FormatError;
+use crate::effect_parser::parse_effect;
 
 // ---------------------------------------------------------------------------
 // BmxReader — cursor over a byte slice
@@ -182,15 +184,69 @@ struct BmxMachine {
     name: String,
     #[allow(dead_code)]
     machine_type: u8,
-    #[allow(dead_code)]
     dll_name: Option<String>,
     node_id: NodeId,
     num_inputs: u16,
+    is_tracker: bool,
+    num_tracks: u16,
+    channel_node_ids: Vec<NodeId>,
 }
 
 struct BmxPattern {
     name: String,
     ticks: u16,
+    pattern: Option<Pattern>,
+}
+
+/// Returns true for DLL names that are tracker machines (cell-based).
+fn is_tracker_dll(dll: &str) -> bool {
+    matches!(dll, "Jeskola Tracker" | "Matilde Tracker" | "Matilde Tracker 2")
+}
+
+/// Convert a Buzz note byte to our Note type.
+/// Buzz encoding: high nibble = octave, low nibble = note (1=C..12=B).
+/// 0 = no note, 255 = note off.
+fn buzz_note_to_note(buzz: u8) -> Note {
+    match buzz {
+        0 => Note::None,
+        255 => Note::Off,
+        _ => {
+            let octave = buzz >> 4;
+            let semi = (buzz & 0x0F).wrapping_sub(1);
+            if semi < 12 {
+                Note::On(octave * 12 + semi)
+            } else {
+                Note::None
+            }
+        }
+    }
+}
+
+/// Convert a Buzz volume byte (0-254) to VolumeCommand. 0xFF = no change.
+fn buzz_volume_to_cmd(vol: u8) -> VolumeCommand {
+    if vol == 0xFF {
+        VolumeCommand::None
+    } else {
+        // Buzz volume range is 0-0xFE, scale to 0-64
+        let scaled = ((vol as u32) * 64 / 0xFE) as u8;
+        VolumeCommand::Volume(scaled)
+    }
+}
+
+/// Build a wave-index lookup: maps Buzz wave index → 1-based instrument number.
+fn build_wave_lookup(bmx_waves: &[BmxWave]) -> Vec<(u16, u8)> {
+    bmx_waves.iter().enumerate()
+        .map(|(i, w)| (w.index, (i + 1) as u8))
+        .collect()
+}
+
+/// Look up instrument number from Buzz wave index. 0 = no instrument.
+fn wave_to_instrument(wave: u8, lookup: &[(u16, u8)]) -> u8 {
+    if wave == 0 { return 0; }
+    lookup.iter()
+        .find(|(idx, _)| *idx == wave as u16)
+        .map(|(_, inst)| *inst)
+        .unwrap_or(0)
 }
 
 struct BmxWaveLevel {
@@ -423,29 +479,44 @@ fn parse_mach(
         let num_tracks = r.read_u16_le()? as usize;
         r.skip(num_tracks * para.track_byte_size())?;
 
-        // Create graph node
-        let node_id = if machine_type == 0 {
-            0
+        // Detect tracker machines
+        let is_tracker = dll_name.as_deref().map_or(false, is_tracker_dll);
+
+        // Create graph node(s)
+        let (node_id, channel_node_ids) = if machine_type == 0 {
+            (0, Vec::new())
+        } else if is_tracker {
+            // Create one TrackerChannel node per track
+            let mut ids = Vec::with_capacity(num_tracks);
+            let first_idx = graph.nodes.len() as u8;
+            for t in 0..num_tracks {
+                let ch_idx = first_idx + t as u8;
+                ids.push(graph.add_node(NodeType::TrackerChannel { index: ch_idx }));
+            }
+            let primary = ids.first().copied().unwrap_or(0);
+            (primary, ids)
         } else {
-            graph.add_node(NodeType::BuzzMachine { machine_name: name.clone() })
+            let id = graph.add_node(NodeType::BuzzMachine { machine_name: name.clone() });
+            // Add IR parameters to non-tracker graph nodes
+            if let Some(node) = graph.node_mut(id) {
+                for (j, p) in para.global_params.iter().enumerate() {
+                    node.parameters.push(Parameter::new(
+                        j as u16, &p.name, p.min, p.max, p.default,
+                    ));
+                }
+            }
+            (id, Vec::new())
         };
 
-        // Add IR parameters to graph node
-        if let Some(node) = graph.node_mut(node_id) {
-            for (j, p) in para.global_params.iter().enumerate() {
-                node.parameters.push(Parameter::new(
-                    j as u16, &p.name, p.min, p.max, p.default,
-                ));
-            }
-        }
-
         eprintln!(
-            "[BMX] Machine {}: \"{}\" type={} dll={} pos=({:.0},{:.0})",
-            i, name, type_str, dll_name.as_deref().unwrap_or("(none)"), x, y
+            "[BMX] Machine {}: \"{}\" type={} dll={} pos=({:.0},{:.0}){}",
+            i, name, type_str, dll_name.as_deref().unwrap_or("(none)"), x, y,
+            if is_tracker { alloc::format!(" [tracker, {} tracks]", num_tracks) } else { String::new() }
         );
 
         machines.push(BmxMachine {
             name, machine_type, dll_name, node_id, num_inputs: 0,
+            is_tracker, num_tracks: num_tracks as u16, channel_node_ids,
         });
         para_defs.push(para);
     }
@@ -474,14 +545,23 @@ fn parse_conn(
         let pan = r.read_u16_le()?;
 
         if src_idx < machines.len() && dst_idx < machines.len() {
-            let from_id = machines[src_idx].node_id;
-            let to_id = machines[dst_idx].node_id;
             let gain = amplitude_to_gain(amp);
+            let to_id = machines[dst_idx].node_id;
 
-            graph.connections.push(Connection {
-                from: from_id, to: to_id,
-                from_channel: 0, to_channel: 0, gain,
-            });
+            if machines[src_idx].is_tracker {
+                // Connect each TrackerChannel to the destination
+                for &ch_id in &machines[src_idx].channel_node_ids {
+                    graph.connections.push(Connection {
+                        from: ch_id, to: to_id,
+                        from_channel: 0, to_channel: 0, gain,
+                    });
+                }
+            } else {
+                graph.connections.push(Connection {
+                    from: machines[src_idx].node_id, to: to_id,
+                    from_channel: 0, to_channel: 0, gain,
+                });
+            }
 
             machines[dst_idx].num_inputs += 1;
 
@@ -512,6 +592,7 @@ fn parse_patt(
     entry: &SectionEntry,
     machines: &[BmxMachine],
     para_defs: &[BmxParaDef],
+    wave_lookup: &[(u16, u8)],
 ) -> Result<Vec<Vec<BmxPattern>>, FormatError> {
     r.seek(entry.offset as usize);
     let empty = BmxParaDef { global_params: Vec::new(), track_params: Vec::new() };
@@ -521,6 +602,7 @@ fn parse_patt(
         let num_patterns = r.read_u16_le()? as usize;
         let num_tracks = r.read_u16_le()? as usize;
         let para = para_defs.get(mi).unwrap_or(&empty);
+        let track_bytes = para.track_byte_size();
         let mut patterns = Vec::with_capacity(num_patterns);
 
         for _ in 0..num_patterns {
@@ -536,26 +618,68 @@ fn parse_patt(
             // Skip global parameters: num_ticks × global_byte_size
             r.skip(num_ticks as usize * para.global_byte_size())?;
 
-            // Skip track parameters: num_tracks × num_ticks × track_byte_size
-            r.skip(num_tracks * num_ticks as usize * para.track_byte_size())?;
+            let pattern = if mach.is_tracker && track_bytes >= 5 {
+                Some(read_tracker_pattern(r, num_ticks, num_tracks, track_bytes, wave_lookup)?)
+            } else {
+                // Skip track parameters for non-tracker machines
+                r.skip(num_tracks * num_ticks as usize * track_bytes)?;
+                None
+            };
 
-            patterns.push(BmxPattern { name, ticks: num_ticks });
+            patterns.push(BmxPattern { name, ticks: num_ticks, pattern });
         }
 
         if !patterns.is_empty() {
             eprintln!(
-                "[BMX] PATT: machine \"{}\" has {} patterns",
-                mach.name, patterns.len()
+                "[BMX] PATT: machine \"{}\" has {} patterns{}",
+                mach.name, patterns.len(),
+                if mach.is_tracker { " [tracker cells]" } else { "" }
             );
-            for p in &patterns {
-                eprintln!("  - \"{}\" ({} ticks)", p.name, p.ticks);
-            }
         }
 
         all_patterns.push(patterns);
     }
 
     Ok(all_patterns)
+}
+
+/// Read tracker pattern cell data from track parameters.
+/// Layout per tick per track: Note(u8), Wave(u8), Vol(u8), Effect(u8), EffectArg(u8)
+/// Matilde Tracker 2 adds: Effect2(u8), EffectArg2(u8) (7 bytes total, second effect ignored).
+fn read_tracker_pattern(
+    r: &mut BmxReader,
+    num_ticks: u16,
+    num_tracks: usize,
+    track_bytes: usize,
+    wave_lookup: &[(u16, u8)],
+) -> Result<Pattern, FormatError> {
+    let mut pattern = Pattern::new(num_ticks, num_tracks as u8);
+    let extra_bytes = track_bytes.saturating_sub(5);
+
+    for track in 0..num_tracks {
+        for tick in 0..num_ticks {
+            let note_byte = r.read_u8()?;
+            let wave_byte = r.read_u8()?;
+            let vol_byte = r.read_u8()?;
+            let effect_cmd = r.read_u8()?;
+            let effect_arg = r.read_u8()?;
+            // Skip extra bytes (e.g. Matilde Tracker 2's second effect column)
+            r.skip(extra_bytes)?;
+
+            let cell = Cell {
+                note: buzz_note_to_note(note_byte),
+                instrument: wave_to_instrument(wave_byte, wave_lookup),
+                volume: buzz_volume_to_cmd(vol_byte),
+                effect: parse_effect(effect_cmd, effect_arg),
+            };
+
+            if !cell.is_empty() {
+                *pattern.cell_mut(tick, track as u8) = cell;
+            }
+        }
+    }
+
+    Ok(pattern)
 }
 
 // ---------------------------------------------------------------------------
@@ -594,18 +718,8 @@ fn parse_sequ(
         };
 
         let mach = machines.get(machine_idx);
-        let node_id = mach.map_or(0, |m| m.node_id);
-        let mach_name = mach.map_or("?", |m| &m.name);
-
-        let mut track = Track::new(node_id, mach_name);
-        track.group = Some(0);
-
-        // Add clips from this machine's pattern pool
-        if let Some(pats) = all_patterns.get(machine_idx) {
-            for bp in pats {
-                track.clips.push(Clip::Pattern(Pattern::new(bp.ticks, 1)));
-            }
-        }
+        let mach_name = mach.map_or("?", |m| m.name.as_str());
+        let is_tracker = mach.map_or(false, |m| m.is_tracker);
 
         // Parse sequence events
         let mut seq_entries = Vec::new();
@@ -621,19 +735,68 @@ fn parse_sequ(
             }
         }
 
-        track.sequence = seq_entries;
+        if is_tracker && mach.is_some() {
+            let m = mach.unwrap();
+            let pats = all_patterns.get(machine_idx);
+            // Create one Track per channel (TrackerChannel)
+            for (ch_i, &ch_node_id) in m.channel_node_ids.iter().enumerate() {
+                let track_name = alloc::format!("{} Ch{}", mach_name, ch_i + 1);
+                let mut track = Track::new(ch_node_id, &track_name);
+                track.group = Some(0);
+
+                // Extract single-column clips from multi-channel patterns
+                if let Some(pats) = pats {
+                    for bp in pats {
+                        let clip = match &bp.pattern {
+                            Some(pat) => extract_single_column(pat, ch_i as u8),
+                            None => Pattern::new(bp.ticks, 1),
+                        };
+                        track.clips.push(Clip::Pattern(clip));
+                    }
+                }
+
+                track.sequence = seq_entries.clone();
+                tracks.push(track);
+            }
+        } else {
+            let node_id = mach.map_or(0, |m| m.node_id);
+            let mut track = Track::new(node_id, mach_name);
+            track.group = Some(0);
+
+            // Add empty clips from this machine's pattern pool
+            if let Some(pats) = all_patterns.get(machine_idx) {
+                for bp in pats {
+                    track.clips.push(Clip::Pattern(Pattern::new(bp.ticks, 1)));
+                }
+            }
+
+            track.sequence = seq_entries;
+            tracks.push(track);
+        }
 
         if num_events > 0 {
             eprintln!(
-                "[BMX] Sequence for \"{}\": {} events, {} pattern refs",
-                mach_name, num_events, track.sequence.len()
+                "[BMX] Sequence for \"{}\": {} events, {} pattern refs{}",
+                mach_name, num_events,
+                tracks.last().map_or(0, |t| t.sequence.len()),
+                if is_tracker { " [per-channel]" } else { "" }
             );
         }
-
-        tracks.push(track);
     }
 
     Ok(tracks)
+}
+
+/// Extract a single channel column from a multi-channel pattern.
+fn extract_single_column(pattern: &Pattern, channel: u8) -> Pattern {
+    let mut single = Pattern::new(pattern.rows, 1);
+    single.rows_per_beat = pattern.rows_per_beat;
+    for row in 0..pattern.rows {
+        if channel < pattern.channels {
+            *single.cell_mut(row, 0) = *pattern.cell(row, channel);
+        }
+    }
+    single
 }
 
 fn extract_event_id(raw: u32, bpe: u8) -> u32 {
@@ -863,21 +1026,22 @@ pub fn load_bmx(data: &[u8]) -> Result<Song, FormatError> {
     let conn_entry = find_section(&sections, b"CONN").ok_or(FormatError::InvalidHeader)?;
     parse_conn(&mut r, conn_entry, &mut machines, &mut graph)?;
 
-    // 6. PATT (required)
-    let patt_entry = find_section(&sections, b"PATT").ok_or(FormatError::InvalidHeader)?;
-    let all_patterns = parse_patt(&mut r, patt_entry, &machines, &para_defs)?;
-
-    // 7. SEQU (required)
-    let rows_per_beat: u8 = 4;
-    let sequ_entry = find_section(&sections, b"SEQU").ok_or(FormatError::InvalidHeader)?;
-    let tracks = parse_sequ(&mut r, sequ_entry, &machines, &all_patterns, rows_per_beat)?;
-
-    // 8. WAVT (optional)
+    // 6. WAVT (optional, parsed before PATT so we have wave lookup for cell data)
     let bmx_waves = if let Some(entry) = find_section(&sections, b"WAVT") {
         parse_wavt(&mut r, entry)?
     } else {
         Vec::new()
     };
+    let wave_lookup = build_wave_lookup(&bmx_waves);
+
+    // 7. PATT (required)
+    let patt_entry = find_section(&sections, b"PATT").ok_or(FormatError::InvalidHeader)?;
+    let all_patterns = parse_patt(&mut r, patt_entry, &machines, &para_defs, &wave_lookup)?;
+
+    // 8. SEQU (required)
+    let rows_per_beat: u8 = 4;
+    let sequ_entry = find_section(&sections, b"SEQU").ok_or(FormatError::InvalidHeader)?;
+    let tracks = parse_sequ(&mut r, sequ_entry, &machines, &all_patterns, rows_per_beat)?;
 
     // 9. CWAV / WAVE (optional)
     let wave_data = find_section(&sections, b"CWAV")
@@ -886,6 +1050,28 @@ pub fn load_bmx(data: &[u8]) -> Result<Song, FormatError> {
         .transpose()?
         .unwrap_or_default();
 
+    // Set up ChannelSettings for all TrackerChannel nodes
+    let num_tracker_channels = machines.iter()
+        .flat_map(|m| &m.channel_node_ids)
+        .count();
+    let channels: Vec<ChannelSettings> = (0..num_tracker_channels)
+        .map(|i| ChannelSettings {
+            // L-R-R-L panning pattern
+            initial_pan: if i % 4 == 0 || i % 4 == 3 { -64 } else { 64 },
+            initial_vol: 64,
+            muted: false,
+        })
+        .collect();
+
+    // Build instruments (one per wave, single-sample mapping)
+    let instruments: Vec<Instrument> = bmx_waves.iter().enumerate()
+        .map(|(i, w)| {
+            let mut inst = Instrument::new(&w.name);
+            inst.set_single_sample(i as u8);
+            inst
+        })
+        .collect();
+
     // Assemble Song
     let mut song = Song::new("BMX Song");
     song.initial_tempo = 126;
@@ -893,6 +1079,8 @@ pub fn load_bmx(data: &[u8]) -> Result<Song, FormatError> {
     song.rows_per_beat = rows_per_beat;
     song.graph = graph;
     song.tracks = tracks;
+    song.channels = channels;
+    song.instruments = instruments;
     song.samples = build_samples(&bmx_waves, &wave_data);
 
     let total = song.total_time();
@@ -1011,5 +1199,59 @@ mod tests {
     fn known_machine_lookup() {
         assert_eq!(known_machine_byte_sizes("Jeskola Tracker"), Some((1, 5)));
         assert_eq!(known_machine_byte_sizes("Unknown Machine"), None);
+    }
+
+    #[test]
+    fn buzz_note_c4() {
+        // Buzz C-4 = octave 4, note 1 (C) → MIDI 48
+        assert_eq!(buzz_note_to_note(0x41), Note::On(48));
+    }
+
+    #[test]
+    fn buzz_note_off() {
+        assert_eq!(buzz_note_to_note(255), Note::Off);
+    }
+
+    #[test]
+    fn buzz_note_none() {
+        assert_eq!(buzz_note_to_note(0), Note::None);
+    }
+
+    #[test]
+    fn buzz_note_a5() {
+        // Buzz A-5 = octave 5, note 10 (A) → MIDI 69
+        assert_eq!(buzz_note_to_note(0x5A), Note::On(69));
+    }
+
+    #[test]
+    fn buzz_volume_none() {
+        assert_eq!(buzz_volume_to_cmd(0xFF), VolumeCommand::None);
+    }
+
+    #[test]
+    fn buzz_volume_max() {
+        assert_eq!(buzz_volume_to_cmd(0xFE), VolumeCommand::Volume(64));
+    }
+
+    #[test]
+    fn buzz_volume_zero() {
+        assert_eq!(buzz_volume_to_cmd(0), VolumeCommand::Volume(0));
+    }
+
+    #[test]
+    fn wave_lookup_maps_correctly() {
+        let lookup = vec![(5u16, 1u8), (12, 2)];
+        assert_eq!(wave_to_instrument(0, &lookup), 0);
+        assert_eq!(wave_to_instrument(5, &lookup), 1);
+        assert_eq!(wave_to_instrument(12, &lookup), 2);
+        assert_eq!(wave_to_instrument(99, &lookup), 0);
+    }
+
+    #[test]
+    fn is_tracker_dll_detects_trackers() {
+        assert!(is_tracker_dll("Jeskola Tracker"));
+        assert!(is_tracker_dll("Matilde Tracker"));
+        assert!(is_tracker_dll("Matilde Tracker 2"));
+        assert!(!is_tracker_dll("Jeskola Reverb 2"));
     }
 }
