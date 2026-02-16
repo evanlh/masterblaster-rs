@@ -433,17 +433,25 @@ fn resolve_para_def(machine_type: u8, dll_name: &Option<String>, para_defs: &Opt
     BmxParaDef { global_params: Vec::new(), track_params: Vec::new() }
 }
 
+/// Parsed Master tempo settings.
+struct MasterParams {
+    bpm: u16,
+    tpb: u8,
+}
+
 fn parse_mach(
     r: &mut BmxReader,
     entry: &SectionEntry,
     para_from_section: &Option<Vec<BmxParaDef>>,
     graph: &mut AudioGraph,
-) -> Result<(Vec<BmxMachine>, Vec<BmxParaDef>), FormatError> {
+) -> Result<(Vec<BmxMachine>, Vec<BmxParaDef>, MasterParams), FormatError> {
     r.seek(entry.offset as usize);
     let num_machines = r.read_u16_le()? as usize;
     let mut machines = Vec::with_capacity(num_machines);
     let mut para_defs = Vec::with_capacity(num_machines);
     let mut next_channel_idx: u8 = 0;
+    let mut master_bpm: u16 = 126;
+    let mut master_tpb: u8 = 4;
 
     for i in 0..num_machines {
         let name = r.read_null_string()?;
@@ -472,9 +480,25 @@ fn parse_mach(
             let _attr_val = r.read_u32_le()?;
         }
 
-        // Resolve param defs and skip global param state
+        // Resolve param defs and read/skip global param state
         let para = resolve_para_def(machine_type, &dll_name, para_from_section, i);
-        r.skip(para.global_byte_size())?;
+        if machine_type == 0 {
+            // Master: read volume(u16) + bpm(u16) + tpb(u8)
+            let remaining = para.global_byte_size();
+            if remaining >= 5 {
+                let _volume = r.read_u16_le()?;
+                let bpm = r.read_u16_le()?;
+                let tpb = r.read_u8()?;
+                master_bpm = bpm;
+                master_tpb = tpb;
+                eprintln!("[BMX] Master params: bpm={}, tpb={}", bpm, tpb);
+                r.skip(remaining - 5)?;
+            } else {
+                r.skip(remaining)?;
+            }
+        } else {
+            r.skip(para.global_byte_size())?;
+        }
 
         // Skip track param state
         let num_tracks = r.read_u16_le()? as usize;
@@ -524,7 +548,7 @@ fn parse_mach(
     }
 
     eprintln!("[BMX] MACH: {} machines", machines.len());
-    Ok((machines, para_defs))
+    Ok((machines, para_defs, MasterParams { bpm: master_bpm, tpb: master_tpb }))
 }
 
 // ---------------------------------------------------------------------------
@@ -884,6 +908,197 @@ fn skip_envelopes(r: &mut BmxReader) -> Result<(), FormatError> {
 // CWAV / WAVE — audio sample data
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Buzz wave decompression (format=1)
+// ---------------------------------------------------------------------------
+
+/// Bit-stream reader for Buzz compressed wave data.
+struct BitReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+    bit: u8,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(data: &'a [u8], start: usize) -> Self {
+        Self { data, pos: start, bit: 0 }
+    }
+
+    /// Read `amount` bits (1..32) from the stream, LSB first.
+    fn read_bits(&mut self, mut amount: u32) -> Result<u32, FormatError> {
+        let mut result: u32 = 0;
+        let mut shift: u32 = 0;
+        while amount > 0 {
+            if self.pos >= self.data.len() {
+                return Err(FormatError::UnexpectedEof);
+            }
+            let avail = 8 - self.bit as u32;
+            let take = amount.min(avail);
+            let mask = (1u32 << take) - 1;
+            let val = ((self.data[self.pos] >> self.bit) as u32) & mask;
+            result |= val << shift;
+            self.bit += take as u8;
+            if self.bit >= 8 {
+                self.bit = 0;
+                self.pos += 1;
+            }
+            shift += take;
+            amount -= take;
+        }
+        Ok(result)
+    }
+
+    /// Count consecutive zero bits (for variable-length prefix coding).
+    fn count_zero_bits(&mut self) -> Result<u32, FormatError> {
+        let mut count: u32 = 0;
+        loop {
+            let bit = self.read_bits(1)?;
+            if bit != 0 { return Ok(count); }
+            count += 1;
+        }
+    }
+
+    /// Current byte position (for seek after decompression).
+    fn byte_pos(&self) -> usize {
+        if self.bit > 0 { self.pos + 1 } else { self.pos }
+    }
+}
+
+/// Per-channel decompression state.
+#[derive(Default)]
+struct DecompState {
+    sum1: i16,
+    sum2: i16,
+    result: i16,
+}
+
+/// Decode a signed value from the variable-length unsigned encoding.
+/// Uses zigzag decoding: even → positive, odd → negative.
+fn decode_signed(val: u32) -> i16 {
+    if val & 1 == 0 {
+        (val >> 1) as i16
+    } else {
+        (((val.wrapping_add(1)) >> 1) as i16).wrapping_neg()
+    }
+}
+
+/// Decompress one block of samples for one channel.
+fn decompress_block(
+    br: &mut BitReader,
+    state: &mut DecompState,
+    out: &mut [i16],
+) -> Result<(), FormatError> {
+    let switch = br.read_bits(2)?;
+    let bits = br.read_bits(4)?;
+
+    for sample in out.iter_mut() {
+        let val = br.read_bits(bits)?;
+        let zeros = br.count_zero_bits()?;
+        let combined = (zeros << bits) | val;
+        let delta = decode_signed(combined);
+
+        match switch {
+            0 => {
+                state.sum2 = delta.wrapping_sub(state.result).wrapping_sub(state.sum1);
+                state.sum1 = delta.wrapping_sub(state.result);
+                state.result = delta;
+            }
+            1 => {
+                state.sum2 = delta.wrapping_sub(state.sum1);
+                state.sum1 = delta;
+                state.result = state.result.wrapping_add(delta);
+            }
+            2 => {
+                state.sum2 = delta;
+                state.sum1 = state.sum1.wrapping_add(delta);
+                state.result = state.result.wrapping_add(state.sum1);
+            }
+            _ => {
+                state.sum2 = state.sum2.wrapping_add(delta);
+                state.sum1 = state.sum1.wrapping_add(state.sum2);
+                state.result = state.result.wrapping_add(state.sum1);
+            }
+        }
+        *sample = state.result;
+    }
+    Ok(())
+}
+
+/// Decompress a full Buzz compressed wave.
+/// Returns decompressed i16 samples (interleaved for stereo).
+fn decompress_wave(
+    br: &mut BitReader,
+    num_samples: usize,
+    channels: usize,
+) -> Result<Vec<i16>, FormatError> {
+    // Skip leading zero bits
+    let _leading = br.count_zero_bits()?;
+
+    let shift = br.read_bits(4)? as usize;
+    let block_size = 1usize << shift;
+    let num_blocks = num_samples >> shift;
+    let last_block_size = num_samples & (block_size - 1);
+    let result_shift = br.read_bits(4)?;
+
+    let sum_channels = if channels == 2 {
+        br.read_bits(1)? != 0
+    } else {
+        false
+    };
+
+    let total = num_samples * channels;
+    let mut output = vec![0i16; total];
+
+    let mut states: Vec<DecompState> = (0..channels).map(|_| DecompState::default()).collect();
+
+    let mut sample_offset = 0usize;
+    let block_count = num_blocks + if last_block_size > 0 { 1 } else { 0 };
+
+    for block_idx in 0..block_count {
+        let bs = if block_idx == num_blocks { last_block_size } else { block_size };
+        if bs == 0 { continue; }
+
+        if channels == 1 {
+            let start = sample_offset;
+            let end = start + bs;
+            decompress_block(br, &mut states[0], &mut output[start..end])?;
+            apply_result_shift(&mut output[start..end], result_shift);
+        } else {
+            let mut ch0_buf = vec![0i16; bs];
+            let mut ch1_buf = vec![0i16; bs];
+            decompress_block(br, &mut states[0], &mut ch0_buf)?;
+            decompress_block(br, &mut states[1], &mut ch1_buf)?;
+
+            let start = sample_offset * 2;
+            for i in 0..bs {
+                let left = (ch0_buf[i] as i32) << result_shift;
+                let right = if sum_channels {
+                    ((ch1_buf[i] as i32) + (ch0_buf[i] as i32)) << result_shift
+                } else {
+                    (ch1_buf[i] as i32) << result_shift
+                };
+                output[start + i * 2] = left.clamp(-32768, 32767) as i16;
+                output[start + i * 2 + 1] = right.clamp(-32768, 32767) as i16;
+            }
+        }
+        sample_offset += bs;
+    }
+
+    Ok(output)
+}
+
+fn apply_result_shift(samples: &mut [i16], shift: u32) {
+    if shift == 0 { return; }
+    for s in samples.iter_mut() {
+        let v = (*s as i32) << shift;
+        *s = v.clamp(-32768, 32767) as i16;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CWAV / WAVE — sample data
+// ---------------------------------------------------------------------------
+
 fn parse_cwav(
     r: &mut BmxReader,
     entry: &SectionEntry,
@@ -924,9 +1139,32 @@ fn parse_cwav(
                     wave_data.push((index, sample_data));
                 }
             }
+        } else if format == 1 {
+            // Buzz delta compression
+            if let Some(bw) = bw {
+                for level in &bw.levels {
+                    let channels: usize = if is_stereo { 2 } else { 1 };
+                    let mut br = BitReader::new(r.data, r.pos);
+                    match decompress_wave(&mut br, level.num_samples as usize, channels) {
+                        Ok(data) => {
+                            r.pos = br.byte_pos();
+                            let sample_data = if is_stereo {
+                                deinterleave_stereo(&data)
+                            } else {
+                                SampleData::Mono16(data)
+                            };
+                            wave_data.push((index, sample_data));
+                        }
+                        Err(e) => {
+                            eprintln!("[BMX] CWAV: decompression failed for wave {}: {:?}", index, e);
+                            break;
+                        }
+                    }
+                }
+            }
         } else {
             eprintln!(
-                "[BMX] CWAV: wave {} uses compression (format={}), skipping remaining",
+                "[BMX] CWAV: wave {} uses unknown format ({}), skipping remaining",
                 index, format
             );
             break;
@@ -962,6 +1200,27 @@ fn deinterleave_stereo(interleaved: &[i16]) -> SampleData {
 // Song IR assembly
 // ---------------------------------------------------------------------------
 
+/// Adjust sample rate for root_note offset.
+///
+/// Buzz root_note is in Buzz note format (octave<<4 | semitone, 1-based).
+/// 0x41 = C-4 = our MIDI 48 (the c4_speed baseline). Other root notes
+/// shift the effective playback rate.
+fn root_note_adjusted_c4_speed(sample_rate: u32, root_note: u8) -> u32 {
+    let midi = buzz_root_to_midi(root_note);
+    if midi == 48 { return sample_rate; }
+    let semitone_offset = midi as f32 - 48.0;
+    (sample_rate as f32 * 2.0_f32.powf(semitone_offset / 12.0)) as u32
+}
+
+/// Convert Buzz root_note byte to MIDI note number.
+/// Buzz: octave<<4 | semitone (1-based). 0x41 = C-4 = MIDI 48.
+fn buzz_root_to_midi(root: u8) -> u8 {
+    let octave = root >> 4;
+    let semi = (root & 0x0F).wrapping_sub(1);
+    if semi >= 12 { return 48; } // fallback to C-4
+    octave * 12 + semi
+}
+
 fn build_samples(bmx_waves: &[BmxWave], wave_data: &[(u16, SampleData)]) -> Vec<Sample> {
     bmx_waves.iter().map(|bw| {
         let loop_type = match (bw.flags & 0x01 != 0, bw.flags & 0x10 != 0) {
@@ -982,7 +1241,9 @@ fn build_samples(bmx_waves: &[BmxWave], wave_data: &[(u16, SampleData)]) -> Vec<
         sample.loop_type = loop_type;
         sample.loop_start = level.map_or(0, |l| l.loop_start);
         sample.loop_end = level.map_or(0, |l| l.loop_end);
-        sample.c4_speed = level.map_or(44100, |l| l.sample_rate);
+        sample.c4_speed = level.map_or(44100, |l| {
+            root_note_adjusted_c4_speed(l.sample_rate, l.root_note)
+        });
         sample.default_volume = (bw.volume * 64.0).clamp(0.0, 64.0) as u8;
         sample
     }).collect()
@@ -1022,7 +1283,7 @@ pub fn load_bmx(data: &[u8]) -> Result<Song, FormatError> {
     // 4. MACH (required) — resolves PARA defs inline (fallback if no PARA section)
     let mach_entry = find_section(&sections, b"MACH").ok_or(FormatError::InvalidHeader)?;
     let mut graph = AudioGraph::with_master();
-    let (mut machines, para_defs) = parse_mach(&mut r, mach_entry, &para_from_section, &mut graph)?;
+    let (mut machines, para_defs, master) = parse_mach(&mut r, mach_entry, &para_from_section, &mut graph)?;
 
     // 5. CONN (required)
     let conn_entry = find_section(&sections, b"CONN").ok_or(FormatError::InvalidHeader)?;
@@ -1041,7 +1302,7 @@ pub fn load_bmx(data: &[u8]) -> Result<Song, FormatError> {
     let all_patterns = parse_patt(&mut r, patt_entry, &machines, &para_defs, &wave_lookup)?;
 
     // 8. SEQU (required)
-    let rows_per_beat: u8 = 4;
+    let rows_per_beat = master.tpb;
     let sequ_entry = find_section(&sections, b"SEQU").ok_or(FormatError::InvalidHeader)?;
     let tracks = parse_sequ(&mut r, sequ_entry, &machines, &all_patterns, rows_per_beat)?;
 
@@ -1076,8 +1337,9 @@ pub fn load_bmx(data: &[u8]) -> Result<Song, FormatError> {
 
     // Assemble Song
     let mut song = Song::new("BMX Song");
-    song.initial_tempo = 126;
     song.initial_speed = 1;
+    let pt_tempo = (master.bpm as u32 * song.initial_speed as u32 * rows_per_beat as u32) / 24;
+    song.initial_tempo = (pt_tempo.max(1).min(255)) as u8;
     song.rows_per_beat = rows_per_beat;
     song.graph = graph;
     song.tracks = tracks;
@@ -1255,5 +1517,57 @@ mod tests {
         assert!(is_tracker_dll("Matilde Tracker"));
         assert!(is_tracker_dll("Matilde Tracker 2"));
         assert!(!is_tracker_dll("Jeskola Reverb 2"));
+    }
+
+    #[test]
+    fn decode_signed_zigzag() {
+        assert_eq!(decode_signed(0), 0);
+        assert_eq!(decode_signed(1), -1);
+        assert_eq!(decode_signed(2), 1);
+        assert_eq!(decode_signed(3), -2);
+        assert_eq!(decode_signed(4), 2);
+        // Edge: u32::MAX → large negative, should not panic
+        let _ = decode_signed(u32::MAX);
+    }
+
+    #[test]
+    fn bit_reader_reads_across_bytes() {
+        let data = [0b1010_0101, 0b1100_0011];
+        let mut br = BitReader::new(&data, 0);
+        assert_eq!(br.read_bits(4).unwrap(), 0b0101);
+        assert_eq!(br.read_bits(4).unwrap(), 0b1010);
+        assert_eq!(br.read_bits(8).unwrap(), 0b1100_0011);
+    }
+
+    #[test]
+    fn bit_reader_count_zeros() {
+        // 0b00000100 → 2 zeros then a 1
+        let data = [0b0000_0100];
+        let mut br = BitReader::new(&data, 0);
+        assert_eq!(br.count_zero_bits().unwrap(), 2);
+    }
+
+    #[test]
+    fn buzz_root_to_midi_c4() {
+        // 0x41 = octave 4, semitone 1 (C) → MIDI 48
+        assert_eq!(buzz_root_to_midi(0x41), 48);
+    }
+
+    #[test]
+    fn buzz_root_to_midi_a4() {
+        // 0x4A = octave 4, semitone 10 (A) → MIDI 57
+        assert_eq!(buzz_root_to_midi(0x4A), 57);
+    }
+
+    #[test]
+    fn root_note_c4_no_adjustment() {
+        assert_eq!(root_note_adjusted_c4_speed(44100, 0x41), 44100);
+    }
+
+    #[test]
+    fn root_note_c5_doubles_speed() {
+        // C-5 = 0x51 = MIDI 60, 12 semitones above C-4
+        let speed = root_note_adjusted_c4_speed(44100, 0x51);
+        assert!((speed as f32 - 88200.0).abs() < 10.0);
     }
 }

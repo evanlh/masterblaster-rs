@@ -126,6 +126,21 @@ fn tribal_60_renders_without_panic() {
 }
 
 #[test]
+fn tribal_60_has_correct_pt_tempo() {
+    let song = load_fixture("tribal-60.bmx");
+    // Buzz BPM 60, speed 1, rpb 8 → PT tempo = 60 * 1 * 8 / 24 = 20
+    assert_eq!(song.initial_tempo, 20, "PT tempo should be 20 for BPM=60, rpb=8");
+}
+
+#[test]
+fn acousticelectro_100_has_correct_pt_tempo() {
+    let song = load_fixture("acousticelectro-drumloop-100.bmx");
+    // Buzz BPM 100, speed 1, rpb 4 → PT tempo = 100 * 1 * 4 / 24 ≈ 16
+    let expected = (100u32 * 1 * 4) / 24;
+    assert_eq!(song.initial_tempo, expected as u8);
+}
+
+#[test]
 fn load_all_bmx_fixtures() {
     for name in &["tribal-60.bmx", "acousticelectro-drumloop-100.bmx", "Insomnium - Skooled RMX.bmx"] {
         let path = fixtures_dir().join(name);
