@@ -2,18 +2,25 @@
 
 ## Status
 
-- [ ] Approach A — AOT Rust codegen
-  - [ ] `build.rs` Faust compiler integration
-  - [ ] `FaustMachine<D>` adapter (FaustDsp -> Machine trait)
+- [ ] Shared infrastructure
+  - [ ] `FaustMachine` adapter (Machine trait wrapper for both AOT and JIT DSPs)
   - [ ] Parameter discovery via `build_user_interface` collector
   - [ ] i16/f32 boundary conversion
+- [ ] Approach A — AOT Rust codegen (embedded targets)
+  - [ ] `build.rs` Faust compiler integration
+  - [ ] Selective `.dsp` manifest (`faust/embedded.txt`)
+  - [ ] `no_std` codegen flags (`-rnlm`, `-rnt`, `-mem2`)
+- [ ] Approach C — JIT via libfaust (desktop live coding)
+  - [ ] libfaust FFI bindings (`libfaust-sys` or hand-rolled)
+  - [ ] Folder watcher (`notify` crate) for `faust/` directory
+  - [ ] Hot-swap: compile → instantiate → replace node in audio graph
+  - [ ] Error reporting to GUI (compile errors, channel mismatch)
 - [ ] Starter effects
   - [ ] 1. Distortion (pipeline validation)
   - [ ] 2. Delay
   - [ ] 3. Freeverb
   - [ ] 4. Multimode filter (Philta equivalent)
-- [ ] Approach B — AOT C codegen via cc crate (fallback)
-- [ ] Approach C — JIT via libfaust (future, live coding)
+- [ ] Approach B — AOT C codegen via cc crate (fallback for Rust backend issues)
 
 ## Motivation
 
@@ -74,7 +81,7 @@ sample per channel).
 
 Three viable approaches, from simplest to most capable.
 
-### Approach A: Ahead-of-time Rust codegen (recommended starting point)
+### Approach A: Ahead-of-time Rust codegen (embedded targets)
 
 ```
   .dsp file → faust -lang rust → .rs file → cargo build → linked into binary
@@ -138,7 +145,9 @@ impl FaustDsp for Reverb {
 ```
 
 **Advantages:** No runtime dependency, pure Rust, deterministic, easy to audit.
+`no_std` compatible with the right flags.
 **Disadvantages:** Requires Faust installed to modify DSP. No live reloading.
+**Primary target:** Embedded builds where only a curated subset of effects ship.
 
 ### Approach B: Ahead-of-time C codegen via cc crate
 
@@ -169,7 +178,7 @@ pulling in bindgen.
 **Advantages:** Most mature backend, best optimization.
 **Disadvantages:** FFI boundary, slightly more complex build, `unsafe` blocks.
 
-### Approach C: JIT via libfaust (future — live coding)
+### Approach C: JIT via libfaust (desktop live coding)
 
 ```
   .dsp source string → libfaust LLVM → native code → Machine instance
@@ -192,9 +201,305 @@ computeCDSPInstance(dsp, 256, inputs, outputs);
 **Advantages:** Live coding, instant feedback, user-extensible.
 **Disadvantages:** Links against `libfaustwithllvm` (~50MB), LLVM dependency
 rules out embedded targets, adds `unsafe` FFI surface.
+**Primary target:** Desktop GUI builds with folder-watching and live reload.
 
-**Recommendation:** Start with Approach A. Add Approach C later when the GUI
-has a code editor panel. Approach B is a fallback if the Rust backend has issues.
+**Recommendation:** Use both Approach A and Approach C simultaneously, gated by
+Cargo features. Desktop builds enable `faust-jit` for live folder-watching and
+hot-reload. Embedded builds use AOT codegen for a curated subset of `.dsp` files.
+Both paths produce a `Box<dyn Machine>` — the engine doesn't know which pipeline
+created it. Approach B remains a fallback if the Rust backend has issues.
+
+## Dual-Pipeline Architecture
+
+Both pipelines coexist in the same workspace, gated by Cargo features. The
+engine never knows which pipeline produced a machine — both yield
+`Box<dyn Machine>`.
+
+```
+                    ┌─────────────────────────────────┐
+                    │         faust/*.dsp              │
+                    └──────┬──────────────┬────────────┘
+                           │              │
+               ┌───────────▼───┐   ┌──────▼──────────────┐
+               │  Approach A   │   │    Approach C        │
+               │  build.rs AOT │   │  libfaust JIT        │
+               │  (embedded)   │   │  (desktop)           │
+               └───────┬───────┘   └──────┬───────────────┘
+                       │                  │
+               ┌───────▼───────┐   ┌──────▼───────────────┐
+               │ gen/*.rs      │   │ native code in memory │
+               │ (compiled in) │   │ (dlopen / fn ptr)     │
+               └───────┬───────┘   └──────┬───────────────┘
+                       │                  │
+               ┌───────▼──────────────────▼───────────────┐
+               │        FaustMachine adapter              │
+               │        impl Machine for ...              │
+               └───────────────┬──────────────────────────┘
+                               │
+                       Box<dyn Machine>
+                               │
+                    ┌──────────▼──────────┐
+                    │   Audio Graph       │
+                    └─────────────────────┘
+```
+
+### Cargo feature gates
+
+Two features on the `mb-dsp` crate control which pipeline is compiled:
+
+```toml
+# crates/mb-dsp/Cargo.toml
+[features]
+default = ["aot"]
+aot = []                          # Approach A: compiled-in Faust effects
+jit = ["dep:libfaust-sys",        # Approach C: runtime compilation
+       "dep:notify",
+       "dep:libloading"]
+```
+
+The main app's `Cargo.toml` selects features per build profile:
+
+```toml
+# Cargo.toml (workspace root)
+[dependencies]
+mb-dsp = { path = "crates/mb-dsp" }
+
+# Desktop: enable both AOT (bundled effects) and JIT (user folder)
+[features]
+default = ["desktop"]
+desktop = ["mb-dsp/aot", "mb-dsp/jit"]
+embedded = ["mb-dsp/aot"]         # Embedded: AOT only, no_std
+```
+
+Building for each target:
+
+```sh
+# Desktop (default) — AOT bundled effects + JIT hot-reload
+cargo build
+
+# Embedded — AOT only, curated subset
+cargo build --no-default-features --features embedded --target thumbv7em-none-eabihf
+```
+
+### AOT pipeline details (Approach A)
+
+The AOT path compiles a **curated subset** of `.dsp` files into Rust at build
+time. A manifest file controls which effects ship in embedded builds.
+
+**Selective manifest — `faust/embedded.txt`:**
+
+```
+# Effects to compile for embedded targets (one per line)
+distortion
+reverb
+filter
+```
+
+`build.rs` reads this manifest and only compiles the listed effects. On desktop,
+`build.rs` compiles *all* `.dsp` files in `faust/` (the manifest is ignored
+unless `--features embedded` is active):
+
+```rust
+// crates/mb-dsp/build.rs
+fn dsp_files_to_compile() -> Vec<PathBuf> {
+    let faust_dir = workspace_root().join("faust");
+
+    if cfg!(feature = "embedded") {
+        // Read manifest, compile only listed effects
+        let manifest = faust_dir.join("embedded.txt");
+        fs::read_to_string(&manifest)
+            .expect("faust/embedded.txt required for embedded builds")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+            .map(|name| faust_dir.join(format!("{}.dsp", name.trim())))
+            .collect()
+    } else {
+        // Desktop: compile everything
+        glob::glob(faust_dir.join("*.dsp").to_str().unwrap())
+            .unwrap().flatten().collect()
+    }
+}
+```
+
+For embedded `no_std` targets, `build.rs` adds extra flags:
+
+```rust
+fn faust_flags(embedded: bool) -> Vec<&'static str> {
+    let mut flags = vec!["-lang", "rust", "-rnlm"];
+    if embedded {
+        flags.extend(["-rnt", "-mem2"]);  // bare struct, static alloc
+    }
+    flags
+}
+```
+
+The generated `.rs` files live in `gen/` and are committed to the repo. Devs
+without the Faust compiler installed can still build — `build.rs` skips
+regeneration when the `.dsp` hasn't changed.
+
+**AOT machine registry:**
+
+```rust
+// crates/mb-dsp/src/aot_registry.rs
+#[cfg(feature = "aot")]
+pub fn aot_machines() -> Vec<(&'static str, fn() -> Box<dyn Machine>)> {
+    vec![
+        ("Distortion", || Box::new(FaustMachine::new(gen::Distortion::new()))),
+        ("Reverb",     || Box::new(FaustMachine::new(gen::Reverb::new()))),
+        ("Filter",     || Box::new(FaustMachine::new(gen::Filter::new()))),
+        // ... auto-generated or manually maintained
+    ]
+}
+```
+
+### JIT pipeline details (Approach C)
+
+The JIT path watches a folder at runtime and compiles `.dsp` files on the fly
+using libfaust's LLVM backend. Desktop-only — never compiled for embedded.
+
+**Folder watcher flow:**
+
+```
+faust/ directory
+    │
+    ▼  (notify crate — file system events)
+FaustWatcher
+    │
+    ├── .dsp created/modified → compile via libfaust → FaustMachine → insert into graph
+    ├── .dsp deleted → remove machine from graph
+    └── compile error → send error string to GUI for display
+```
+
+**Core JIT types:**
+
+```rust
+// crates/mb-dsp/src/jit.rs
+#[cfg(feature = "jit")]
+pub struct FaustJitEngine {
+    watcher: notify::RecommendedWatcher,
+    faust_dir: PathBuf,
+    machines: HashMap<String, JitMachine>,
+    error_tx: Sender<JitError>,       // errors → GUI
+    machine_tx: Sender<MachineEvent>, // new/updated machines → engine
+}
+
+enum MachineEvent {
+    Add { name: String, machine: Box<dyn Machine + Send> },
+    Remove { name: String },
+}
+
+struct JitMachine {
+    factory: *mut llvm_dsp_factory,   // opaque libfaust handle
+    instance: *mut llvm_dsp,
+    sample_rate: i32,
+}
+```
+
+**Hot-swap protocol:**
+
+The audio thread cannot block on compilation. The JIT engine runs on a
+background thread and sends completed machines via a channel:
+
+1. File watcher detects `.dsp` change
+2. Background thread calls `createCDSPFactoryFromString()` (may take ~50ms)
+3. On success: wrap in `FaustMachine`, send `MachineEvent::Add` via channel
+4. Engine's main thread polls the channel between render calls
+5. Engine replaces the old node's machine with the new one (old one dropped)
+6. On failure: send `JitError` to GUI for display
+
+This is lock-free on the audio thread — just a `try_recv()` on an mpsc channel.
+
+**libfaust FFI surface (minimal):**
+
+```rust
+// crates/mb-dsp/src/libfaust_sys.rs  (or a separate libfaust-sys crate)
+#[cfg(feature = "jit")]
+extern "C" {
+    fn createCDSPFactoryFromString(
+        name: *const c_char, code: *const c_char,
+        argc: c_int, argv: *const *const c_char,
+        target: *const c_char, error: *mut c_char, max_err: c_int,
+    ) -> *mut llvm_dsp_factory;
+
+    fn createCDSPInstance(factory: *mut llvm_dsp_factory) -> *mut llvm_dsp;
+    fn initCDSPInstance(dsp: *mut llvm_dsp, sample_rate: c_int);
+    fn computeCDSPInstance(
+        dsp: *mut llvm_dsp, count: c_int,
+        inputs: *const *const f32, outputs: *mut *mut f32,
+    );
+    fn deleteCDSPInstance(dsp: *mut llvm_dsp);
+    fn deleteCDSPFactory(factory: *mut llvm_dsp_factory);
+
+    fn getNumInputsCDSPInstance(dsp: *mut llvm_dsp) -> c_int;
+    fn getNumOutputsCDSPInstance(dsp: *mut llvm_dsp) -> c_int;
+    fn buildUserInterfaceCDSPInstance(dsp: *mut llvm_dsp, ui: *mut UIGlue);
+}
+```
+
+Only ~10 functions needed. Hand-rolled FFI is simpler than pulling in a
+full bindgen setup for libfaust's large header surface.
+
+**libfaust linking:**
+
+```toml
+# crates/mb-dsp/build.rs (when jit feature is active)
+#[cfg(feature = "jit")]
+fn link_libfaust() {
+    // pkg-config or manual path
+    println!("cargo::rustc-link-lib=dylib=faust");
+    println!("cargo::rustc-link-lib=dylib=LLVM");
+}
+```
+
+On macOS, `brew install faust` provides `libfaustwithllvm.a`. The build script
+detects its location via `pkg-config` or a `FAUST_LIB_DIR` env var.
+
+### How the two pipelines converge
+
+Both pipelines produce `Box<dyn Machine>`. The engine's machine registry merges
+both sources:
+
+```rust
+// crates/mb-dsp/src/lib.rs
+pub struct DspRegistry {
+    machines: HashMap<String, Box<dyn Machine + Send>>,
+}
+
+impl DspRegistry {
+    pub fn new(sample_rate: i32) -> Self {
+        let mut reg = Self { machines: HashMap::new() };
+
+        // Always register AOT machines (compiled-in)
+        #[cfg(feature = "aot")]
+        for (name, factory) in aot_registry::aot_machines() {
+            let mut m = factory();
+            m.init(sample_rate);
+            reg.machines.insert(name.to_string(), m);
+        }
+
+        reg
+    }
+
+    /// Called by engine each frame — polls JIT channel for hot-swapped machines
+    #[cfg(feature = "jit")]
+    pub fn poll_jit(&mut self, rx: &Receiver<MachineEvent>) {
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                MachineEvent::Add { name, mut machine } => {
+                    machine.init(self.sample_rate);
+                    self.machines.insert(name, machine);
+                }
+                MachineEvent::Remove { name } => {
+                    self.machines.remove(&name);
+                }
+            }
+        }
+    }
+}
+```
+
+The engine doesn't know or care whether a machine came from AOT or JIT — it
+just calls `machine.work()`.
 
 ## Adapter: FaustDsp → Machine trait
 
@@ -314,60 +619,36 @@ This slots into the existing graph traversal with no architectural changes.
 ```
 masterblaster-rs/
 ├── faust/
-│   ├── reverb.dsp          # Faust source files
+│   ├── reverb.dsp            # Faust source files (shared by both pipelines)
 │   ├── delay.dsp
 │   ├── distortion.dsp
-│   └── ...
+│   ├── filter.dsp
+│   └── embedded.txt          # Manifest: which .dsp files ship in embedded builds
 ├── crates/
-│   └── mb-dsp/             # New crate for DSP machines
-│       ├── Cargo.toml
-│       ├── build.rs         # Invokes faust compiler on .dsp files
+│   └── mb-dsp/               # Faust integration crate
+│       ├── Cargo.toml         # Features: aot, jit
+│       ├── build.rs           # AOT: invoke faust compiler; JIT: link libfaust
 │       ├── src/
-│       │   ├── lib.rs       # Machine trait, FaustMachine adapter
-│       │   ├── adapter.rs   # FaustDsp → Machine wrapper
-│       │   ├── convert.rs   # i16 ↔ f32 conversion
-│       │   └── machines/
-│       │       ├── mod.rs   # Registry of available machines
-│       │       ├── reverb.rs    # include!(gen/reverb.rs) + tests
+│       │   ├── lib.rs         # DspRegistry, pub API, feature-gated re-exports
+│       │   ├── adapter.rs     # FaustMachine<D>: FaustDsp → Machine wrapper
+│       │   ├── convert.rs     # i16 ↔ f32 conversion
+│       │   ├── param.rs       # ParamCollector (build_user_interface visitor)
+│       │   ├── aot_registry.rs  # #[cfg(feature = "aot")] machine factories
+│       │   ├── jit.rs           # #[cfg(feature = "jit")] FaustJitEngine
+│       │   ├── libfaust_sys.rs  # #[cfg(feature = "jit")] FFI bindings
+│       │   └── gen/             # Generated Rust code (committed to repo)
+│       │       ├── distortion.rs
+│       │       ├── reverb.rs
 │       │       ├── delay.rs
-│       │       └── ...
-│       └── gen/             # Generated Rust code (committed)
-│           ├── reverb.rs    # faust -lang rust output
-│           ├── delay.rs
-│           └── ...
+│       │       └── filter.rs
+│       └── tests/
+│           ├── aot_tests.rs   # Validate AOT machines produce correct output
+│           └── jit_tests.rs   # Integration tests for JIT compile + hot-swap
 ```
 
-The `gen/` directory contains committed generated code. `build.rs` regenerates
-only when the `.dsp` source is newer:
-
-```rust
-// build.rs
-fn main() {
-    let faust_dir = Path::new("../../faust");
-    let gen_dir = Path::new("gen");
-
-    for dsp in glob::glob("../../faust/*.dsp").unwrap().flatten() {
-        let stem = dsp.file_stem().unwrap().to_str().unwrap();
-        let output = gen_dir.join(format!("{}.rs", stem));
-
-        // Skip if generated file is newer than source
-        if output.exists() && newer(&output, &dsp) {
-            continue;
-        }
-
-        let status = Command::new("faust")
-            .args(["-lang", "rust", "-rnlm",
-                   "-cn", &capitalize(stem),
-                   "-o", output.to_str().unwrap(),
-                   dsp.to_str().unwrap()])
-            .status()
-            .expect("faust compiler not found");
-
-        assert!(status.success(), "faust compilation failed for {}", stem);
-        println!("cargo::rerun-if-changed={}", dsp.display());
-    }
-}
-```
+The `gen/` directory contains committed generated code so devs without the Faust
+compiler can still build. `build.rs` regenerates only when a `.dsp` source is
+newer than its corresponding `gen/*.rs` output.
 
 ## Embedded Considerations
 
@@ -500,6 +781,8 @@ don't need them — Faust generates its own optimized implementations.
 1. **Trait source**: Use `faust-types` crate for `FaustDsp`/`UI`/`Meta` traits,
    or vendor our own? The `faust-types` crate is small (~100 LOC) but lightly
    maintained. Vendoring is low-risk and avoids a dependency.
+   *Leaning toward:* vendor, since the JIT path needs its own trait-object
+   wrapper anyway and `no_std` compat for AOT requires control over the traits.
 
 2. **Block size**: The Machine trait's `work()` receives a mutable buffer.
    Faust's `compute()` takes separate input/output slices. The adapter needs
@@ -518,3 +801,18 @@ don't need them — Faust generates its own optimized implementations.
 5. **Faust compiler version pinning**: Should `build.rs` check the installed
    Faust version and warn/fail on mismatch? Generated code can vary between
    Faust versions.
+
+6. **libfaust distribution**: On macOS `brew install faust` provides libfaust.
+   On Linux, it's available via package managers or source build. Should we
+   document the install steps per-platform, or provide a `FAUST_LIB_DIR` env
+   var escape hatch and leave it to the user?
+
+7. **JIT error UX**: When a `.dsp` file has a compile error, how prominently
+   should the GUI surface it? Options: status bar message, toast notification,
+   dedicated "Faust errors" panel. The error text from libfaust includes line
+   numbers referencing the `.dsp` source.
+
+8. **AOT registry automation**: Should `build.rs` auto-generate
+   `aot_registry.rs` from the compiled `.dsp` files, or should it be manually
+   maintained? Auto-generation avoids forgetting to register a new effect, but
+   adds build script complexity.
