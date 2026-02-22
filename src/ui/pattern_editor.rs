@@ -150,6 +150,7 @@ pub fn pattern_editor(
     click_target
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_row(
     ui: &imgui::Ui,
     gui: &GuiState,
@@ -316,9 +317,9 @@ fn x_to_cell_column(x: f32, cw: f32) -> CellColumn {
 }
 
 fn row_label_color(row: u16) -> [f32; 4] {
-    if row % 16 == 0 {
+    if row.is_multiple_of(16) {
         [0.39, 0.39, 0.59, 1.0]
-    } else if row % 4 == 0 {
+    } else if row.is_multiple_of(4) {
         [0.31, 0.31, 0.39, 1.0]
     } else {
         [0.24, 0.24, 0.27, 1.0]

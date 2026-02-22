@@ -3,7 +3,7 @@
 ## Status
 
 - [ ] Voice type
-  - [ ] `Voice` struct with `Arc<dyn AudioSource>`, playback state, envelope state
+  - [ ] `Voice` struct with `SampleKey`, playback state, envelope state
   - [ ] `VoiceState` enum (Active, Released, Fading, Background)
   - [ ] `AudioStream` impl for Voice (i16 integer math, f32 at boundary)
 - [ ] Instrument as voice factory
@@ -18,7 +18,7 @@
   - [ ] Remove playback fields (`position`, `playing`, `loop_forward`, `sample_index`)
   - [ ] Remove `render()` method (rendering moves to Voice)
 - [ ] Engine integration
-  - [ ] `sample_bank: Vec<Arc<dyn AudioSource>>` built at init
+  - [ ] `sample_bank: SlotMap<SampleKey, SampleData>` built at init
   - [ ] `trigger_note()` with NNA handling
   - [ ] `process_tick()` pushes channel state to voice
   - [ ] Background voice rendering (separate sum into master)
@@ -75,8 +75,8 @@ and envelope state.
 
 ```rust
 pub struct Voice {
-    /// The sample being played (shared, ref-counted).
-    source: Arc<dyn AudioSource>,
+    /// Key into the sample bank (slotmap generational key, 8 bytes, Copy).
+    sample_key: SampleKey,
     /// Playback position (16.16 fixed-point).
     position: u32,
     /// Playback increment (16.16 fixed-point, pitch-dependent).
@@ -163,8 +163,10 @@ impl AudioStream for Voice {
 ```
 
 The i16 integer math from `ChannelState::render()` moves here — `read_interpolated()`
-calls `source.read_i16()`, volume/panning use the same bit-shift math, and the
-final i16 result converts to f32 at the boundary. Tracker authenticity preserved.
+looks up the sample via `sample_key` from the bank, volume/panning use the same
+bit-shift math, and the final i16 result converts to f32 at the boundary. Tracker
+authenticity preserved. Voice doesn't implement `AudioStream` directly — instead,
+VoicePool does (see "Rendering" below).
 
 ### Instrument as voice factory
 
@@ -174,17 +176,17 @@ given note, copies envelope definitions, and returns a ready-to-play `Voice`.
 ```rust
 impl Instrument {
     /// Spawn a voice for the given note.
-    /// `samples` is the song's sample bank for resolving sample_map indices.
+    /// `bank` is the sample bank (SlotMap) for validating the sample key.
     pub fn spawn_voice(
         &self,
         note: u8,
-        samples: &[Arc<dyn AudioSource>],
+        bank: &SlotMap<SampleKey, SampleData>,
     ) -> Option<Voice> {
-        let sample_idx = self.sample_map[note as usize] as usize;
-        let source = samples.get(sample_idx)?.clone();
+        let sample_key = self.sample_map[note as usize];
+        let sample = bank.get(sample_key)?;  // validate key, copy loop metadata
 
         Some(Voice {
-            source,
+            sample_key,
             position: 0,
             increment: 0,  // caller sets via note_to_period + period_to_increment
             playing: true,
@@ -209,8 +211,9 @@ impl Instrument {
 }
 ```
 
-This requires samples to be stored as `Arc<dyn AudioSource>` in the song (or a
-parallel resolved sample bank). See "Sample ownership" below.
+`sample_map` holds `SampleKey` values (not raw `u8` indices). Parsers still
+produce `u8` indices; a resolution step at Engine init converts indices to keys
+when samples are inserted into the SlotMap. See "Sample ownership" below.
 
 ### VoicePool
 
@@ -337,7 +340,7 @@ pub struct Channel {
 | Field | Was on ChannelState | Now on |
 |-------|-------------------|--------|
 | `position`, `increment`, `playing`, `loop_forward` | Yes | **Voice** |
-| `sample_index` | Yes | **Voice** (as `source: Arc<dyn AudioSource>`) |
+| `sample_index` | Yes | **Voice** (as `sample_key: SampleKey`) |
 | `envelope_tick` | Yes | **Voice** |
 | `volume`, `panning`, `note`, `instrument` | Yes | **Both** — Channel holds the "commanded" values; Voice holds the "effective" values after envelope |
 | `active_effect`, `effect_tick` | Yes | **Channel** (unchanged) |
@@ -374,7 +377,7 @@ fn trigger_note(&mut self, ch_idx: usize, instrument_id: u8, note: u8) {
     }
 
     // 2. Spawn new voice from instrument
-    let mut voice = match instrument.spawn_voice(note, &self.sample_bank) {
+    let mut voice = match instrument.spawn_voice(note, &self.voice_pool.sample_bank) {
         Some(v) => v,
         None => return,
     };
@@ -442,70 +445,98 @@ fn process_tick(&mut self) {
 
 ### Rendering
 
-The graph no longer renders channels directly. TrackerChannel nodes render
-through the voice pool:
+VoicePool implements `AudioStream` — it is the self-contained graph node, not
+individual voices. The pool owns the sample bank and renders all voices
+(active, background, released, fading) in a single pass:
 
 ```rust
-// In render_graph():
-NodeType::TrackerChannel { index } => {
-    let channel = &self.channels[*index as usize];
-    match channel.voice_id.and_then(|id| self.voice_pool.get_mut(id)) {
-        Some(voice) => {
-            let mut buf = AudioBuffer::new(2, BLOCK_SIZE);
-            voice.render(&mut buf);
-            buf
+pub struct VoicePool {
+    slots: [VoiceSlot; MAX_VOICES],
+    active_count: u16,
+    /// Sample bank: SlotMap of all loaded samples.
+    sample_bank: SlotMap<SampleKey, SampleData>,
+}
+
+impl AudioStream for VoicePool {
+    fn channel_config(&self) -> ChannelConfig {
+        ChannelConfig { inputs: 0, outputs: 2 }
+    }
+
+    fn render(&mut self, output: &mut AudioBuffer) {
+        for slot in &mut self.slots {
+            if let VoiceSlot::Active(voice) = slot {
+                if let Some(source) = self.sample_bank.get(voice.sample_key) {
+                    voice.render_with_source(source, output);
+                } else {
+                    // Sample was removed — stop voice gracefully
+                    voice.playing = false;
+                }
+            }
         }
-        None => AudioBuffer::silent(2, BLOCK_SIZE),
     }
 }
 ```
 
-Background/released/fading voices are NOT attached to any TrackerChannel node.
-They render in a separate pass that sums directly into the master (or into a
-dedicated "background voices" bus):
+Individual Voice has `render_with_source(&mut self, source: &SampleData, output: &mut AudioBuffer)`
+— not a trait method, just an internal helper. It reads interpolated samples from
+the source, applies volume/panning, and sums into the output buffer. The i16
+integer math is identical to the current `ChannelState::render()`.
 
-```rust
-// After graph traversal, sum orphaned voices into master
-let mut bg_buf = AudioBuffer::new(2, BLOCK_SIZE);
-for slot in &mut self.voice_pool.slots {
-    if let VoiceSlot::Active(voice) = slot {
-        if voice.state != VoiceState::Active {
-            voice.render(&mut scratch);
-            bg_buf.mix_from(&scratch, &self.channel_mix);
-        }
-    }
-}
-// Mix bg_buf into master node output
-```
+Background/released/fading voices render in the same pass — no separate
+"orphaned" loop needed. The graph routes the VoicePool node's output through
+the AmigaFilter to Master, same as today's per-channel routing but with a
+single node replacing N TrackerChannel nodes.
 
 ### Sample ownership
 
-For `Voice` to own a reference to its sample, samples need to be `Arc`-wrapped.
-The song stores a parallel sample bank:
+Voice holds a `SampleKey` — a slotmap generational key (8 bytes, `Copy`). The
+sample bank is a `SlotMap<SampleKey, SampleData>` owned by VoicePool. This
+extends the SlotMap pattern from `stable-ids-and-alloc-free-render.md` (which
+uses SlotMap for graph nodes) to samples.
 
 ```rust
-pub struct Engine {
-    song: Song,
-    /// Resolved sample bank: Arc-wrapped AudioSource references.
-    /// Built once at Engine::new() from song.samples.
-    sample_bank: Vec<Arc<dyn AudioSource>>,
-    voice_pool: VoicePool,
-    channels: Vec<Channel>,
-    // ...
+use slotmap::{SlotMap, new_key_type};
+
+new_key_type! { pub struct SampleKey; }
+
+pub struct VoicePool {
+    slots: [VoiceSlot; MAX_VOICES],
+    active_count: u16,
+    /// All loaded samples, keyed by SampleKey.
+    sample_bank: SlotMap<SampleKey, SampleData>,
 }
 ```
 
-`sample_bank` is built once at init:
+**Building the sample bank at Engine init:**
 
 ```rust
-let sample_bank: Vec<Arc<dyn AudioSource>> = song.samples.iter()
-    .map(|s| Arc::new(s.data.clone()) as Arc<dyn AudioSource>)
+// 1. Insert samples into SlotMap, collecting index→key mapping
+let mut sample_bank = SlotMap::with_key();
+let index_to_key: Vec<SampleKey> = song.samples.iter()
+    .map(|s| sample_bank.insert(s.data.clone()))
     .collect();
+
+// 2. Resolve Instrument.sample_map from u8 indices to SampleKeys
+for instrument in &mut song.instruments {
+    for entry in instrument.sample_map.iter_mut() {
+        *entry = index_to_key.get(*entry as usize)
+            .copied()
+            .unwrap_or(SampleKey::null());
+    }
+}
 ```
 
-Each `Arc::clone()` on note trigger is just a refcount bump — negligible cost.
+Parsers still produce `u8` indices in `Instrument.sample_map: [u8; 120]`. The
+resolution step at Engine init converts these to `[SampleKey; 120]`.
 
-On embedded without `alloc`, this would use static references or indices instead.
+**Why SampleKey over Arc\<dyn AudioSource\>:**
+
+- **Lighter**: 8 bytes, `Copy` — no refcount bump on note trigger
+- **Deletion safety**: `bank.get(voice.sample_key)` returns `None` if the
+  sample was removed. Voice stops gracefully. Arc would silently keep the
+  sample alive, leaking memory for deleted samples.
+- **Consistent**: same SlotMap pattern used for graph nodes
+- **no_std friendly**: no `Arc`, no `alloc` required for the key itself
 
 ## Migration from ChannelState
 
@@ -515,7 +546,7 @@ On embedded without `alloc`, this would use static references or indices instead
 
 | From ChannelState | To Voice | Notes |
 |-------------------|----------|-------|
-| `sample_index: u8` | `source: Arc<dyn AudioSource>` | Resolved reference replaces index lookup |
+| `sample_index: u8` | `sample_key: SampleKey` | Generational key into sample bank (index→key resolved at Engine init) |
 | `position: u32` | `position: u32` | Same 16.16 fixed-point |
 | `increment: u32` | `increment: u32` | Same, but set by channel |
 | `playing: bool` | `playing: bool` | Same |
@@ -538,6 +569,11 @@ All effect-related fields and methods stay:
 **New field on Channel:**
 
 `voice_id: Option<VoiceId>` — replaces `sample_index`, `position`, `playing`
+
+**New field on Instrument (IR type):**
+
+`sample_map: [SampleKey; 120]` — replaces `[u8; 120]`. Populated at Engine init
+when samples are inserted into the SlotMap (see "Sample ownership").
 
 ### What to clean up in mixer.rs
 

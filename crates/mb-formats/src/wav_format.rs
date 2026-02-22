@@ -121,7 +121,7 @@ fn parse_header(data: &[u8]) -> Result<WavHeader, FormatError> {
     if bits_per_sample != 8 && bits_per_sample != 16 {
         return Err(FormatError::UnsupportedVersion);
     }
-    if num_channels < 1 || num_channels > 2 {
+    if !(1..=2).contains(&num_channels) {
         return Err(FormatError::UnsupportedVersion);
     }
 

@@ -51,7 +51,7 @@ pub fn transport_panel(ui: &imgui::Ui, gui: &mut GuiState) {
     ui.same_line();
 
     let song = gui.controller.song();
-    ui.text(&song.title.to_string());
+    ui.text(song.title);
     ui.same_line();
     ui.text(format!(
         "BPM: {} | Speed: {}",

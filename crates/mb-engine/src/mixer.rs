@@ -272,10 +272,8 @@ impl Engine {
             channel.apply_tick_effect(spt);
             channel.update_increment(sample_rate);
         }
-        for slot in &mut self.machines {
-            if let Some(machine) = slot {
-                machine.tick();
-            }
+        for machine in self.machines.iter_mut().flatten() {
+            machine.tick();
         }
     }
 
@@ -428,7 +426,7 @@ impl Engine {
             Some(s) => s,
             None => return Frame::silence(),
         };
-        return channel.render(sample);
+        channel.render(sample)
     }
 
     /// Render the audio graph by traversing nodes in topological order.

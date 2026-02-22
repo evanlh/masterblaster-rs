@@ -34,8 +34,8 @@ pub struct GuiState {
     pub undo_stack: UndoStack,
 }
 
-impl GuiState {
-    pub fn new() -> Self {
+impl Default for GuiState {
+    fn default() -> Self {
         Self {
             controller: Controller::new(),
             selected_seq_index: 0,

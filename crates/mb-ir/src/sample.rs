@@ -122,7 +122,7 @@ impl SampleData {
         let a = self.get_mono(idx) as i64;
         let b = self.get_mono(idx + 1) as i64;
 
-        (a + ((b - a) * frac >> 16)) as i16
+        (a + (((b - a) * frac) >> 16)) as i16
     }
 
     /// Get stereo sample values at position (as i16, i16).

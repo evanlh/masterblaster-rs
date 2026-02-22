@@ -327,7 +327,7 @@ impl ChannelState {
         // pan: -64 (full left) to +64 (full right)
         // Convert to 0..128 range for linear crossfade
         let vol = (self.volume as i32 + self.volume_offset as i32).clamp(0, 64);
-        let pan_right = (self.panning as i32 + 64) as i32; // 0..128
+        let pan_right = self.panning as i32 + 64; // 0..128
         let left_vol = ((128 - pan_right) * vol) >> 7;
         let right_vol = (pan_right * vol) >> 7;
 
@@ -338,7 +338,7 @@ impl ChannelState {
         self.position += self.increment;
 
         // Handle looping
-        let pos_samples = (self.position >> 16) as u32;
+        let pos_samples = self.position >> 16;
         if sample.has_loop() && pos_samples >= sample.loop_end {
             let loop_len = sample.loop_end - sample.loop_start;
             self.position -= loop_len << 16;

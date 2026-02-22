@@ -344,7 +344,7 @@ fn run_audio_loop(
     const BATCH_SIZE: usize = 256;
     let report_interval = (sample_rate / 100) as u64;
     let mut frame_count: u64 = 0;
-    let mut edit_buf: Vec<Edit> = alloc_permit(|| Vec::new());
+    let mut edit_buf: Vec<Edit> = alloc_permit(Vec::new);
     let mut batch = [Frame::silence(); BATCH_SIZE];
 
     while !engine.is_finished() && !stop_signal.load(Ordering::Relaxed) {
@@ -359,7 +359,7 @@ fn run_audio_loop(
         output.write_batch_park(&batch[..n]);
 
         frame_count += n as u64;
-        if frame_count % report_interval == 0 {
+        if frame_count.is_multiple_of(report_interval) {
             current_time.store(pack_time(engine.position()), Ordering::Relaxed);
         }
     }

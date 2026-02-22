@@ -258,7 +258,16 @@ For now, tracks can stay as `Vec<Track>` with the linked-track `link` field
 using indices — as long as tracks are append-only. Revisit when track deletion
 becomes a feature.
 
-### Samples and instruments: keep as-is
+### Samples: SampleKey via voice-pool design
+
+The voice-pool architecture (`voice-pool-architecture.md`) motivates `SampleKey`
+for samples. Voice holds a `SampleKey` (slotmap generational key) instead of a
+raw index or `Arc`. The sample bank is a `SlotMap<SampleKey, SampleData>` owned
+by VoicePool — deletion safety comes from the generation check (`bank.get(key)`
+returns `None` for removed samples). `Instrument.sample_map` is resolved from
+`[u8; 120]` to `[SampleKey; 120]` at Engine init.
+
+### Instruments: keep as-is
 
 These are small (max 255), referenced by u8, and rarely mutated after load.
 Vec indexing is fine. If needed later, a `SecondaryMap` keyed by instrument

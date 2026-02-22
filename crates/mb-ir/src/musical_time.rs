@@ -79,7 +79,7 @@ pub fn pack_time(t: MusicalTime) -> u64 {
 /// Unpack a u64 into a MusicalTime.
 pub fn unpack_time(packed: u64) -> MusicalTime {
     MusicalTime {
-        beat: (packed >> 32) as u64,
+        beat: packed >> 32,
         sub_beat: packed as u32,
     }
 }

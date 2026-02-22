@@ -82,7 +82,7 @@ pub enum DuplicateCheck {
 }
 
 /// An envelope (volume, panning, or pitch).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Envelope {
     /// Envelope points
     pub points: Vec<EnvelopePoint>,
@@ -98,18 +98,6 @@ pub struct Envelope {
     pub enabled: bool,
 }
 
-impl Default for Envelope {
-    fn default() -> Self {
-        Self {
-            points: Vec::new(),
-            sustain_start: None,
-            sustain_end: None,
-            loop_start: None,
-            loop_end: None,
-            enabled: false,
-        }
-    }
-}
 
 impl Envelope {
     /// Create a new empty envelope.

@@ -68,7 +68,7 @@ impl App {
             imgui,
             platform,
             renderer,
-            gui: GuiState::new(),
+            gui: GuiState::default(),
         }
     }
 

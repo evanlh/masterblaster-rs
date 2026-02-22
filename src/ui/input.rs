@@ -184,7 +184,7 @@ fn poll_note_keys(ui: &imgui::Ui, state: &EditorState, actions: &mut Vec<EditorA
         return;
     }
 
-    let base = state.base_octave as u8 * 12;
+    let base = state.base_octave * 12;
     let octave_up = base + 12;
 
     // Lower row: z s x d c v g b h n j m

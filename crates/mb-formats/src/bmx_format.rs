@@ -505,7 +505,7 @@ fn parse_mach(
         r.skip(num_tracks * para.track_byte_size())?;
 
         // Detect tracker machines
-        let is_tracker = dll_name.as_deref().map_or(false, is_tracker_dll);
+        let is_tracker = dll_name.as_deref().is_some_and(is_tracker_dll);
 
         // Create graph node(s)
         let (node_id, channel_node_ids) = if machine_type == 0 {
@@ -745,7 +745,7 @@ fn parse_sequ(
 
         let mach = machines.get(machine_idx);
         let mach_name = mach.map_or("?", |m| m.name.as_str());
-        let is_tracker = mach.map_or(false, |m| m.is_tracker);
+        let is_tracker = mach.is_some_and(|m| m.is_tracker);
 
         // Parse sequence events
         let mut seq_entries = Vec::new();
@@ -761,8 +761,7 @@ fn parse_sequ(
             }
         }
 
-        if is_tracker && mach.is_some() {
-            let m = mach.unwrap();
+        if let Some(m) = mach.filter(|_| is_tracker) {
             let pats = all_patterns.get(machine_idx);
             // Create one Track per channel (TrackerChannel)
             for (ch_i, &ch_node_id) in m.channel_node_ids.iter().enumerate() {
@@ -1114,7 +1113,7 @@ fn parse_cwav(
         let format = r.read_u8()?;
 
         let bw = bmx_waves.iter().find(|w| w.index == index);
-        let is_stereo = bw.map_or(false, |w| w.flags & 0x08 != 0);
+        let is_stereo = bw.is_some_and(|w| w.flags & 0x08 != 0);
 
         if format == 0 {
             // Raw uncompressed
@@ -1340,7 +1339,7 @@ pub fn load_bmx(data: &[u8]) -> Result<Song, FormatError> {
     let mut song = Song::new("BMX Song");
     song.initial_speed = 1;
     let pt_tempo = (master.bpm as u32 * song.initial_speed as u32 * rows_per_beat as u32) / 24;
-    song.initial_tempo = (pt_tempo.max(1).min(255)) as u8;
+    song.initial_tempo = pt_tempo.clamp(1, 255) as u8;
     song.rows_per_beat = rows_per_beat;
     song.graph = graph;
     song.tracks = tracks;

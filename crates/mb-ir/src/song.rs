@@ -260,7 +260,7 @@ fn extract_single_column(pattern: &Pattern, channel: u8) -> Pattern {
     single.ticks_per_row = pattern.ticks_per_row;
     single.rows_per_beat = pattern.rows_per_beat;
     for row in 0..pattern.rows {
-        if (channel as u8) < pattern.channels {
+        if channel < pattern.channels {
             *single.cell_mut(row, 0) = *pattern.cell(row, channel);
         }
     }
