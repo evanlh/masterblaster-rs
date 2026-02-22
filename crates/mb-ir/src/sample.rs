@@ -100,11 +100,6 @@ impl SampleData {
         matches!(self, SampleData::Stereo8(..) | SampleData::Stereo16(..))
     }
 
-    /// Returns true if 16-bit.
-    pub fn is_16bit(&self) -> bool {
-        matches!(self, SampleData::Mono16(_) | SampleData::Stereo16(..))
-    }
-
     /// Get a mono sample value at position (as i16).
     /// For stereo, returns the left channel.
     pub fn get_mono(&self, pos: usize) -> i16 {

@@ -84,3 +84,7 @@ assert_no_alloc = "1.1"
 [dependencies.png]
 version = "0.17"
 optional = true
+
+[profile.profiling]
+inherits = "release"
+debug = true

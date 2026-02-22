@@ -62,7 +62,6 @@ impl CpalOutput {
     ) -> Result<(), AudioError> {
         let running = self.running.clone();
         let channels = self.config.channels as usize;
-
         let stream = self.device
             .build_output_stream(
                 &self.config,
@@ -76,6 +75,7 @@ impl CpalOutput {
 
                     for chunk in data.chunks_mut(channels) {
                         if let Some(frame) = consumer.try_pop() {
+                            // TODO ASKCC why these divides? Shiftable? Ideally no divides in a hotloop
                             let left = frame.left as f32 / 32768.0;
                             let right = frame.right as f32 / 32768.0;
                             for (i, sample) in chunk.iter_mut().enumerate() {
