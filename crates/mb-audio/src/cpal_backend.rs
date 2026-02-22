@@ -107,12 +107,12 @@ impl CpalOutput {
     }
 }
 
-impl CpalOutput {
-    /// Write a batch of frames, parking only when the ring buffer is full.
-    ///
-    /// Pushes as many frames as fit via `push_slice`, then parks until the
-    /// CPAL callback drains some. Much less overhead than per-frame `write_park`.
-    pub fn write_batch_park(&mut self, frames: &[Frame]) {
+impl AudioOutput for CpalOutput {
+    fn sample_rate(&self) -> u32 {
+        self.config.sample_rate.0
+    }
+
+    fn write(&mut self, frames: &[Frame]) {
         let mut offset = 0;
         while offset < frames.len() {
             let pushed = self.producer.push_slice(&frames[offset..]);
@@ -121,20 +121,6 @@ impl CpalOutput {
                 std::thread::park();
             }
         }
-    }
-}
-
-impl AudioOutput for CpalOutput {
-    fn sample_rate(&self) -> u32 {
-        self.config.sample_rate.0
-    }
-
-    fn write(&mut self, frames: &[Frame]) -> Result<(), AudioError> {
-        for frame in frames {
-            // Non-blocking push; drop frames if buffer is full
-            let _ = self.producer.try_push(*frame);
-        }
-        Ok(())
     }
 
     fn start(&mut self) -> Result<(), AudioError> {

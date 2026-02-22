@@ -33,8 +33,8 @@ pub trait AudioOutput {
     /// Get the sample rate.
     fn sample_rate(&self) -> u32;
 
-    /// Write frames to the output.
-    fn write(&mut self, frames: &[Frame]) -> Result<(), AudioError>;
+    /// Write frames to the output (blocking — parks until all frames are written).
+    fn write(&mut self, frames: &[Frame]);
 
     /// Start playback.
     fn start(&mut self) -> Result<(), AudioError>;

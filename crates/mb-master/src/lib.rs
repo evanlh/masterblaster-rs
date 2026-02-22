@@ -356,7 +356,7 @@ fn run_audio_loop(
 
         let n = frames_until_report(frame_count, report_interval, BATCH_SIZE);
         engine.render_frames_into(&mut batch[..n]);
-        output.write_batch_park(&batch[..n]);
+        output.write(&batch[..n]);
 
         frame_count += n as u64;
         if frame_count.is_multiple_of(report_interval) {
@@ -369,7 +369,7 @@ fn run_audio_loop(
     let mut written = 0;
     while written < tail_frames {
         let n = (tail_frames - written).min(BATCH_SIZE);
-        output.write_batch_park(&silence[..n]);
+        output.write(&silence[..n]);
         written += n;
     }
 }
