@@ -1,8 +1,5 @@
 //! Editor cursor and state types.
 
-use alloc::vec::Vec;
-extern crate alloc;
-
 /// Which sub-column of a cell the cursor is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CellColumn {

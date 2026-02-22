@@ -120,13 +120,6 @@ impl<'a> BmxReader<'a> {
         }
     }
 
-    /// Read a parameter value based on its type (1 byte or 2 bytes).
-    fn read_param_value(&mut self, param_type: u8) -> Result<u16, FormatError> {
-        match param_type {
-            PT_WORD => Ok(self.read_u16_le()?),
-            _ => Ok(self.read_u8()? as u16), // NOTE, SWITCH, BYTE, ENUM
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

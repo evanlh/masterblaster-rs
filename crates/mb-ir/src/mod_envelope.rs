@@ -102,10 +102,6 @@ impl ModEnvelope {
         self.points.len()
     }
 
-    /// Whether the envelope has no breakpoints.
-    pub fn is_empty(&self) -> bool {
-        self.points.is_empty()
-    }
 }
 
 impl ModBreakPoint {

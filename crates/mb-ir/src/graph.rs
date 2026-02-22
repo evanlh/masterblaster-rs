@@ -17,11 +17,6 @@ pub struct AudioGraph {
 }
 
 impl AudioGraph {
-    /// Create a new empty graph.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Create a graph with just a master output node.
     pub fn with_master() -> Self {
         Self {
@@ -150,8 +145,4 @@ impl Parameter {
         }
     }
 
-    /// Clamp value to valid range.
-    pub fn clamp(&mut self) {
-        self.value = self.value.clamp(self.min, self.max);
-    }
 }

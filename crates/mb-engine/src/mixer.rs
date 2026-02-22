@@ -153,15 +153,6 @@ impl Engine {
         self.playing = false;
     }
 
-    /// Seek to a position.
-    pub fn seek(&mut self, time: MusicalTime) {
-        self.current_time = time;
-        self.sample_counter = 0;
-        self.tick_in_beat = 0;
-        self.event_queue.clear();
-        // TODO: Re-schedule events from patterns
-    }
-
     /// Generate one frame of audio.
     ///
     /// When the `alloc_check` feature is enabled, this wraps the inner
@@ -500,11 +491,6 @@ impl Engine {
     /// Get the current playback position.
     pub fn position(&self) -> MusicalTime {
         self.current_time
-    }
-
-    /// Is playback active?
-    pub fn is_playing(&self) -> bool {
-        self.playing
     }
 
     /// Returns true when playback has reached the song's end time.

@@ -95,11 +95,6 @@ impl SampleData {
         self.len() == 0
     }
 
-    /// Returns true if stereo.
-    pub fn is_stereo(&self) -> bool {
-        matches!(self, SampleData::Stereo8(..) | SampleData::Stereo16(..))
-    }
-
     /// Get a mono sample value at position (as i16).
     /// For stereo, returns the left channel.
     pub fn get_mono(&self, pos: usize) -> i16 {
@@ -125,29 +120,6 @@ impl SampleData {
         (a + (((b - a) * frac) >> 16)) as i16
     }
 
-    /// Get stereo sample values at position (as i16, i16).
-    pub fn get_stereo(&self, pos: usize) -> (i16, i16) {
-        match self {
-            SampleData::Mono8(v) => {
-                let s = v.get(pos).copied().unwrap_or(0) as i16 * 256;
-                (s, s)
-            }
-            SampleData::Mono16(v) => {
-                let s = v.get(pos).copied().unwrap_or(0);
-                (s, s)
-            }
-            SampleData::Stereo8(l, r) => {
-                let ls = l.get(pos).copied().unwrap_or(0) as i16 * 256;
-                let rs = r.get(pos).copied().unwrap_or(0) as i16 * 256;
-                (ls, rs)
-            }
-            SampleData::Stereo16(l, r) => {
-                let ls = l.get(pos).copied().unwrap_or(0);
-                let rs = r.get(pos).copied().unwrap_or(0);
-                (ls, rs)
-            }
-        }
-    }
 }
 
 /// Sample loop type.

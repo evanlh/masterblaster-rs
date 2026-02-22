@@ -114,21 +114,11 @@ impl Pattern {
         &mut self.data[row as usize * self.channels as usize + channel as usize]
     }
 
-    /// Iterate over all cells in a row.
-    pub fn row(&self, row: u16) -> &[Cell] {
-        let start = row as usize * self.channels as usize;
-        &self.data[start..start + self.channels as usize]
-    }
-
     /// Effective ticks per row (falls back to default speed 6 when 0).
     pub fn effective_ticks_per_row(&self) -> u8 {
         if self.ticks_per_row > 0 { self.ticks_per_row } else { 6 }
     }
 
-    /// Estimated total ticks (ignores dynamic speed changes).
-    pub fn total_ticks(&self) -> u64 {
-        self.rows as u64 * self.effective_ticks_per_row() as u64
-    }
 }
 
 #[cfg(test)]

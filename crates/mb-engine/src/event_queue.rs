@@ -30,20 +30,6 @@ impl EventQueue {
         self.events.insert(pos, event);
     }
 
-    /// Peek at the next event without removing it.
-    pub fn peek(&self) -> Option<&Event> {
-        self.events.first()
-    }
-
-    /// Pop the next event from the queue.
-    pub fn pop(&mut self) -> Option<Event> {
-        if self.events.is_empty() {
-            None
-        } else {
-            Some(self.events.remove(0))
-        }
-    }
-
     /// Return the index range of events at or before `time` (cursor-based, zero allocation).
     ///
     /// Advances the internal cursor past all consumed events. The returned
@@ -65,19 +51,6 @@ impl EventQueue {
         self.events.get(index)
     }
 
-    /// Pop all events at or before the given timestamp (allocates — setup phase only).
-    pub fn pop_until(&mut self, time: MusicalTime) -> Vec<Event> {
-        let mut result = Vec::new();
-        while let Some(event) = self.events.first() {
-            if event.time <= time {
-                result.push(self.events.remove(0));
-            } else {
-                break;
-            }
-        }
-        result
-    }
-
     /// Reset cursor to the beginning (called after scheduling).
     pub fn reset_cursor(&mut self) {
         self.cursor = 0;
@@ -87,16 +60,6 @@ impl EventQueue {
     pub fn clear(&mut self) {
         self.events.clear();
         self.cursor = 0;
-    }
-
-    /// Returns true if the queue is empty.
-    pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
-    }
-
-    /// Returns the number of events in the queue.
-    pub fn len(&self) -> usize {
-        self.events.len()
     }
 
     /// Retain only events matching the predicate, removing the rest.
@@ -130,9 +93,11 @@ mod tests {
             EventPayload::SetTempo(14000),
         ));
 
-        assert_eq!(queue.pop().unwrap().time.beat, 5);
-        assert_eq!(queue.pop().unwrap().time.beat, 10);
-        assert_eq!(queue.pop().unwrap().time.beat, 15);
+        let range = queue.drain_until(MusicalTime::from_beats(20));
+        assert_eq!(range, 0..3);
+        assert_eq!(queue.get(0).unwrap().time.beat, 5);
+        assert_eq!(queue.get(1).unwrap().time.beat, 10);
+        assert_eq!(queue.get(2).unwrap().time.beat, 15);
     }
 
     #[test]

@@ -186,19 +186,7 @@ impl Effect {
         }
     }
 
-    /// Returns true if this effect has memory (uses previous value when param is 0).
-    pub fn has_memory(&self) -> bool {
-        matches!(
-            self,
-            Effect::PortaUp(_)
-                | Effect::PortaDown(_)
-                | Effect::TonePorta(_)
-                | Effect::Vibrato { .. }
-                | Effect::VolumeSlide(_)
-                | Effect::TonePortaVolSlide(_)
-                | Effect::VibratoVolSlide(_)
-        )
-    }
+
 
     /// Returns true if this effect is processed only on tick 0.
     pub fn is_row_effect(&self) -> bool {

@@ -104,11 +104,6 @@ impl ChannelState {
         }
     }
 
-    /// Reset the channel to initial state.
-    pub fn reset(&mut self) {
-        *self = Self::new();
-    }
-
     /// Trigger a new note.
     pub fn trigger(&mut self, note: u8, instrument: u8, sample_index: u8) {
         self.note = note;

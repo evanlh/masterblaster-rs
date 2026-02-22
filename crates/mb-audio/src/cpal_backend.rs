@@ -108,16 +108,6 @@ impl CpalOutput {
 }
 
 impl CpalOutput {
-    /// Write a single frame, parking until the ring buffer has room.
-    ///
-    /// The CPAL callback calls `unpark()` after consuming frames, so this
-    /// sleeps instead of burning CPU while waiting for buffer space.
-    pub fn write_park(&mut self, frame: Frame) {
-        while self.producer.try_push(frame).is_err() {
-            std::thread::park();
-        }
-    }
-
     /// Write a batch of frames, parking only when the ring buffer is full.
     ///
     /// Pushes as many frames as fit via `push_slice`, then parks until the
