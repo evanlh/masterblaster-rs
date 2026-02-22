@@ -611,10 +611,10 @@ mod tests {
         song
     }
 
-    /// Schedule a NoteOn at tick 0 on channel 0.
+    /// Schedule a NoteOn at the engine's current time on channel 0.
     fn schedule_note(engine: &mut Engine, note: u8, instrument: u8) {
         engine.schedule(Event::new(
-            MusicalTime::zero(),
+            engine.position(),
             EventTarget::Channel(0),
             EventPayload::NoteOn { note, velocity: 64, instrument },
         ));
@@ -689,7 +689,7 @@ mod tests {
 
         // Re-trigger at higher note
         engine.schedule(Event::new(
-            MusicalTime::zero(),
+            engine.position(),
             EventTarget::Channel(0),
             EventPayload::NoteOn { note: 60, velocity: 64, instrument: 1 },
         ));
@@ -710,7 +710,7 @@ mod tests {
         assert!(engine.channel(0).unwrap().playing);
 
         engine.schedule(Event::new(
-            MusicalTime::zero(),
+            engine.position(),
             EventTarget::Channel(0),
             EventPayload::NoteOff { note: 0 },
         ));
@@ -745,7 +745,7 @@ mod tests {
         assert_eq!(spt_before, 882);
 
         engine.schedule(Event::new(
-            MusicalTime::zero(),
+            engine.position(),
             EventTarget::Global,
             EventPayload::SetTempo(15000), // 150 BPM * 100
         ));
@@ -769,7 +769,7 @@ mod tests {
     /// Schedule an effect at tick 0 on channel 0.
     fn schedule_effect(engine: &mut Engine, effect: mb_ir::Effect) {
         engine.schedule(Event::new(
-            MusicalTime::zero(),
+            engine.position(),
             EventTarget::Channel(0),
             EventPayload::Effect(effect),
         ));
@@ -1026,7 +1026,7 @@ mod tests {
 
         // Set porta target to C-3 (period 214) via PortaTarget event
         engine.schedule(Event::new(
-            MusicalTime::zero(),
+            engine.position(),
             EventTarget::Channel(0),
             EventPayload::PortaTarget { note: 60, instrument: 1 },
         ));
@@ -1051,7 +1051,7 @@ mod tests {
         engine.render_frame();
 
         engine.schedule(Event::new(
-            MusicalTime::zero(),
+            engine.position(),
             EventTarget::Channel(0),
             EventPayload::PortaTarget { note: 60, instrument: 1 },
         ));
@@ -1078,7 +1078,7 @@ mod tests {
 
         // PortaTarget should NOT reset position
         engine.schedule(Event::new(
-            MusicalTime::zero(),
+            engine.position(),
             EventTarget::Channel(0),
             EventPayload::PortaTarget { note: 60, instrument: 1 },
         ));
@@ -1097,7 +1097,7 @@ mod tests {
 
         // Set up porta target
         engine.schedule(Event::new(
-            MusicalTime::zero(),
+            engine.position(),
             EventTarget::Channel(0),
             EventPayload::PortaTarget { note: 60, instrument: 1 },
         ));
