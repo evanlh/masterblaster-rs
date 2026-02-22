@@ -424,42 +424,11 @@ impl Engine {
         if !channel.playing {
             return Frame::silence();
         }
-
         let sample = match self.song.samples.get(channel.sample_index as usize) {
             Some(s) => s,
             None => return Frame::silence(),
         };
-
-        // Read sample value with linear interpolation
-        let sample_value = sample.data.get_mono_interpolated(channel.position);
-
-        // Apply volume (with tremolo offset) and panning
-        // pan: -64 (full left) to +64 (full right)
-        // Convert to 0..128 range for linear crossfade
-        let vol = (channel.volume as i32 + channel.volume_offset as i32).clamp(0, 64);
-        let pan_right = (channel.panning as i32 + 64) as i32; // 0..128
-        let left_vol = ((128 - pan_right) * vol) >> 7;
-        let right_vol = (pan_right * vol) >> 7;
-
-        let left = (sample_value as i32 * left_vol) >> 6;
-        let right = (sample_value as i32 * right_vol) >> 6;
-
-        // Advance position
-        channel.position += channel.increment;
-
-        // Handle looping
-        let pos_samples = (channel.position >> 16) as u32;
-        if sample.has_loop() && pos_samples >= sample.loop_end {
-            let loop_len = sample.loop_end - sample.loop_start;
-            channel.position -= loop_len << 16;
-        } else if pos_samples >= sample.len() as u32 {
-            channel.playing = false;
-        }
-
-        Frame {
-            left: left.clamp(-32768, 32767) as i16,
-            right: right.clamp(-32768, 32767) as i16,
-        }
+        return channel.render(sample);
     }
 
     /// Render the audio graph by traversing nodes in topological order.
