@@ -1,7 +1,9 @@
 //! Channel state for tracker playback.
 
 use mb_ir::{
-    Effect, ModEnvelope, ModMode, Sample, add_mode_sine_envelope, arpeggio_envelope, retrigger_envelope
+    Effect, ModEnvelope, ModMode, Sample,
+    add_mode_sine_envelope, arpeggio_envelope, note_cut_envelope, porta_envelope,
+    retrigger_envelope, tone_porta_envelope, volume_slide_envelope,
 };
 
 use crate::envelope_state::EnvelopeState;
@@ -34,12 +36,6 @@ pub struct ChannelState {
     pub increment: u32,
     /// Is the channel currently playing?
     pub playing: bool,
-
-    // Per-tick effect (direct-mutation effects only)
-    /// Currently active per-tick effect
-    pub active_effect: Effect,
-    /// Tick counter for the current active effect
-    pub effect_tick: u8,
 
     // Base parameter values
     /// Current volume (0-64)
@@ -113,8 +109,6 @@ impl ChannelState {
         self.playing = true;
         self.envelope_tick = 0;
         self.loop_forward = true;
-        self.active_effect = Effect::None;
-        self.effect_tick = 0;
         self.period_offset = 0;
         self.volume_offset = 0;
         // Clear modulators (respect no-retrig waveform flag)
@@ -167,43 +161,41 @@ impl ChannelState {
         }
     }
 
-    /// Slide period toward target_period by porta_speed.
-    fn apply_tone_porta(&mut self) {
-        if self.target_period == 0 || self.period == 0 {
-            return;
-        }
-        if self.period > self.target_period {
-            self.period = self.period.saturating_sub(self.porta_speed as u16);
-            if self.period < self.target_period {
-                self.period = self.target_period;
-            }
-        } else if self.period < self.target_period {
-            self.period = self.period.saturating_add(self.porta_speed as u16);
-            if self.period > self.target_period {
-                self.period = self.target_period;
-            }
-        }
-    }
-
     /// Clear temporary per-tick modulation before applying effects.
     pub fn clear_modulation(&mut self) {
         self.period_offset = 0;
         self.volume_offset = 0;
     }
 
-    /// Advance the period modulator and write period_offset.
+    /// Advance the period modulator and apply based on mode.
     fn advance_period_mod(&mut self, spt: u32) {
         if let Some(m) = &mut self.period_mod {
+            let prev = self.period;
             m.state.advance(&m.envelope, spt);
-            self.period_offset = m.state.value() as i16;
+            match m.mode {
+                ModMode::Set => {
+                    let mut p = clamp_period(m.state.value() as u16);
+                    // Prevent overshoot for tone portamento
+                    if self.target_period > 0 {
+                        p = clamp_toward(p, prev, self.target_period);
+                    }
+                    self.period = p;
+                }
+                ModMode::Add => self.period_offset = m.state.value() as i16,
+                _ => {}
+            }
         }
     }
 
-    /// Advance the volume modulator and write volume_offset.
+    /// Advance the volume modulator and apply based on mode.
     fn advance_volume_mod(&mut self, spt: u32) {
         if let Some(m) = &mut self.volume_mod {
             m.state.advance(&m.envelope, spt);
-            self.volume_offset = m.state.value() as i8;
+            match m.mode {
+                ModMode::Set => self.volume = m.state.value().clamp(0.0, 64.0) as u8,
+                ModMode::Add => self.volume_offset = m.state.value() as i8,
+                _ => {}
+            }
         }
     }
 
@@ -217,69 +209,87 @@ impl ChannelState {
         }
     }
 
-    /// Apply a per-tick effect (called every tick after the first).
-    pub fn apply_tick_effect(&mut self, spt: u32) {
-        self.effect_tick = self.effect_tick.wrapping_add(1);
-        match self.active_effect {
-            Effect::VolumeSlide(delta) => {
-                self.volume = (self.volume as i16 + delta as i16).clamp(0, 64) as u8;
-            }
-            Effect::PortaUp(v) => {
-                self.period = clamp_period(self.period.saturating_sub(v as u16));
-            }
-            Effect::PortaDown(v) => {
-                self.period = clamp_period(self.period.saturating_add(v as u16));
-            }
-            Effect::TonePorta(_) => {
-                self.apply_tone_porta();
-            }
-            Effect::TonePortaVolSlide(delta) => {
-                self.apply_tone_porta();
-                self.volume = (self.volume as i16 + delta as i16).clamp(0, 64) as u8;
-            }
-            Effect::Vibrato { speed, depth } => {
-                if speed > 0 { self.vibrato_speed = speed; }
-                if depth > 0 { self.vibrato_depth = depth; }
-                self.advance_period_mod(spt);
-            }
-            Effect::VibratoVolSlide(delta) => {
-                self.advance_period_mod(spt);
-                self.volume = (self.volume as i16 + delta as i16).clamp(0, 64) as u8;
-            }
-            Effect::Tremolo { speed, depth } => {
-                if speed > 0 { self.tremolo_speed = speed; }
-                if depth > 0 { self.tremolo_depth = depth; }
-                self.advance_volume_mod(spt);
-            }
-            Effect::Arpeggio { x: _, y: _ } => {
-                self.advance_period_mod(spt);
-            }
-            Effect::NoteCut(tick) => {
-                if self.effect_tick >= tick {
-                    self.volume = 0;
-                }
-            }
-            Effect::RetriggerNote(_) => {
-                self.advance_trigger_mod(spt);
-            }
-            _ => {}
-        }
+    /// Advance all active modulators (called every tick).
+    pub fn advance_modulators(&mut self, spt: u32) {
+        self.advance_period_mod(spt);
+        self.advance_volume_mod(spt);
+        self.advance_trigger_mod(spt);
     }
 
     /// Set up envelope-based modulators for the current effect.
     /// Called when a new per-tick effect is dispatched.
     pub fn setup_modulator(&mut self, effect: &Effect, spt: u32) {
         match effect {
+            Effect::VolumeSlide(delta) => {
+                let env = volume_slide_envelope(self.volume as f32, *delta as f32, spt);
+                self.volume_mod = Some(ActiveMod::new(env, ModMode::Set));
+                self.period_mod = None;
+                self.trigger_mod = None;
+            }
+            Effect::PortaUp(v) => {
+                self.target_period = 0; // clear tone porta target
+                let env = porta_envelope(
+                    self.period as f32, -(*v as f32),
+                    PERIOD_MIN as f32, PERIOD_MAX as f32, spt,
+                );
+                self.period_mod = Some(ActiveMod::new(env, ModMode::Set));
+                self.volume_mod = None;
+                self.trigger_mod = None;
+            }
+            Effect::PortaDown(v) => {
+                self.target_period = 0; // clear tone porta target
+                let env = porta_envelope(
+                    self.period as f32, *v as f32,
+                    PERIOD_MIN as f32, PERIOD_MAX as f32, spt,
+                );
+                self.period_mod = Some(ActiveMod::new(env, ModMode::Set));
+                self.volume_mod = None;
+                self.trigger_mod = None;
+            }
+            Effect::TonePorta(_speed) => {
+                let env = tone_porta_envelope(
+                    self.period as f32, self.target_period as f32,
+                    self.porta_speed as f32, spt,
+                );
+                self.period_mod = Some(ActiveMod::new(env, ModMode::Set));
+                self.volume_mod = None;
+                self.trigger_mod = None;
+            }
+            Effect::TonePortaVolSlide(delta) => {
+                let period_env = tone_porta_envelope(
+                    self.period as f32, self.target_period as f32,
+                    self.porta_speed as f32, spt,
+                );
+                self.period_mod = Some(ActiveMod::new(period_env, ModMode::Set));
+                let vol_env = volume_slide_envelope(self.volume as f32, *delta as f32, spt);
+                self.volume_mod = Some(ActiveMod::new(vol_env, ModMode::Set));
+                self.trigger_mod = None;
+            }
             Effect::Vibrato { speed, depth } => {
                 let s = if *speed > 0 { *speed } else { self.vibrato_speed };
                 let d = if *depth > 0 { *depth } else { self.vibrato_depth };
+                if *speed > 0 { self.vibrato_speed = s; }
+                if *depth > 0 { self.vibrato_depth = d; }
                 self.period_mod = build_add_mode_sine_mod(s, d, spt);
                 self.volume_mod = None;
+                self.trigger_mod = None;
+            }
+            Effect::VibratoVolSlide(delta) => {
+                // Keep existing period_mod (vibrato continues from previous row)
+                // If no vibrato mod exists, create one from stored params
+                if self.period_mod.is_none() && self.vibrato_speed > 0 {
+                    self.period_mod =
+                        build_add_mode_sine_mod(self.vibrato_speed, self.vibrato_depth, spt);
+                }
+                let vol_env = volume_slide_envelope(self.volume as f32, *delta as f32, spt);
+                self.volume_mod = Some(ActiveMod::new(vol_env, ModMode::Set));
                 self.trigger_mod = None;
             }
             Effect::Tremolo { speed, depth } => {
                 let s = if *speed > 0 { *speed } else { self.tremolo_speed };
                 let d = if *depth > 0 { *depth } else { self.tremolo_depth };
+                if *speed > 0 { self.tremolo_speed = s; }
+                if *depth > 0 { self.tremolo_depth = d; }
                 self.volume_mod = build_add_mode_sine_mod(s, d, spt);
                 self.period_mod = None;
                 self.trigger_mod = None;
@@ -289,21 +299,17 @@ impl ChannelState {
                 self.volume_mod = None;
                 self.trigger_mod = None;
             }
+            Effect::NoteCut(tick) if *tick > 0 => {
+                let env = note_cut_envelope(self.volume as f32, *tick, spt);
+                self.volume_mod = Some(ActiveMod::new(env, ModMode::Set));
+                self.period_mod = None;
+                self.trigger_mod = None;
+            }
             Effect::RetriggerNote(interval) if *interval > 0 => {
                 let env = retrigger_envelope(*interval, spt);
                 self.trigger_mod = Some(ActiveMod::new(env, ModMode::Trigger));
                 self.period_mod = None;
                 self.volume_mod = None;
-            }
-            Effect::VibratoVolSlide(_) => {
-                // Keep existing period_mod (vibrato continues from previous row)
-                // If no vibrato mod exists, create one from stored params
-                if self.period_mod.is_none() && self.vibrato_speed > 0 {
-                    self.period_mod =
-                        build_add_mode_sine_mod(self.vibrato_speed, self.vibrato_depth, spt);
-                }
-                self.volume_mod = None;
-                self.trigger_mod = None;
             }
             _ => {
                 // Non-modulator effects: clear all mods
@@ -347,6 +353,19 @@ impl ChannelState {
         }
     }
 
+}
+
+/// Clamp `value` so it doesn't overshoot `target` relative to `prev`.
+/// If `prev` was above `target` and `value` went below it, return `target`.
+/// If `prev` was below `target` and `value` went above it, return `target`.
+fn clamp_toward(value: u16, prev: u16, target: u16) -> u16 {
+    if prev > target && value < target {
+        target
+    } else if prev < target && value > target {
+        target
+    } else {
+        value
+    }
 }
 
 fn build_add_mode_sine_mod(speed: u8, depth: u8, spt: u32) -> Option<ActiveMod> {

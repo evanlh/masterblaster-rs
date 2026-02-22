@@ -64,37 +64,51 @@ pub fn sub_beats_per_tick(speed: u8, rows_per_beat: u8) -> u32 {
 }
 
 /// Build a volume slide envelope (Set mode, linear ramp to boundary).
+///
+/// Uses raw endpoint (`current + rate * dt_ticks`) so that linear interpolation
+/// at tick boundaries gives exactly `current + rate * n`, matching discrete
+/// per-tick behavior. The caller clamps the result to [0, 64].
 pub fn volume_slide_envelope(current: f32, rate: f32, spt: u32) -> ModEnvelope {
-    let target = if rate > 0.0 { 64.0 } else { 0.0 };
-    let diff = (target - current).abs();
+    let boundary = if rate > 0.0 { 64.0 } else { 0.0 };
+    let diff = (boundary - current).abs();
     let dt_ticks = if rate.abs() < 1e-6 { 1 } else { (diff / rate.abs()).ceil() as u32 };
+    let raw_target = current + rate * dt_ticks as f32;
     let dt = dt_ticks * spt;
     ModEnvelope::one_shot(&[
         ModBreakPoint::new(0, current, CurveKind::Linear),
-        ModBreakPoint::new(dt.max(1), target, CurveKind::Step),
+        ModBreakPoint::new(dt.max(1), raw_target, CurveKind::Step),
     ])
 }
 
 /// Build a portamento envelope (Set mode, linear ramp toward period boundary).
+///
+/// Uses raw endpoint so linear interpolation at tick boundaries gives exactly
+/// `current + rate * n`. The caller clamps via `clamp_period`.
 pub fn porta_envelope(current: f32, rate: f32, min: f32, max: f32, spt: u32) -> ModEnvelope {
-    let target = if rate < 0.0 { min } else { max };
-    let diff = (target - current).abs();
+    let boundary = if rate < 0.0 { min } else { max };
+    let diff = (boundary - current).abs();
     let dt_ticks = if rate.abs() < 1e-6 { 1 } else { (diff / rate.abs()).ceil() as u32 };
+    let raw_target = current + rate * dt_ticks as f32;
     let dt = dt_ticks * spt;
     ModEnvelope::one_shot(&[
         ModBreakPoint::new(0, current, CurveKind::Linear),
-        ModBreakPoint::new(dt.max(1), target, CurveKind::Step),
+        ModBreakPoint::new(dt.max(1), raw_target, CurveKind::Step),
     ])
 }
 
 /// Build a tone portamento envelope (Set mode, ramp toward target period).
+///
+/// Uses raw endpoint so linear interpolation at tick boundaries gives exactly
+/// `current ± speed * n`. The caller clamps toward `target_period`.
 pub fn tone_porta_envelope(current: f32, target: f32, speed: f32, spt: u32) -> ModEnvelope {
     let diff = (target - current).abs();
     let dt_ticks = if speed < 1e-6 { 1 } else { (diff / speed).ceil() as u32 };
+    let rate = if current > target { -speed } else { speed };
+    let raw_target = current + rate * dt_ticks as f32;
     let dt = dt_ticks * spt;
     ModEnvelope::one_shot(&[
         ModBreakPoint::new(0, current, CurveKind::Linear),
-        ModBreakPoint::new(dt.max(1), target, CurveKind::Step),
+        ModBreakPoint::new(dt.max(1), raw_target, CurveKind::Step),
     ])
 }
 
@@ -137,6 +151,15 @@ pub fn arpeggio_envelope(offsets: [f32; 3], spt: u32) -> ModEnvelope {
         0,
         3,
     )
+}
+
+/// Build a note-cut envelope (Set mode, holds current volume then drops to 0).
+pub fn note_cut_envelope(current_volume: f32, tick: u8, spt: u32) -> ModEnvelope {
+    let dt = tick as u32 * spt;
+    ModEnvelope::one_shot(&[
+        ModBreakPoint::new(0, current_volume, CurveKind::Step),
+        ModBreakPoint::new(dt.max(1), 0.0, CurveKind::Step),
+    ])
 }
 
 /// Build a retrigger envelope (Trigger mode, periodic loop).
@@ -186,6 +209,7 @@ mod tests {
         let env = volume_slide_envelope(0.0, 2.0, SPT);
         assert_eq!(env.points.len(), 2);
         assert_eq!(env.points[0].value, 0.0);
+        // Raw endpoint: 0 + 2*32 = 64 (exact in this case)
         assert_eq!(env.points[1].value, 64.0);
         // 32 ticks to go 0→64 at rate 2
         assert_eq!(env.points[1].dt, 32 * SPT);
@@ -194,6 +218,7 @@ mod tests {
     #[test]
     fn volume_slide_envelope_ramps_down() {
         let env = volume_slide_envelope(64.0, -4.0, SPT);
+        // Raw endpoint: 64 + (-4)*16 = 0 (exact in this case)
         assert_eq!(env.points[1].value, 0.0);
         assert_eq!(env.points[1].dt, 16 * SPT);
     }
@@ -202,7 +227,8 @@ mod tests {
     fn tone_porta_envelope_computes_duration() {
         let env = tone_porta_envelope(428.0, 214.0, 8.0, SPT);
         assert_eq!(env.points[0].value, 428.0);
-        assert_eq!(env.points[1].value, 214.0);
+        // Raw endpoint: 428 + (-8)*27 = 212 (may overshoot, caller clamps)
+        assert_eq!(env.points[1].value, 212.0);
         // ceil((428-214)/8) = 27 ticks
         assert_eq!(env.points[1].dt, 27 * SPT);
     }
@@ -225,6 +251,17 @@ mod tests {
         let lr = env.loop_range.unwrap();
         assert_eq!(lr.start, 0);
         assert_eq!(lr.end, 3);
+    }
+
+    #[test]
+    fn note_cut_envelope_holds_then_drops() {
+        let env = note_cut_envelope(64.0, 3, SPT);
+        assert_eq!(env.points.len(), 2);
+        assert_eq!(env.points[0].value, 64.0);
+        assert_eq!(env.points[1].value, 0.0);
+        assert_eq!(env.points[1].dt, 3 * SPT);
+        // Step curve: value stays at 64 until breakpoint, then jumps to 0
+        assert_eq!(env.points[0].curve, CurveKind::Step);
     }
 
     #[test]

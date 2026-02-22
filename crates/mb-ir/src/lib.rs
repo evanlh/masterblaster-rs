@@ -31,7 +31,7 @@ pub use graph::{AudioGraph, Connection, Node, NodeId, NodeType, Parameter};
 pub use instrument::{DuplicateCheck, Envelope, EnvelopePoint, Instrument, NewNoteAction};
 pub use mod_envelope::{interpolate, CurveKind, LoopRange, ModBreakPoint, ModEnvelope};
 pub use modulator::{
-    adsr_envelope, arpeggio_envelope, porta_envelope, retrigger_envelope,
+    adsr_envelope, arpeggio_envelope, note_cut_envelope, porta_envelope, retrigger_envelope,
     sub_beats_per_tick, tone_porta_envelope, add_mode_sine_envelope,
     volume_slide_envelope, ChannelParam, GlobalParam, ModMode, ModTarget, Modulator,
 };

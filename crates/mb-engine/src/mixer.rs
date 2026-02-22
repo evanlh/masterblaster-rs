@@ -260,7 +260,7 @@ impl Engine {
                 continue;
             }
             channel.clear_modulation();
-            channel.apply_tick_effect(spt);
+            channel.advance_modulators(spt);
             channel.update_increment(sample_rate);
         }
         for machine in self.machines.iter_mut().flatten() {
@@ -380,8 +380,6 @@ impl Engine {
                         // Row pitch effects need increment update
                         channel.update_increment(self.sample_rate);
                     } else {
-                        channel.active_effect = *effect;
-                        channel.effect_tick = 0;
                         channel.setup_modulator(effect, spt);
                     }
                 }
@@ -884,7 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn new_note_clears_active_effect() {
+    fn new_note_clears_modulators() {
         let song = song_with_sample(vec![127; 100000], 32);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
@@ -893,12 +891,13 @@ mod tests {
 
         schedule_effect(&mut engine, mb_ir::Effect::VolumeSlide(4));
         engine.render_frame();
-        assert_ne!(engine.channel(0).unwrap().active_effect, mb_ir::Effect::None);
+        assert!(engine.channel(0).unwrap().volume_mod.is_some());
 
-        // New note should clear the active effect
+        // New note should clear the modulators
         schedule_note(&mut engine, 60, 1);
         engine.render_frame();
-        assert_eq!(engine.channel(0).unwrap().active_effect, mb_ir::Effect::None);
+        assert!(engine.channel(0).unwrap().volume_mod.is_none());
+        assert!(engine.channel(0).unwrap().period_mod.is_none());
     }
 
     // === Pitch effect tests (A1/A2) ===
