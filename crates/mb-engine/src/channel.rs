@@ -1,12 +1,12 @@
 //! Channel state for tracker playback.
 
 use mb_ir::{
-    arpeggio_envelope, retrigger_envelope, add_mode_sine_envelope, Effect,
-    ModEnvelope, ModMode,
+    Effect, ModEnvelope, ModMode, Sample, add_mode_sine_envelope, arpeggio_envelope, retrigger_envelope
 };
 
 use crate::envelope_state::EnvelopeState;
 use crate::frequency::{clamp_period, note_to_period, period_to_increment, PERIOD_MAX, PERIOD_MIN};
+use crate::frame::Frame;
 
 /// An active envelope-based modulator on a channel parameter.
 #[derive(Clone, Debug)]
@@ -318,6 +318,43 @@ impl ChannelState {
             }
         }
     }
+
+    pub fn render(&mut self, sample: &Sample) -> Frame {
+        // Read sample value with linear interpolation
+        //let sample_value = sample.data.get_mono_interpolated(self.position);
+
+        //let mut frame: Frame = Frame::silence();
+        let (l, r) = sample.data.get_stereo(self.position as usize);
+
+        // Apply volume (with tremolo offset) and panning
+        // pan: -64 (full left) to +64 (full right)
+        // Convert to 0..128 range for linear crossfade
+        let vol = (self.volume as i32 + self.volume_offset as i32).clamp(0, 64);
+        let pan_right = (self.panning as i32 + 64) as i32; // 0..128
+        let left_vol = ((128 - pan_right) * vol) >> 7;
+        let right_vol = (pan_right * vol) >> 7;
+
+        let left = (l as i32 * left_vol) >> 6;
+        let right = (r as i32 * right_vol) >> 6;
+
+        // Advance position
+        self.position += self.increment;
+
+        // Handle looping
+        let pos_samples = (self.position >> 16) as u32;
+        if sample.has_loop() && pos_samples >= sample.loop_end {
+            let loop_len = sample.loop_end - sample.loop_start;
+            self.position -= loop_len << 16;
+        } else if pos_samples >= sample.len() as u32 {
+            self.playing = false;
+        }
+
+        Frame {
+            left: left.clamp(-32768, 32767) as i16,
+            right: right.clamp(-32768, 32767) as i16,
+        }
+    }
+
 }
 
 fn build_add_mode_sine_mod(speed: u8, depth: u8, spt: u32) -> Option<ActiveMod> {
