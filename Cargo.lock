@@ -1365,7 +1365,6 @@ name = "mb-audio"
 version = "0.1.0"
 dependencies = [
  "cpal",
- "mb-engine",
  "ringbuf",
 ]
 
@@ -1383,7 +1382,6 @@ name = "mb-formats"
 version = "0.1.0"
 dependencies = [
  "binrw",
- "mb-engine",
  "mb-ir",
 ]
 

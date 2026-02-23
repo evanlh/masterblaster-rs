@@ -2,7 +2,6 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
-use mb_engine::Frame;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,13 +14,13 @@ pub struct CpalOutput {
     device: Device,
     config: StreamConfig,
     stream: Option<Stream>,
-    producer: HeapProd<Frame>,
+    producer: HeapProd<f32>,
     running: Arc<AtomicBool>,
 }
 
 impl CpalOutput {
     /// Create a new CPAL output with default device.
-    pub fn new() -> Result<(Self, HeapCons<Frame>), AudioError> {
+    pub fn new() -> Result<(Self, HeapCons<f32>), AudioError> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -35,9 +34,9 @@ impl CpalOutput {
         // Force stereo output — the stream callback assumes 2-channel interleaving
         config.channels = 2;
 
-        // Create ring buffer for audio data (about 100ms buffer)
+        // Create ring buffer for audio data (about 100ms buffer, interleaved f32)
         let buffer_size = (config.sample_rate.0 as usize / 10) * 2;
-        let rb = HeapRb::<Frame>::new(buffer_size);
+        let rb = HeapRb::<f32>::new(buffer_size);
         let (producer, consumer) = rb.split();
 
         let output = Self {
@@ -57,39 +56,21 @@ impl CpalOutput {
     /// can sleep instead of spin-waiting when the ring buffer is full.
     pub fn build_stream(
         &mut self,
-        mut consumer: HeapCons<Frame>,
+        mut consumer: HeapCons<f32>,
         producer_thread: std::thread::Thread,
     ) -> Result<(), AudioError> {
         let running = self.running.clone();
-        let channels = self.config.channels as usize;
         let stream = self.device
             .build_output_stream(
                 &self.config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     if !running.load(Ordering::Relaxed) {
-                        for sample in data.iter_mut() {
-                            *sample = 0.0;
-                        }
+                        data.fill(0.0);
                         return;
                     }
 
-                    for chunk in data.chunks_mut(channels) {
-                        if let Some(frame) = consumer.try_pop() {
-                            // TODO ASKCC why these divides? Shiftable? Ideally no divides in a hotloop
-                            let left = frame.left as f32 / 32768.0;
-                            let right = frame.right as f32 / 32768.0;
-                            for (i, sample) in chunk.iter_mut().enumerate() {
-                                *sample = match i {
-                                    0 => left,
-                                    1 => right,
-                                    _ => 0.0,
-                                };
-                            }
-                        } else {
-                            for sample in chunk.iter_mut() {
-                                *sample = 0.0;
-                            }
-                        }
+                    for sample in data.iter_mut() {
+                        *sample = consumer.try_pop().unwrap_or(0.0);
                     }
 
                     // Wake the producer — buffer now has room
@@ -112,12 +93,12 @@ impl AudioOutput for CpalOutput {
         self.config.sample_rate.0
     }
 
-    fn write(&mut self, frames: &[Frame]) {
+    fn write(&mut self, data: &[f32]) {
         let mut offset = 0;
-        while offset < frames.len() {
-            let pushed = self.producer.push_slice(&frames[offset..]);
+        while offset < data.len() {
+            let pushed = self.producer.push_slice(&data[offset..]);
             offset += pushed;
-            if offset < frames.len() {
+            if offset < data.len() {
                 std::thread::park();
             }
         }

@@ -6,6 +6,7 @@
 //! To verify against existing snapshots:
 //!   cargo test --test snapshot_tests
 
+use mb_formats::parse_wav_i16_samples;
 use mb_master::Controller;
 use std::path::PathBuf;
 use std::{env, fs};
@@ -33,6 +34,7 @@ fn snapshot_stem(fixture_name: &str) -> String {
     fixture_name.strip_suffix(".mod").unwrap_or(fixture_name).to_string()
 }
 
+/// Compare WAV files with ±2 LSB tolerance on i16 samples.
 fn assert_snapshot(name: &str, wav_bytes: &[u8]) {
     let path = snapshot_path(name);
 
@@ -50,23 +52,33 @@ fn assert_snapshot(name: &str, wav_bytes: &[u8]) {
         )
     });
 
-    if wav_bytes == expected.as_slice() {
-        return;
+    let actual_samples = parse_wav_i16_samples(wav_bytes)
+        .expect("Failed to parse actual WAV samples");
+    let expected_samples = parse_wav_i16_samples(&expected)
+        .expect("Failed to parse expected WAV samples");
+
+    if actual_samples.len() != expected_samples.len() {
+        panic!(
+            "Snapshot mismatch: {}\n  expected samples: {}\n  actual samples:   {}\n\nRun with UPDATE_SNAPSHOTS=1 to update.",
+            path.display(),
+            expected_samples.len(),
+            actual_samples.len(),
+        );
     }
 
-    let first_diff = wav_bytes
-        .iter()
-        .zip(expected.iter())
-        .position(|(a, b)| a != b)
-        .unwrap_or(wav_bytes.len().min(expected.len()));
-
-    panic!(
-        "Snapshot mismatch: {}\n  expected size: {} bytes\n  actual size:   {} bytes\n  first diff at byte: {}\n\nRun with UPDATE_SNAPSHOTS=1 to update.",
-        path.display(),
-        expected.len(),
-        wav_bytes.len(),
-        first_diff
-    );
+    // Tolerance of ±2 LSB accounts for:
+    // - Integer right-shift (rounds toward -inf) vs f32 multiply (rounds toward zero)
+    // - Two-stage conversion: i16→f32 in engine, f32→i16 in WAV writer
+    const TOLERANCE: i32 = 2;
+    for (i, (&actual, &expected)) in actual_samples.iter().zip(expected_samples.iter()).enumerate() {
+        let diff = (actual as i32 - expected as i32).abs();
+        if diff > TOLERANCE {
+            panic!(
+                "Snapshot mismatch: {}\n  sample {}: expected {}, got {} (diff {})\n  tolerance: ±{} LSB\n\nRun with UPDATE_SNAPSHOTS=1 to update.",
+                path.display(), i, expected, actual, diff, TOLERANCE
+            );
+        }
+    }
 }
 
 fn snapshot_test(fixture_name: &str) {

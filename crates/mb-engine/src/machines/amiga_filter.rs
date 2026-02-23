@@ -5,7 +5,8 @@
 
 use core::f32::consts::TAU;
 
-use crate::machine::{Machine, MachineInfo, MachineType, ParamInfo, WorkMode};
+use mb_ir::{AudioBuffer, AudioStream, ChannelConfig};
+use crate::machine::{Machine, MachineInfo, MachineType, ParamInfo};
 
 const DEFAULT_CUTOFF: i32 = 4410;
 
@@ -51,6 +52,37 @@ impl AmigaFilter {
     }
 }
 
+impl AudioStream for AmigaFilter {
+    fn channel_config(&self) -> ChannelConfig {
+        ChannelConfig { inputs: 2, outputs: 2 }
+    }
+
+    fn render(&mut self, output: &mut AudioBuffer) {
+        let alpha = self.alpha;
+        let frames = output.frames() as usize;
+
+        // Process left channel
+        let left = output.channel_mut(0);
+        let mut prev = self.prev_left;
+        for i in 0..frames {
+            prev += alpha * (left[i] - prev);
+            left[i] = prev;
+        }
+        self.prev_left = prev;
+
+        // Process right channel (if present)
+        if output.channels() >= 2 {
+            let right = output.channel_mut(1);
+            let mut prev = self.prev_right;
+            for i in 0..frames {
+                prev += alpha * (right[i] - prev);
+                right[i] = prev;
+            }
+            self.prev_right = prev;
+        }
+    }
+}
+
 impl Machine for AmigaFilter {
     fn info(&self) -> &MachineInfo {
         &INFO
@@ -62,26 +94,6 @@ impl Machine for AmigaFilter {
     }
 
     fn tick(&mut self) {}
-
-    fn work(&mut self, buffer: &mut [f32], mode: WorkMode) -> bool {
-        if mode == WorkMode::NoIO || mode == WorkMode::Write {
-            return false;
-        }
-        let alpha = self.alpha;
-        let mut prev_l = self.prev_left;
-        let mut prev_r = self.prev_right;
-
-        for pair in buffer.chunks_exact_mut(2) {
-            prev_l += alpha * (pair[0] - prev_l);
-            prev_r += alpha * (pair[1] - prev_r);
-            pair[0] = prev_l;
-            pair[1] = prev_r;
-        }
-
-        self.prev_left = prev_l;
-        self.prev_right = prev_r;
-        true
-    }
 
     fn stop(&mut self) {
         self.prev_left = 0.0;
@@ -117,30 +129,33 @@ mod tests {
     #[test]
     fn attenuates_high_frequency_content() {
         let mut f = init_filter(DEFAULT_CUTOFF, 44100);
-        // Generate a high-frequency square wave (alternating +1/-1)
-        let mut buf: Vec<f32> = (0..200)
-            .flat_map(|i| {
-                let v = if i % 2 == 0 { 1.0 } else { -1.0 };
-                [v, v]
-            })
-            .collect();
+        let n = 200;
+        let mut buf = AudioBuffer::new(2, n);
+        for i in 0..n as usize {
+            let v = if i % 2 == 0 { 1.0 } else { -1.0 };
+            buf.channel_mut(0)[i] = v;
+            buf.channel_mut(1)[i] = v;
+        }
 
-        f.work(&mut buf, WorkMode::ReadWrite);
+        f.render(&mut buf);
 
-        // After filtering, peak amplitude should be reduced
-        let peak: f32 = buf.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        let peak: f32 = buf.channel(0).iter().map(|s| s.abs()).fold(0.0f32, f32::max);
         assert!(peak < 0.95, "peak should be attenuated, got {}", peak);
     }
 
     #[test]
     fn passes_low_frequency_content() {
         let mut f = init_filter(DEFAULT_CUTOFF, 44100);
-        // DC signal should pass through nearly unchanged
-        let mut buf = vec![0.5f32; 200];
-        f.work(&mut buf, WorkMode::ReadWrite);
+        let n = 100;
+        let mut buf = AudioBuffer::new(2, n);
+        for i in 0..n as usize {
+            buf.channel_mut(0)[i] = 0.5;
+            buf.channel_mut(1)[i] = 0.5;
+        }
 
-        // After settling, values should be close to 0.5
-        let last = buf[buf.len() - 2];
+        f.render(&mut buf);
+
+        let last = buf.channel(0)[n as usize - 1];
         assert!(
             (last - 0.5).abs() < 0.01,
             "DC should pass through, got {}",
@@ -151,8 +166,11 @@ mod tests {
     #[test]
     fn stop_resets_state() {
         let mut f = init_filter(DEFAULT_CUTOFF, 44100);
-        let mut buf = vec![1.0; 20];
-        f.work(&mut buf, WorkMode::ReadWrite);
+        let mut buf = AudioBuffer::new(2, 10);
+        for i in 0..10 {
+            buf.channel_mut(0)[i] = 1.0;
+        }
+        f.render(&mut buf);
         assert!(f.prev_left != 0.0);
 
         f.stop();

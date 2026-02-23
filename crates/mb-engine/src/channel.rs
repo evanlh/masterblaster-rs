@@ -8,7 +8,13 @@ use mb_ir::{
 
 use crate::envelope_state::EnvelopeState;
 use crate::frequency::{clamp_period, note_to_period, period_to_increment, PERIOD_MAX, PERIOD_MIN};
-use crate::frame::Frame;
+
+/// A stereo audio frame (16-bit integer, internal to channel rendering).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Frame {
+    pub left: i16,
+    pub right: i16,
+}
 
 /// An active envelope-based modulator on a channel parameter.
 #[derive(Clone, Debug)]
@@ -320,7 +326,7 @@ impl ChannelState {
         }
     }
 
-    pub fn render(&mut self, sample: &Sample) -> Frame {
+    pub(crate) fn render(&mut self, sample: &Sample) -> Frame {
         // Read sample value with linear interpolation
         let sample_value = sample.data.get_mono_interpolated(self.position);
 

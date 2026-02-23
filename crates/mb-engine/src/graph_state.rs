@@ -3,16 +3,16 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use mb_ir::{AudioGraph, NodeId};
-
-use crate::frame::{Frame, WideFrame};
+use mb_ir::{AudioBuffer, AudioGraph, NodeId};
 
 /// Runtime state for the audio graph during playback.
 pub struct GraphState {
-    /// Output frame for each node (indexed by NodeId).
-    pub node_outputs: Vec<Frame>,
+    /// Output buffer for each node (indexed by NodeId).
+    pub node_outputs: Vec<AudioBuffer>,
     /// Pre-computed topological traversal order (sources first, Master last).
     pub topo_order: Vec<NodeId>,
+    /// Scratch buffer for gather_inputs (avoids borrow conflicts).
+    pub scratch: AudioBuffer,
 }
 
 impl GraphState {
@@ -20,15 +20,18 @@ impl GraphState {
     pub fn from_graph(graph: &AudioGraph) -> Self {
         let topo_order = topological_sort(graph);
         Self {
-            node_outputs: vec![Frame::silence(); graph.nodes.len()],
+            node_outputs: (0..graph.nodes.len())
+                .map(|_| AudioBuffer::new(2, 1))
+                .collect(),
             topo_order,
+            scratch: AudioBuffer::new(2, 1),
         }
     }
 
     /// Reset all node output buffers to silence.
     pub fn clear_outputs(&mut self) {
         for output in &mut self.node_outputs {
-            *output = Frame::silence();
+            output.silence();
         }
     }
 }
@@ -76,39 +79,28 @@ pub fn topological_sort(graph: &AudioGraph) -> Vec<NodeId> {
     result
 }
 
-/// Gather input frames from all connections feeding into `node_id`.
-pub fn gather_inputs(
-    graph: &AudioGraph,
-    node_outputs: &[Frame],
-    node_id: NodeId,
-) -> Frame {
-    let mut input = Frame::silence();
-    for conn in &graph.connections {
-        if conn.to == node_id {
-            if let Some(&src_output) = node_outputs.get(conn.from as usize) {
-                input.mix(src_output);
-            }
-        }
-    }
-    input
+/// Convert wire gain to linear scale.
+/// `gain` is stored as `(ratio * 100 - 100)` where 0 = unity.
+fn gain_linear(gain: i16) -> f32 {
+    (gain as f32 + 100.0) / 100.0
 }
 
-/// Gather input frames at i32 precision (no intermediate clamping).
-/// Applies per-wire gain from `Connection.gain`.
-pub fn gather_inputs_wide(
+/// Gather input buffers from all connections feeding into `node_id`.
+/// Results are accumulated into `scratch`, which is silenced first.
+pub fn gather_inputs(
     graph: &AudioGraph,
-    node_outputs: &[Frame],
+    node_outputs: &[AudioBuffer],
     node_id: NodeId,
-) -> WideFrame {
-    let mut wide = WideFrame::silence();
+    scratch: &mut AudioBuffer,
+) {
+    scratch.silence();
     for conn in &graph.connections {
         if conn.to == node_id {
-            if let Some(&src_output) = node_outputs.get(conn.from as usize) {
-                wide.accumulate_with_gain(src_output, conn.gain);
+            if let Some(src) = node_outputs.get(conn.from as usize) {
+                scratch.mix_from_scaled(src, gain_linear(conn.gain));
             }
         }
     }
-    wide
 }
 
 #[cfg(test)]
@@ -168,38 +160,48 @@ mod tests {
         graph.connect(a, 0);
         graph.connect(b, 0);
 
-        let mut outputs = vec![Frame::silence(); 3];
-        outputs[a as usize] = Frame { left: 100, right: 50 };
-        outputs[b as usize] = Frame { left: 200, right: 150 };
+        let mut outputs: Vec<AudioBuffer> = (0..3).map(|_| AudioBuffer::new(2, 1)).collect();
+        outputs[a as usize].channel_mut(0)[0] = 100.0 / 32768.0;
+        outputs[a as usize].channel_mut(1)[0] = 50.0 / 32768.0;
+        outputs[b as usize].channel_mut(0)[0] = 200.0 / 32768.0;
+        outputs[b as usize].channel_mut(1)[0] = 150.0 / 32768.0;
 
-        let input = gather_inputs(&graph, &outputs, 0);
-        assert_eq!(input.left, 300);
-        assert_eq!(input.right, 200);
+        let mut scratch = AudioBuffer::new(2, 1);
+        gather_inputs(&graph, &outputs, 0, &mut scratch);
+        assert!((scratch.channel(0)[0] - 300.0 / 32768.0).abs() < 1e-6);
+        assert!((scratch.channel(1)[0] - 200.0 / 32768.0).abs() < 1e-6);
     }
 
     #[test]
     fn gather_inputs_no_connections_returns_silence() {
         let graph = AudioGraph::with_master();
-        let outputs = vec![Frame::silence(); 1];
-        let input = gather_inputs(&graph, &outputs, 0);
-        assert_eq!(input, Frame::silence());
+        let outputs = vec![AudioBuffer::new(2, 1)];
+        let mut scratch = AudioBuffer::new(2, 1);
+        gather_inputs(&graph, &outputs, 0, &mut scratch);
+        assert_eq!(scratch.channel(0)[0], 0.0);
+        assert_eq!(scratch.channel(1)[0], 0.0);
     }
 
     #[test]
-    fn gather_inputs_wide_no_premature_clamp() {
+    fn gather_inputs_with_gain() {
         let mut graph = AudioGraph::with_master();
         let a = graph.add_node(NodeType::TrackerChannel { index: 0 });
-        let b = graph.add_node(NodeType::TrackerChannel { index: 1 });
-        graph.connect(a, 0);
-        graph.connect(b, 0);
+        // Manually set gain to -50 (half volume)
+        graph.connections.clear();
+        graph.connections.push(mb_ir::Connection {
+            from: a,
+            to: 0,
+            from_channel: 0,
+            to_channel: 0,
+            gain: -50,
+        });
 
-        let mut outputs = vec![Frame::silence(); 3];
-        outputs[a as usize] = Frame { left: 30000, right: 30000 };
-        outputs[b as usize] = Frame { left: 30000, right: 30000 };
+        let mut outputs: Vec<AudioBuffer> = (0..2).map(|_| AudioBuffer::new(2, 1)).collect();
+        outputs[a as usize].channel_mut(0)[0] = 1.0;
 
-        let wide = gather_inputs_wide(&graph, &outputs, 0);
-        assert_eq!(wide.left, 60000); // not clamped to 32767
-        assert_eq!(wide.right, 60000);
+        let mut scratch = AudioBuffer::new(2, 1);
+        gather_inputs(&graph, &outputs, 0, &mut scratch);
+        assert!((scratch.channel(0)[0] - 0.5).abs() < 1e-6);
     }
 
     #[test]

@@ -1,13 +1,13 @@
 //! WAV encoding and decoding for PCM audio.
 
 use crate::FormatError;
-use mb_engine::Frame;
 use mb_ir::{Sample, SampleData};
 use std::io::Write;
 
 // --- Writing ---
 
-pub fn write_wav(w: &mut impl Write, frames: &[Frame], sample_rate: u32) -> std::io::Result<()> {
+/// Write stereo f32 frames as 16-bit PCM WAV.
+pub fn write_wav(w: &mut impl Write, frames: &[[f32; 2]], sample_rate: u32) -> std::io::Result<()> {
     let num_channels: u16 = 2;
     let bits_per_sample: u16 = 16;
     let block_align = num_channels * (bits_per_sample / 8);
@@ -18,10 +18,16 @@ pub fn write_wav(w: &mut impl Write, frames: &[Frame], sample_rate: u32) -> std:
     write_data_chunk(w, frames, data_size)
 }
 
-pub fn frames_to_wav(frames: &[Frame], sample_rate: u32) -> Vec<u8> {
+/// Encode stereo f32 frames to a WAV byte buffer.
+pub fn frames_to_wav(frames: &[[f32; 2]], sample_rate: u32) -> Vec<u8> {
     let mut buf = Vec::new();
     write_wav(&mut buf, frames, sample_rate).expect("Vec<u8> write cannot fail");
     buf
+}
+
+/// Convert a single f32 sample to i16 (clamped).
+fn f32_to_i16(val: f32) -> i16 {
+    (val * 32768.0).clamp(-32768.0, 32767.0) as i16
 }
 
 fn write_riff_header(w: &mut impl Write, data_size: u32) -> std::io::Result<()> {
@@ -49,16 +55,30 @@ fn write_fmt_chunk(
 
 fn write_data_chunk(
     w: &mut impl Write,
-    frames: &[Frame],
+    frames: &[[f32; 2]],
     data_size: u32,
 ) -> std::io::Result<()> {
     w.write_all(b"data")?;
     w.write_all(&data_size.to_le_bytes())?;
     for frame in frames {
-        w.write_all(&frame.left.to_le_bytes())?;
-        w.write_all(&frame.right.to_le_bytes())?;
+        w.write_all(&f32_to_i16(frame[0]).to_le_bytes())?;
+        w.write_all(&f32_to_i16(frame[1]).to_le_bytes())?;
     }
     Ok(())
+}
+
+/// Extract raw interleaved i16 samples from a WAV file.
+///
+/// Useful for sample-level comparison in tests. 8-bit data is promoted to i16.
+pub fn parse_wav_i16_samples(data: &[u8]) -> Result<Vec<i16>, FormatError> {
+    let header = parse_header(data)?;
+    let end = (header.data_offset + header.data_size).min(data.len());
+    let raw = &data[header.data_offset..end];
+    Ok(match header.bits_per_sample {
+        8 => raw.iter().map(|&b| (b as i16 - 128) * 256).collect(),
+        16 => read_16bit_mono(raw), // interleaved i16 regardless of channel count
+        _ => return Err(FormatError::UnsupportedVersion),
+    })
 }
 
 // --- Reading ---
@@ -269,5 +289,17 @@ mod tests {
     #[test]
     fn too_short_rejected() {
         assert!(load_wav(&[0; 10], "short").is_err());
+    }
+
+    #[test]
+    fn f32_roundtrip() {
+        let frames = [[0.5f32, -0.5], [1.0, -1.0]];
+        let wav = frames_to_wav(&frames, 44100);
+        // Verify it's a valid WAV
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        // Data section should have 2 frames * 2 channels * 2 bytes = 8 bytes
+        let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
+        assert_eq!(data_size, 8);
     }
 }

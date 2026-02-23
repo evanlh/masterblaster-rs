@@ -1,17 +1,6 @@
 //! Machine trait for audio generators and effects.
 
-/// Work mode indicating data flow direction for `Machine::work()`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WorkMode {
-    /// Called but no input/output expected.
-    NoIO,
-    /// Input available, not writing (generator silent).
-    Read,
-    /// No input, writing output (generator active).
-    Write,
-    /// Normal: reading input, writing output.
-    ReadWrite,
-}
+use mb_ir::AudioStream;
 
 /// Whether a machine generates or processes audio.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,11 +29,12 @@ pub struct MachineInfo {
 }
 
 /// Core trait for audio generators and effects.
-pub trait Machine: Send {
+///
+/// Extends `AudioStream` for buffer-based rendering.
+pub trait Machine: AudioStream + Send {
     fn info(&self) -> &MachineInfo;
     fn init(&mut self, sample_rate: u32);
     fn tick(&mut self);
-    fn work(&mut self, buffer: &mut [f32], mode: WorkMode) -> bool;
     fn stop(&mut self);
     fn set_param(&mut self, param: u16, value: i32);
 }

@@ -69,15 +69,17 @@ cargo cli path/to/file.mod --wav output.wav
 ## Architecture Reminders
 
 - **no_std** compatible in mb-ir and mb-engine (use `alloc`, not `std`)
-- **16-bit integer mixing** throughout (embedded-friendly, classic tracker accuracy)
+- **AudioBuffer**: Multichannel f32 planar buffer (`AudioBuffer { data, channels, frames }`) in mb-ir. Graph nodes exchange AudioBuffers; `mix_from_scaled()` for summing with gain.
+- **f32 throughout graph**: Engine returns `[f32; 2]` from `render_frame()`. Channel rendering stays i16 internally (`ChannelState::render() -> Frame`), converting to f32 at the channel output boundary.
+- **AudioStream trait**: `{ channel_config(), render(&mut AudioBuffer) }` — Machine extends AudioStream.
 - **Linear interpolation** on sample reads via `SampleData::get_mono_interpolated()` (16.16 fixed-point blending, i64 intermediate to avoid overflow)
-- **Graph-based routing**: MOD files route TrackerChannel→AmigaFilter→Master; per-node `mix_shifts` for attenuation
-- **Machine trait**: `Machine { info, init, tick, work, stop, set_param }` — f32 at machine boundary, i16↔f32 conversion in engine
+- **Graph-based routing**: MOD files route TrackerChannel→AmigaFilter→Master; per-node `mix_gains: Vec<f32>` for attenuation
+- **Machine trait**: `Machine: AudioStream + Send { info, init, tick, stop, set_param }` — f32 buffers throughout
 - **Beat-based timing**: `MusicalTime { beat, sub_beat }` with `SUB_BEAT_UNIT = 720720` (LCM 1..16). Rows positioned in beat-space (speed-independent); speed only affects per-tick effects and NoteDelay.
 - **Event-driven**: patterns compile to events, engine consumes sorted event queue
 - **Fixed-point 16.16** for sample position/increment in engine
 - **Panning formula**: `pan_right = pan + 64` (0..128), then `(128 - pan_right) * vol >> 7` for left, `pan_right * vol >> 7` for right
-- **cpal backend**: forces `config.channels = 2`; stream callback chunks by actual channel count
+- **cpal backend**: forces `config.channels = 2`; ring buffer carries interleaved f32 samples directly
 
 ## Code Conventions
 
@@ -116,8 +118,10 @@ masterblaster-rs/
 │   └── snapshot_tests.rs   # Snapshot tests (uses Controller)
 └── crates/
     ├── mb-ir/src/           # Core IR types (no_std)
+    │   ├── audio_buffer.rs  # AudioBuffer: multichannel f32 planar buffer
+    │   └── audio_traits.rs  # AudioSource, AudioStream, ChannelConfig traits
     ├── mb-engine/src/       # Playback engine (no_std)
-    │   ├── machine.rs       # Machine trait + types
+    │   ├── machine.rs       # Machine trait (extends AudioStream)
     │   └── machines/        # Built-in machines (amiga_filter.rs)
     ├── mb-audio/src/        # Audio output backends (cpal)
     ├── mb-formats/src/      # Format parsers (MOD)

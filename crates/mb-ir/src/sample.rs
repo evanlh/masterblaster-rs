@@ -120,6 +120,37 @@ impl SampleData {
         (a + (((b - a) * frac) >> 16)) as i16
     }
 
+    /// Number of channels in the sample data.
+    pub fn num_channels(&self) -> u16 {
+        match self {
+            SampleData::Mono8(_) | SampleData::Mono16(_) => 1,
+            SampleData::Stereo8(_, _) | SampleData::Stereo16(_, _) => 2,
+        }
+    }
+
+    /// Get a sample from the right channel (returns left for mono).
+    pub fn get_right(&self, pos: usize) -> i16 {
+        match self {
+            SampleData::Mono8(v) => v.get(pos).copied().unwrap_or(0) as i16 * 256,
+            SampleData::Mono16(v) => v.get(pos).copied().unwrap_or(0),
+            SampleData::Stereo8(_, r) => r.get(pos).copied().unwrap_or(0) as i16 * 256,
+            SampleData::Stereo16(_, r) => r.get(pos).copied().unwrap_or(0),
+        }
+    }
+}
+
+impl crate::audio_traits::AudioSource for SampleData {
+    fn channels(&self) -> u16 {
+        self.num_channels()
+    }
+
+    fn frames(&self) -> usize {
+        self.len()
+    }
+
+    fn read_i16(&self, ch: u16, frame: usize) -> i16 {
+        if ch == 0 { self.get_mono(frame) } else { self.get_right(frame) }
+    }
 }
 
 /// Sample loop type.
@@ -194,5 +225,28 @@ mod tests {
         let a = data.get_mono(0) as i32; // 25600
         let expected = (a / 2) as i16;
         assert!((val as i32 - expected as i32).abs() <= 1);
+    }
+
+    // --- AudioSource impl tests ---
+
+    use crate::audio_traits::AudioSource;
+
+    #[test]
+    fn audio_source_mono8() {
+        let data = SampleData::Mono8(vec![0, 100, -50]);
+        assert_eq!(AudioSource::channels(&data), 1);
+        assert_eq!(AudioSource::frames(&data), 3);
+        assert_eq!(data.read_i16(0, 1), 100 * 256);
+        let f = data.read_f32(0, 1);
+        assert!((f - 100.0 * 256.0 / 32768.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn audio_source_stereo16() {
+        let data = SampleData::Stereo16(vec![1000, -1000], vec![2000, -2000]);
+        assert_eq!(AudioSource::channels(&data), 2);
+        assert_eq!(AudioSource::frames(&data), 2);
+        assert_eq!(data.read_i16(0, 0), 1000);
+        assert_eq!(data.read_i16(1, 0), 2000);
     }
 }

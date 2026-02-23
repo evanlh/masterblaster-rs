@@ -1,7 +1,5 @@
 //! Audio output trait and error types.
 
-use mb_engine::Frame;
-
 /// Error type for audio operations.
 #[derive(Debug)]
 pub enum AudioError {
@@ -33,8 +31,8 @@ pub trait AudioOutput {
     /// Get the sample rate.
     fn sample_rate(&self) -> u32;
 
-    /// Write frames to the output (blocking — parks until all frames are written).
-    fn write(&mut self, frames: &[Frame]);
+    /// Write interleaved stereo f32 samples to the output (blocking).
+    fn write(&mut self, data: &[f32]);
 
     /// Start playback.
     fn start(&mut self) -> Result<(), AudioError>;

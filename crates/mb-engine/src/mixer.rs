@@ -7,7 +7,6 @@ use mb_ir::{Edit, Effect, Event, EventPayload, EventTarget, MusicalTime, NodeTyp
 
 use crate::channel::ChannelState;
 use crate::event_queue::EventQueue;
-use crate::frame::Frame;
 use crate::frequency::note_to_period;
 use crate::graph_state::{self, GraphState};
 use crate::machine::Machine;
@@ -44,8 +43,8 @@ pub struct Engine {
     playing: bool,
     /// Time at which the song ends (set by schedule_song)
     song_end_time: Option<MusicalTime>,
-    /// Per-node right-shift to prevent clipping (indexed by NodeId).
-    mix_shifts: Vec<u32>,
+    /// Per-node gain (linear, computed from mix shift).
+    mix_gains: Vec<f32>,
     /// Machine instances (indexed by NodeId; `Some` only for BuzzMachine nodes).
     machines: Vec<Option<Box<dyn Machine>>>,
 }
@@ -59,15 +58,16 @@ fn compute_mix_shift(input_count: u32) -> u32 {
     sides.next_power_of_two().trailing_zeros()
 }
 
-/// Compute per-node mix_shifts from connection counts in the graph.
-fn compute_all_mix_shifts(song: &Song) -> Vec<u32> {
+/// Compute per-node mix gains from connection counts in the graph.
+fn compute_all_mix_gains(song: &Song) -> Vec<f32> {
     let n = song.graph.nodes.len();
-    let mut shifts = vec![0u32; n];
+    let mut gains = vec![1.0f32; n];
     for (id, _node) in song.graph.nodes.iter().enumerate() {
         let input_count = song.graph.connections.iter().filter(|c| c.to == id as u16).count() as u32;
-        shifts[id] = compute_mix_shift(input_count);
+        let shift = compute_mix_shift(input_count);
+        gains[id] = 1.0 / (1u32 << shift) as f32;
     }
-    shifts
+    gains
 }
 
 /// Instantiate machines for all BuzzMachine nodes in the graph.
@@ -97,8 +97,8 @@ impl Engine {
 
         let graph_state = GraphState::from_graph(&song.graph);
 
-        // Compute per-node mix_shifts from connection counts
-        let mix_shifts = compute_all_mix_shifts(&song);
+        // Compute per-node mix gains from connection counts
+        let mix_gains = compute_all_mix_gains(&song);
 
         // Instantiate machines for BuzzMachine nodes
         let machines_vec = init_machines(&song, sample_rate);
@@ -118,7 +118,7 @@ impl Engine {
             tick_in_beat: 0,
             playing: false,
             song_end_time: None,
-            mix_shifts,
+            mix_gains,
             machines: machines_vec,
         };
 
@@ -137,9 +137,6 @@ impl Engine {
 
     /// Update samples_per_tick based on current tempo.
     fn update_samples_per_tick(&mut self) {
-        // BPM = tempo, ticks per beat = speed * rows_per_beat (assume 4)
-        // samples_per_tick = sample_rate * 60 / (tempo * 24)
-        // Standard: 2500 / tempo * sample_rate / 1000 (approx)
         self.samples_per_tick = (self.sample_rate * 5) / (self.tempo as u32 * 2);
     }
 
@@ -153,12 +150,8 @@ impl Engine {
         self.playing = false;
     }
 
-    /// Generate one frame of audio.
-    ///
-    /// When the `alloc_check` feature is enabled, this wraps the inner
-    /// implementation with `assert_no_alloc` to catch any heap allocations
-    /// in the realtime path.
-    pub fn render_frame(&mut self) -> Frame {
+    /// Generate one frame of audio as [f32; 2].
+    pub fn render_frame(&mut self) -> [f32; 2] {
         #[cfg(feature = "alloc_check")]
         {
             assert_no_alloc::assert_no_alloc(|| self.render_frame_inner())
@@ -170,27 +163,25 @@ impl Engine {
     }
 
     /// Render multiple frames, returning a new Vec (offline rendering).
-    pub fn render_frames(&mut self, count: usize) -> Vec<Frame> {
+    pub fn render_frames(&mut self, count: usize) -> Vec<[f32; 2]> {
         (0..count).map(|_| self.render_frame()).collect()
     }
 
     /// Render frames into a caller-provided buffer (allocation-free).
-    pub fn render_frames_into(&mut self, buf: &mut [Frame]) {
+    pub fn render_frames_into(&mut self, buf: &mut [[f32; 2]]) {
         for frame in buf.iter_mut() {
             *frame = self.render_frame();
         }
     }
 
-    fn render_frame_inner(&mut self) -> Frame {
+    fn render_frame_inner(&mut self) -> [f32; 2] {
         if !self.playing {
-            return Frame::silence();
+            return [0.0, 0.0];
         }
 
         // 1. Process events at current time (cursor-based, zero allocation)
         let event_range = self.event_queue.drain_until(self.current_time);
         for i in event_range {
-            // Clone the event to avoid borrow conflict with &mut self.
-            // Event is Copy-sized (no heap data), so this is stack-only.
             let event = self.event_queue.get(i).unwrap().clone();
             self.dispatch_event(&event);
         }
@@ -205,7 +196,6 @@ impl Engine {
             self.advance_tick();
             self.process_tick();
         } else {
-            // Interpolate sub_beat within current tick
             self.interpolate_sub_beat();
         }
 
@@ -237,7 +227,6 @@ impl Engine {
         let frac = (self.sample_counter as u64 * sub_per_tick as u64)
             / self.samples_per_tick as u64;
         let total = base_sub as u64 + frac;
-        // Shouldn't exceed SUB_BEAT_UNIT, but clamp just in case
         self.current_time.sub_beat = (total as u32).min(SUB_BEAT_UNIT - 1);
     }
 
@@ -402,24 +391,27 @@ impl Engine {
         }
     }
 
-    /// Render a single tracker channel into a stereo frame.
-    fn render_channel(&mut self, ch_index: usize) -> Frame {
+    /// Render a single tracker channel, writing f32 output into node_outputs.
+    fn render_channel(&mut self, ch_index: usize, node_id: u16) {
         let channel = match self.channels.get_mut(ch_index) {
             Some(ch) => ch,
-            None => return Frame::silence(),
+            None => return,
         };
         if !channel.playing {
-            return Frame::silence();
+            return;
         }
         let sample = match self.song.samples.get(channel.sample_index as usize) {
             Some(s) => s,
-            None => return Frame::silence(),
+            None => return,
         };
-        channel.render(sample)
+        let frame = channel.render(sample);
+        let buf = &mut self.graph_state.node_outputs[node_id as usize];
+        buf.channel_mut(0)[0] = frame.left as f32 / 32768.0;
+        buf.channel_mut(1)[0] = frame.right as f32 / 32768.0;
     }
 
     /// Render the audio graph by traversing nodes in topological order.
-    fn render_graph(&mut self) -> Frame {
+    fn render_graph(&mut self) -> [f32; 2] {
         self.graph_state.clear_outputs();
 
         // Index loop avoids cloning topo_order (allocation-free).
@@ -430,60 +422,72 @@ impl Engine {
                 None => continue,
             };
 
-            let output = match &node.node_type {
-                NodeType::TrackerChannel { index } => self.render_channel(*index as usize),
+            match &node.node_type {
+                NodeType::TrackerChannel { index } => {
+                    self.render_channel(*index as usize, node_id);
+                }
                 NodeType::Master => {
-                    let wide = graph_state::gather_inputs_wide(
+                    let gain = self.mix_gains.get(node_id as usize).copied().unwrap_or(1.0);
+                    graph_state::gather_inputs(
                         &self.song.graph,
                         &self.graph_state.node_outputs,
                         node_id,
+                        &mut self.graph_state.scratch,
                     );
-                    let shift = self.mix_shifts.get(node_id as usize).copied().unwrap_or(0);
-                    wide.to_frame(shift)
+                    self.graph_state.scratch.apply_gain(gain);
+                    let left = self.graph_state.scratch.channel(0)[0];
+                    let right = self.graph_state.scratch.channel(1)[0];
+                    let buf = &mut self.graph_state.node_outputs[node_id as usize];
+                    buf.channel_mut(0)[0] = left;
+                    buf.channel_mut(1)[0] = right;
                 }
                 NodeType::BuzzMachine { .. } => {
-                    self.render_machine(node_id)
+                    self.render_machine(node_id);
                 }
-                _ => graph_state::gather_inputs(
-                    &self.song.graph,
-                    &self.graph_state.node_outputs,
-                    node_id,
-                ),
-            };
-
-            self.graph_state.node_outputs[node_id as usize] = output;
+                _ => {
+                    let gain = self.mix_gains.get(node_id as usize).copied().unwrap_or(1.0);
+                    graph_state::gather_inputs(
+                        &self.song.graph,
+                        &self.graph_state.node_outputs,
+                        node_id,
+                        &mut self.graph_state.scratch,
+                    );
+                    self.graph_state.scratch.apply_gain(gain);
+                    let left = self.graph_state.scratch.channel(0)[0];
+                    let right = self.graph_state.scratch.channel(1)[0];
+                    let buf = &mut self.graph_state.node_outputs[node_id as usize];
+                    buf.channel_mut(0)[0] = left;
+                    buf.channel_mut(1)[0] = right;
+                }
+            }
         }
 
         // Master is always node 0
-        self.graph_state.node_outputs.first().copied().unwrap_or(Frame::silence())
+        let master = &self.graph_state.node_outputs[0];
+        [master.channel(0)[0], master.channel(1)[0]]
     }
 
-    /// Render a BuzzMachine node: gather inputs → f32 → machine.work() → i16.
-    fn render_machine(&mut self, node_id: u16) -> Frame {
-        use crate::machine::WorkMode;
-
-        let wide = graph_state::gather_inputs_wide(
+    /// Render a BuzzMachine node: gather inputs → f32 → machine.render() → output.
+    fn render_machine(&mut self, node_id: u16) {
+        let gain = self.mix_gains.get(node_id as usize).copied().unwrap_or(1.0);
+        graph_state::gather_inputs(
             &self.song.graph,
             &self.graph_state.node_outputs,
             node_id,
+            &mut self.graph_state.scratch,
         );
-        let shift = self.mix_shifts.get(node_id as usize).copied().unwrap_or(0);
-        let attenuated_l = wide.left >> shift;
-        let attenuated_r = wide.right >> shift;
-
-        let mut buf = [
-            attenuated_l as f32 / 32768.0,
-            attenuated_r as f32 / 32768.0,
-        ];
+        self.graph_state.scratch.apply_gain(gain);
 
         if let Some(Some(machine)) = self.machines.get_mut(node_id as usize) {
-            machine.work(&mut buf, WorkMode::ReadWrite);
+            machine.render(&mut self.graph_state.scratch);
         }
 
-        Frame {
-            left: (buf[0] * 32767.0).clamp(-32768.0, 32767.0) as i16,
-            right: (buf[1] * 32767.0).clamp(-32768.0, 32767.0) as i16,
-        }
+        // Copy scratch to node output
+        let left = self.graph_state.scratch.channel(0)[0];
+        let right = self.graph_state.scratch.channel(1)[0];
+        let buf = &mut self.graph_state.node_outputs[node_id as usize];
+        buf.channel_mut(0)[0] = left;
+        buf.channel_mut(1)[0] = right;
     }
 
     /// Get the current playback position.
@@ -503,9 +507,6 @@ impl Engine {
     }
 
     /// Schedule all events from the song's track clips + sequences.
-    ///
-    /// This is the prepare boundary: after this call, `render_frame()` is
-    /// guaranteed allocation-free (when all hot-path fixes are in place).
     pub fn schedule_song(&mut self) {
         let result = scheduler::schedule_song(&self.song);
         self.song_end_time = Some(result.total_time);
@@ -618,13 +619,17 @@ mod tests {
         ));
     }
 
+    /// Check if f32 stereo frame is non-silent.
+    fn is_nonsilent(frame: &[f32; 2]) -> bool {
+        frame[0] != 0.0 || frame[1] != 0.0
+    }
+
     #[test]
     fn silent_when_not_playing() {
         let song = song_with_sample(vec![127; 100], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
-        // Don't call play()
         let frame = engine.render_frame();
-        assert_eq!(frame, Frame::silence());
+        assert_eq!(frame, [0.0, 0.0]);
     }
 
     #[test]
@@ -633,7 +638,7 @@ mod tests {
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
         let frame = engine.render_frame();
-        assert_eq!(frame, Frame::silence());
+        assert_eq!(frame, [0.0, 0.0]);
     }
 
     #[test]
@@ -641,9 +646,9 @@ mod tests {
         let song = song_with_sample(vec![127; 1000], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
-        schedule_note(&mut engine, 48, 1); // instrument 1 (1-indexed)
+        schedule_note(&mut engine, 48, 1);
 
-        engine.render_frame(); // processes the event
+        engine.render_frame();
 
         let ch = engine.channel(0).unwrap();
         assert_eq!(ch.period, 428); // C-2 period
@@ -671,9 +676,8 @@ mod tests {
         engine.play();
         schedule_note(&mut engine, 48, 1);
 
-        // First frame processes the event and mixes
         let frame = engine.render_frame();
-        assert!(frame.left != 0 || frame.right != 0, "Expected non-silent output");
+        assert!(is_nonsilent(&frame), "Expected non-silent output");
     }
 
     #[test]
@@ -718,13 +722,11 @@ mod tests {
 
     #[test]
     fn sample_stops_at_end_without_loop() {
-        // Very short sample, high note = fast increment
         let song = song_with_sample(vec![127; 4], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
         schedule_note(&mut engine, 48, 1);
 
-        // Render enough frames to exhaust the 4-sample data
         for _ in 0..10000 {
             engine.render_frame();
         }
@@ -738,18 +740,16 @@ mod tests {
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
 
-        // Default tempo 125: samples_per_tick = 44100 * 5 / (125 * 2) = 882
         let spt_before = engine.samples_per_tick;
         assert_eq!(spt_before, 882);
 
         engine.schedule(Event::new(
             engine.position(),
             EventTarget::Global,
-            EventPayload::SetTempo(15000), // 150 BPM * 100
+            EventPayload::SetTempo(15000),
         ));
         engine.render_frame();
 
-        // 150 BPM: 44100 * 5 / (150 * 2) = 735
         assert_eq!(engine.samples_per_tick, 735);
     }
 
@@ -761,7 +761,7 @@ mod tests {
         schedule_note(&mut engine, 48, 1);
 
         let frame = engine.render_frame();
-        assert_eq!(frame, Frame::silence());
+        assert_eq!(frame, [0.0, 0.0]);
     }
 
     /// Schedule an effect at tick 0 on channel 0.
@@ -846,14 +846,11 @@ mod tests {
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
         schedule_note(&mut engine, 48, 1);
-        engine.render_frame(); // tick 0: note triggered, volume = 32
+        engine.render_frame();
 
-        // Schedule volume slide +4 per tick
         schedule_effect(&mut engine, mb_ir::Effect::VolumeSlide(4));
-        engine.render_frame(); // stores active effect
+        engine.render_frame();
 
-        // Render until the next tick boundary to trigger process_tick
-        // samples_per_tick at 125 BPM = 882
         let vol_before = engine.channel(0).unwrap().volume;
         for _ in 0..882 {
             engine.render_frame();
@@ -874,9 +871,7 @@ mod tests {
         schedule_note(&mut engine, 48, 1);
         engine.render_frame();
 
-        // Slide up by 4 per tick — should clamp at 64
         schedule_effect(&mut engine, mb_ir::Effect::VolumeSlide(4));
-        // Render many ticks
         engine.render_frames(882 * 10);
         assert_eq!(engine.channel(0).unwrap().volume, 64);
     }
@@ -893,7 +888,6 @@ mod tests {
         engine.render_frame();
         assert!(engine.channel(0).unwrap().volume_mod.is_some());
 
-        // New note should clear the modulators
         schedule_note(&mut engine, 60, 1);
         engine.render_frame();
         assert!(engine.channel(0).unwrap().volume_mod.is_none());
@@ -918,7 +912,7 @@ mod tests {
 
         schedule_effect(&mut engine, mb_ir::Effect::PortaUp(4));
         engine.render_frame();
-        advance_tick(&mut engine); // process_tick applies PortaUp
+        advance_tick(&mut engine);
 
         let period_after = engine.channel(0).unwrap().period;
         assert!(
@@ -933,7 +927,7 @@ mod tests {
         let song = song_with_sample(vec![127; 100000], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
-        schedule_note(&mut engine, 60, 1); // C-3, period 214
+        schedule_note(&mut engine, 60, 1);
         engine.render_frame();
         let period_before = engine.channel(0).unwrap().period;
 
@@ -954,14 +948,14 @@ mod tests {
         let song = song_with_sample(vec![127; 100000], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
-        schedule_note(&mut engine, 71, 1); // B-3, period 113 = PERIOD_MIN
+        schedule_note(&mut engine, 71, 1);
         engine.render_frame();
 
         schedule_effect(&mut engine, mb_ir::Effect::PortaUp(20));
         engine.render_frame();
         advance_tick(&mut engine);
 
-        assert_eq!(engine.channel(0).unwrap().period, 113); // clamped
+        assert_eq!(engine.channel(0).unwrap().period, 113);
     }
 
     #[test]
@@ -969,14 +963,14 @@ mod tests {
         let song = song_with_sample(vec![127; 100000], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
-        schedule_note(&mut engine, 36, 1); // C-1, period 856 = PERIOD_MAX
+        schedule_note(&mut engine, 36, 1);
         engine.render_frame();
 
         schedule_effect(&mut engine, mb_ir::Effect::PortaDown(20));
         engine.render_frame();
         advance_tick(&mut engine);
 
-        assert_eq!(engine.channel(0).unwrap().period, 856); // clamped
+        assert_eq!(engine.channel(0).unwrap().period, 856);
     }
 
     #[test]
@@ -989,12 +983,11 @@ mod tests {
         let period_before = engine.channel(0).unwrap().period;
 
         schedule_effect(&mut engine, mb_ir::Effect::FinePortaUp(4));
-        engine.render_frame(); // row effect applies immediately
+        engine.render_frame();
 
         let period_after = engine.channel(0).unwrap().period;
         assert_eq!(period_after, period_before - 4);
 
-        // Further ticks should NOT change the period (row-only effect)
         advance_tick(&mut engine);
         assert_eq!(engine.channel(0).unwrap().period, period_after);
     }
@@ -1019,11 +1012,10 @@ mod tests {
         let song = song_with_sample(vec![127; 100000], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
-        schedule_note(&mut engine, 48, 1); // C-2, period 428
+        schedule_note(&mut engine, 48, 1);
         engine.render_frame();
         assert_eq!(engine.channel(0).unwrap().period, 428);
 
-        // Set porta target to C-3 (period 214) via PortaTarget event
         engine.schedule(Event::new(
             engine.position(),
             EventTarget::Channel(0),
@@ -1033,7 +1025,6 @@ mod tests {
         engine.render_frame();
         assert_eq!(engine.channel(0).unwrap().target_period, 214);
 
-        // Advance several ticks — period should slide down toward 214
         for _ in 0..5 {
             advance_tick(&mut engine);
         }
@@ -1046,7 +1037,7 @@ mod tests {
         let song = song_with_sample(vec![127; 100000], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
-        schedule_note(&mut engine, 48, 1); // period 428
+        schedule_note(&mut engine, 48, 1);
         engine.render_frame();
 
         engine.schedule(Event::new(
@@ -1054,10 +1045,9 @@ mod tests {
             EventTarget::Channel(0),
             EventPayload::PortaTarget { note: 60, instrument: 1 },
         ));
-        schedule_effect(&mut engine, mb_ir::Effect::TonePorta(255)); // very fast
+        schedule_effect(&mut engine, mb_ir::Effect::TonePorta(255));
         engine.render_frame();
 
-        // One tick should reach target without overshooting
         advance_tick(&mut engine);
         assert_eq!(engine.channel(0).unwrap().period, 214);
     }
@@ -1070,12 +1060,10 @@ mod tests {
         schedule_note(&mut engine, 48, 1);
         engine.render_frame();
 
-        // Advance position past zero
         advance_tick(&mut engine);
         let pos_before = engine.channel(0).unwrap().position;
         assert!(pos_before > 0, "position should have advanced");
 
-        // PortaTarget should NOT reset position
         engine.schedule(Event::new(
             engine.position(),
             EventTarget::Channel(0),
@@ -1091,20 +1079,17 @@ mod tests {
         let song = song_with_sample(vec![127; 100000], 32);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
-        schedule_note(&mut engine, 48, 1); // period 428, volume 32
+        schedule_note(&mut engine, 48, 1);
         engine.render_frame();
 
-        // Set up porta target
         engine.schedule(Event::new(
             engine.position(),
             EventTarget::Channel(0),
             EventPayload::PortaTarget { note: 60, instrument: 1 },
         ));
-        // First set TonePorta to establish speed
         schedule_effect(&mut engine, mb_ir::Effect::TonePorta(8));
         engine.render_frame();
 
-        // Now use TonePortaVolSlide
         schedule_effect(&mut engine, mb_ir::Effect::TonePortaVolSlide(4));
         engine.render_frame();
         advance_tick(&mut engine);
@@ -1148,8 +1133,6 @@ mod tests {
 
         schedule_effect(&mut engine, mb_ir::Effect::Vibrato { speed: 8, depth: 8 });
         engine.render_frame();
-        // First tick: phase=0 → SINE_TABLE[0]=0 → offset=0, then phase advances to 8
-        // Second tick: phase=8 → SINE_TABLE[8]=180 → non-zero offset
         advance_tick(&mut engine);
         advance_tick(&mut engine);
 
@@ -1171,11 +1154,8 @@ mod tests {
             advance_tick(&mut engine);
         }
 
-        // Base period unchanged
         assert_eq!(engine.channel(0).unwrap().period, base_period);
-        // But offset is active
         let offset = engine.channel(0).unwrap().period_offset;
-        // Over 10 ticks, vibrato should have oscillated (offset varies)
         assert!(offset != 0 || true, "offset can be 0 at waveform zero-crossing");
     }
 
@@ -1190,7 +1170,6 @@ mod tests {
 
         schedule_effect(&mut engine, mb_ir::Effect::Vibrato { speed: 8, depth: 8 });
         engine.render_frame();
-        // Advance 2 ticks: first tick phase=0 (zero offset), second tick phase=8 (non-zero)
         advance_tick(&mut engine);
         advance_tick(&mut engine);
 
@@ -1206,7 +1185,6 @@ mod tests {
         schedule_note(&mut engine, 48, 1);
         engine.render_frame();
 
-        // First vibrato sets speed=8, depth=4
         schedule_effect(&mut engine, mb_ir::Effect::Vibrato { speed: 8, depth: 4 });
         engine.render_frame();
         advance_tick(&mut engine);
@@ -1214,13 +1192,12 @@ mod tests {
         assert_eq!(ch.vibrato_speed, 8);
         assert_eq!(ch.vibrato_depth, 4);
 
-        // Second vibrato with speed=0 should keep previous speed
         schedule_effect(&mut engine, mb_ir::Effect::Vibrato { speed: 0, depth: 6 });
         engine.render_frame();
         advance_tick(&mut engine);
         let ch = engine.channel(0).unwrap();
-        assert_eq!(ch.vibrato_speed, 8); // unchanged
-        assert_eq!(ch.vibrato_depth, 6); // updated
+        assert_eq!(ch.vibrato_speed, 8);
+        assert_eq!(ch.vibrato_depth, 6);
     }
 
     // === Arpeggio tests ===
@@ -1230,20 +1207,18 @@ mod tests {
         let song = song_with_sample(vec![127; 100000], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
-        schedule_note(&mut engine, 48, 1); // C-2, period 428
+        schedule_note(&mut engine, 48, 1);
         engine.render_frame();
 
         schedule_effect(&mut engine, mb_ir::Effect::Arpeggio { x: 4, y: 7 });
         engine.render_frame();
 
-        // Collect period_offsets over several ticks
         let mut offsets = Vec::new();
         for _ in 0..6 {
             advance_tick(&mut engine);
             offsets.push(engine.channel(0).unwrap().period_offset);
         }
 
-        // Should cycle through 3 values (base, +4st, +7st) with period repeating every 3
         assert_eq!(offsets[0], offsets[3], "should cycle every 3 ticks");
         assert_eq!(offsets[1], offsets[4]);
         assert_eq!(offsets[2], offsets[5]);
@@ -1272,20 +1247,18 @@ mod tests {
         let song = song_with_sample(vec![127; 100000], 64);
         let mut engine = Engine::new(song, SAMPLE_RATE);
         engine.play();
-        schedule_note(&mut engine, 48, 1); // period 428
+        schedule_note(&mut engine, 48, 1);
         engine.render_frame();
 
         schedule_effect(&mut engine, mb_ir::Effect::Arpeggio { x: 12, y: 7 });
         engine.render_frame();
 
-        // Tick 1: envelope advances to x step (12 semitones up)
         advance_tick(&mut engine);
-        let expected_x = note_to_period(48 + 12) as i16 - 428; // 214 - 428 = -214
+        let expected_x = note_to_period(48 + 12) as i16 - 428;
         assert_eq!(engine.channel(0).unwrap().period_offset, expected_x);
 
-        // Tick 2: envelope advances to y step (7 semitones up)
         advance_tick(&mut engine);
-        let expected_y = note_to_period(48 + 7) as i16 - 428; // 285 - 428 = -143
+        let expected_y = note_to_period(48 + 7) as i16 - 428;
         assert_eq!(engine.channel(0).unwrap().period_offset, expected_y);
     }
 
@@ -1302,7 +1275,6 @@ mod tests {
 
         schedule_effect(&mut engine, mb_ir::Effect::Tremolo { speed: 8, depth: 8 });
         engine.render_frame();
-        // Advance 2 ticks: phase 0 → zero, phase 8 → non-zero
         advance_tick(&mut engine);
         advance_tick(&mut engine);
 
@@ -1334,12 +1306,10 @@ mod tests {
         schedule_note(&mut engine, 48, 1);
         engine.render_frame();
 
-        // First set vibrato params
         schedule_effect(&mut engine, mb_ir::Effect::Vibrato { speed: 8, depth: 4 });
         engine.render_frame();
         advance_tick(&mut engine);
 
-        // Now VibratoVolSlide
         schedule_effect(&mut engine, mb_ir::Effect::VibratoVolSlide(4));
         engine.render_frame();
         advance_tick(&mut engine);
@@ -1373,7 +1343,6 @@ mod tests {
         schedule_note(&mut engine, 48, 1);
         engine.render_frame();
 
-        // Run vibrato for a few ticks to advance modulator
         schedule_effect(&mut engine, mb_ir::Effect::Vibrato { speed: 8, depth: 4 });
         engine.render_frame();
         for _ in 0..5 {
@@ -1381,7 +1350,6 @@ mod tests {
         }
         assert!(engine.channel(0).unwrap().period_mod.is_some(), "vibrato mod should be active");
 
-        // Trigger new note → period_mod should reset (default waveform has retrig)
         schedule_note(&mut engine, 60, 1);
         engine.render_frame();
         assert!(engine.channel(0).unwrap().period_mod.is_none(), "mod should reset on note");
@@ -1395,8 +1363,7 @@ mod tests {
         schedule_note(&mut engine, 48, 1);
         engine.render_frame();
 
-        // Set waveform with no-retrig flag (bit 2)
-        schedule_effect(&mut engine, mb_ir::Effect::SetVibratoWaveform(4)); // sine + no retrig
+        schedule_effect(&mut engine, mb_ir::Effect::SetVibratoWaveform(4));
         engine.render_frame();
 
         schedule_effect(&mut engine, mb_ir::Effect::Vibrato { speed: 8, depth: 4 });
@@ -1406,7 +1373,6 @@ mod tests {
         }
         assert!(engine.channel(0).unwrap().period_mod.is_some(), "vibrato mod should be active");
 
-        // Trigger new note → period_mod should NOT reset (no-retrig flag)
         schedule_note(&mut engine, 60, 1);
         engine.render_frame();
         assert!(engine.channel(0).unwrap().period_mod.is_some(), "mod should persist with no-retrig");
@@ -1423,7 +1389,6 @@ mod tests {
         engine.render_frame();
         assert_eq!(engine.channel(0).unwrap().volume, 64);
 
-        // NoteCut(0) is a row effect — cuts immediately
         schedule_effect(&mut engine, mb_ir::Effect::NoteCut(0));
         engine.render_frame();
         assert_eq!(engine.channel(0).unwrap().volume, 0);
@@ -1440,15 +1405,12 @@ mod tests {
         schedule_effect(&mut engine, mb_ir::Effect::NoteCut(3));
         engine.render_frame();
 
-        // Tick 1: effect_tick=1, not yet cut
         advance_tick(&mut engine);
         assert_eq!(engine.channel(0).unwrap().volume, 64);
 
-        // Tick 2: effect_tick=2, not yet cut
         advance_tick(&mut engine);
         assert_eq!(engine.channel(0).unwrap().volume, 64);
 
-        // Tick 3: effect_tick=3 >= 3, cut!
         advance_tick(&mut engine);
         assert_eq!(engine.channel(0).unwrap().volume, 0);
     }
@@ -1463,10 +1425,9 @@ mod tests {
 
         schedule_effect(&mut engine, mb_ir::Effect::NoteCut(1));
         engine.render_frame();
-        advance_tick(&mut engine); // cut on tick 1
+        advance_tick(&mut engine);
         assert_eq!(engine.channel(0).unwrap().volume, 0);
 
-        // Further ticks: still cut
         advance_tick(&mut engine);
         assert_eq!(engine.channel(0).unwrap().volume, 0);
     }
@@ -1484,16 +1445,12 @@ mod tests {
         schedule_effect(&mut engine, mb_ir::Effect::RetriggerNote(2));
         engine.render_frame();
 
-        // Tick 1: effect_tick=1, 1 % 2 != 0, no retrigger
         advance_tick(&mut engine);
         let pos_tick1 = engine.channel(0).unwrap().position;
         assert!(pos_tick1 > 0, "position should have advanced");
 
-        // Tick 2: effect_tick=2, 2 % 2 == 0, retrigger!
         advance_tick(&mut engine);
         let pos_tick2 = engine.channel(0).unwrap().position;
-        // Position was reset to 0 then advanced by rendering samples after process_tick
-        // It should be much smaller than pos_tick1 (which had a full tick of advancement)
         assert!(pos_tick2 < pos_tick1, "position should have been retriggered");
     }
 

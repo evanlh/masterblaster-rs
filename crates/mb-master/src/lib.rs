@@ -5,6 +5,7 @@
 
 use mb_audio::{AudioOutput, CpalOutput};
 use mb_engine::Engine;
+use mb_ir::BLOCK_SIZE;
 use ringbuf::HeapRb;
 use ringbuf::traits::{Consumer, Producer, Split};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -12,7 +13,6 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 // Re-export common types so callers don't need mb-ir/mb-engine directly.
-pub use mb_engine::Frame;
 pub use mb_formats::{FormatError, frames_to_wav, load_wav, write_wav};
 pub use mb_ir::{pack_time, unpack_time, Edit, PlaybackPosition, Song, TrackPlaybackPosition, time_to_track_position};
 
@@ -224,7 +224,7 @@ impl Controller {
 
     // --- Offline rendering ---
 
-    pub fn render_frames(&self, sample_rate: u32, max_frames: usize) -> Vec<Frame> {
+    pub fn render_frames(&self, sample_rate: u32, max_frames: usize) -> Vec<[f32; 2]> {
         render_song_frames(self.song.clone(), sample_rate, max_frames)
     }
 
@@ -279,7 +279,7 @@ fn rebuild_track_sequences(song: &mut Song, clip_idx: u16) {
     }
 }
 
-fn render_song_frames(song: Song, sample_rate: u32, max_frames: usize) -> Vec<Frame> {
+fn render_song_frames(song: Song, sample_rate: u32, max_frames: usize) -> Vec<[f32; 2]> {
     let mut engine = Engine::new(song, sample_rate);
     engine.schedule_song();
     engine.play();
@@ -341,11 +341,11 @@ fn run_audio_loop(
     edit_consumer: &mut ringbuf::HeapCons<Edit>,
     sample_rate: u32,
 ) {
-    const BATCH_SIZE: usize = 256;
     let report_interval = (sample_rate / 100) as u64;
     let mut frame_count: u64 = 0;
     let mut edit_buf: Vec<Edit> = alloc_permit(Vec::new);
-    let mut batch = [Frame::silence(); BATCH_SIZE];
+    let mut batch = [[0.0f32; 2]; BLOCK_SIZE];
+    let mut interleaved = [0.0f32; BLOCK_SIZE * 2];
 
     while !engine.is_finished() && !stop_signal.load(Ordering::Relaxed) {
         alloc_permit(|| drain_edits(edit_consumer, &mut edit_buf));
@@ -354,9 +354,15 @@ fn run_audio_loop(
             edit_buf.clear();
         }
 
-        let n = frames_until_report(frame_count, report_interval, BATCH_SIZE);
+        let n = frames_until_report(frame_count, report_interval, BLOCK_SIZE);
         engine.render_frames_into(&mut batch[..n]);
-        output.write(&batch[..n]);
+
+        // Interleave for output
+        for i in 0..n {
+            interleaved[i * 2] = batch[i][0];
+            interleaved[i * 2 + 1] = batch[i][1];
+        }
+        output.write(&interleaved[..n * 2]);
 
         frame_count += n as u64;
         if frame_count.is_multiple_of(report_interval) {
@@ -364,12 +370,12 @@ fn run_audio_loop(
         }
     }
 
-    let silence = [Frame::silence(); BATCH_SIZE];
+    let silence = [0.0f32; BLOCK_SIZE * 2];
     let tail_frames = sample_rate as usize;
     let mut written = 0;
     while written < tail_frames {
-        let n = (tail_frames - written).min(BATCH_SIZE);
-        output.write(&silence[..n]);
+        let n = (tail_frames - written).min(BLOCK_SIZE);
+        output.write(&silence[..n * 2]);
         written += n;
     }
 }

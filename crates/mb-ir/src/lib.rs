@@ -11,6 +11,8 @@
 extern crate alloc;
 
 mod analysis;
+mod audio_buffer;
+mod audio_traits;
 mod edit;
 mod effects;
 mod event;
@@ -24,6 +26,8 @@ pub mod song;
 mod musical_time;
 
 pub use analysis::{analyze_pattern, time_to_track_position, PatternFeatures, PlaybackPosition, TrackPlaybackPosition};
+pub use audio_buffer::{AudioBuffer, BLOCK_SIZE, MAX_CHANNELS};
+pub use audio_traits::{AudioSource, AudioStream, ChannelConfig};
 pub use edit::Edit;
 pub use effects::{Effect, VolumeCommand};
 pub use event::{Event, EventPayload, EventTarget};

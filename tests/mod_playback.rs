@@ -1,6 +1,6 @@
 //! Integration test: load MOD fixture → schedule → render frames → verify output.
 
-use mb_engine::{Engine, Frame};
+use mb_engine::Engine;
 use mb_formats::load_mod;
 use mb_ir::Note;
 use std::fs;
@@ -20,16 +20,15 @@ fn load_and_schedule(name: &str, sample_rate: u32) -> Engine {
     engine
 }
 
-fn has_nonsilent_frames(frames: &[Frame]) -> bool {
-    frames.iter().any(|f| f.left != 0 || f.right != 0)
+fn has_nonsilent_frames(frames: &[[f32; 2]]) -> bool {
+    frames.iter().any(|f| f[0] != 0.0 || f[1] != 0.0)
 }
 
-fn max_amplitude(frames: &[Frame]) -> i16 {
+fn max_amplitude(frames: &[[f32; 2]]) -> f32 {
     frames
         .iter()
-        .flat_map(|f| [f.left.saturating_abs(), f.right.saturating_abs()])
-        .max()
-        .unwrap_or(0)
+        .flat_map(|f| [f[0].abs(), f[1].abs()])
+        .fold(0.0f32, f32::max)
 }
 
 // --- kawaik1.mod ---
@@ -51,16 +50,16 @@ fn kawaik1_output_within_range() {
 
     for (i, frame) in frames.iter().enumerate() {
         assert!(
-            frame.left >= i16::MIN && frame.left <= i16::MAX,
+            frame[0] >= -1.0 && frame[0] <= 1.0,
             "Frame {} left out of range: {}",
             i,
-            frame.left
+            frame[0]
         );
         assert!(
-            frame.right >= i16::MIN && frame.right <= i16::MAX,
+            frame[1] >= -1.0 && frame[1] <= 1.0,
             "Frame {} right out of range: {}",
             i,
-            frame.right
+            frame[1]
         );
     }
 }
@@ -70,7 +69,8 @@ fn kawaik1_has_meaningful_amplitude() {
     let mut engine = load_and_schedule("kawaik1.mod", 44100);
     let frames = engine.render_frames(44100);
     let max = max_amplitude(&frames);
-    assert!(max > 100, "Max amplitude {} too low for real MOD playback", max);
+    // 100/32768 ≈ 0.003
+    assert!(max > 0.003, "Max amplitude {} too low for real MOD playback", max);
 }
 
 // --- noise_synth_pop.mod ---
@@ -90,7 +90,7 @@ fn noise_synth_pop_has_meaningful_amplitude() {
     let mut engine = load_and_schedule("noise_synth_pop.mod", 44100);
     let frames = engine.render_frames(44100);
     let max = max_amplitude(&frames);
-    assert!(max > 100, "Max amplitude {} too low", max);
+    assert!(max > 0.003, "Max amplitude {} too low", max);
 }
 
 // --- Engine behavior ---
@@ -231,25 +231,25 @@ fn musiklinjen_pattern7_diagnostics() {
     println!();
     println!("Rendered {} frames ({:.2}s)", frames.len(), frames.len() as f64 / 44100.0);
 
-    let click_threshold = 4000i32;
+    let click_threshold = 4000.0 / 32768.0;
     let mut clicks = Vec::new();
     for i in 1..frames.len() {
-        let dl = (frames[i].left as i32 - frames[i-1].left as i32).abs();
-        let dr = (frames[i].right as i32 - frames[i-1].right as i32).abs();
+        let dl = (frames[i][0] - frames[i-1][0]).abs();
+        let dr = (frames[i][1] - frames[i-1][1]).abs();
         let max_delta = dl.max(dr);
         if max_delta > click_threshold {
             clicks.push((i, max_delta, dl, dr));
         }
     }
 
-    println!("Clicks detected (delta > {}): {}", click_threshold, clicks.len());
+    println!("Clicks detected (delta > {:.4}): {}", click_threshold, clicks.len());
     for &(pos, max_d, dl, dr) in clicks.iter().take(20) {
         let time_ms = pos as f64 / 44.1;
         println!(
-            "  Frame {: >7} ({:7.1}ms): max_delta={:5} (L:{:5} R:{:5}) | L: {:6} → {:6} | R: {:6} → {:6}",
+            "  Frame {: >7} ({:7.1}ms): max_delta={:.5} (L:{:.5} R:{:.5}) | L: {:.5} → {:.5} | R: {:.5} → {:.5}",
             pos, time_ms, max_d, dl, dr,
-            frames[pos-1].left, frames[pos].left,
-            frames[pos-1].right, frames[pos].right
+            frames[pos-1][0], frames[pos][0],
+            frames[pos-1][1], frames[pos][1]
         );
     }
     if clicks.len() > 20 {
@@ -257,11 +257,10 @@ fn musiklinjen_pattern7_diagnostics() {
     }
 
     let max_amp = frames.iter()
-        .flat_map(|f| [f.left.unsigned_abs(), f.right.unsigned_abs()])
-        .max()
-        .unwrap_or(0);
+        .flat_map(|f| [f[0].abs(), f[1].abs()])
+        .fold(0.0f32, f32::max);
     println!();
-    println!("Max amplitude: {}", max_amp);
+    println!("Max amplitude: {:.5}", max_amp);
 }
 
 #[test]
@@ -306,9 +305,6 @@ fn setspeed_produces_ritardando() {
         frame_count += 1;
     }
 
-    // PatternBreak at row 15 → only 16 rows play.
-    // At constant speed 6 / 125 BPM: 16 rows * 6 ticks/row * 882 samples/tick = 84,672 frames
-    // With ritardando (speed 6→26): 223 ticks * 882 = 196,686 frames
     let constant_speed_frames = 16 * 6 * 882;
     assert!(
         frame_count > constant_speed_frames * 2,
