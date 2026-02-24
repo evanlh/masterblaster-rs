@@ -2,24 +2,24 @@
 
 ## Status
 
-- [ ] Add types to mb-ir
-  - [ ] `AudioBuffer` (planar f32, `MAX_CHANNELS`, `BLOCK_SIZE`)
-  - [ ] `AudioSource` trait (`read_f32`, `read_i16`, `channels`, `frames`)
-  - [ ] `AudioStream` trait (`channel_config`, `render`)
-  - [ ] `ChannelMix` trait + `ChannelConfig`
+- [x] Add types to mb-ir
+  - [x] `AudioBuffer` (planar f32, `MAX_CHANNELS`, `BLOCK_SIZE`)
+  - [x] `AudioSource` trait (`read_f32`, `read_i16`, `channels`, `frames`)
+  - [x] `AudioStream` trait (`channel_config`, `render`)
+  - [ ] `ChannelMix` trait + `ChannelConfig` — `ChannelConfig` done; `ChannelMix` skipped (YAGNI: `mix_from()` hardcodes `TruncateOrZero` behavior, sufficient while all routing is stereo)
 - [ ] Implement `AudioSource` for `SampleData`
-- [ ] Convert graph to `AudioBuffer`
-  - [ ] `graph_state.rs`: `node_outputs: Vec<AudioBuffer>`, unified `gather_inputs()`
-  - [ ] `render_graph()` produces `AudioBuffer`
-  - [ ] `render_channel()` outputs into `AudioBuffer` (i16 math unchanged internally)
-  - [ ] `render_machine()` passes `AudioBuffer` directly (remove i16/f32 conversion)
-- [ ] Convert `Machine` trait to `AudioStream`
-- [ ] Convert audio backend
-  - [ ] `cpal_backend.rs`: `HeapRb<f32>` ring buffer, no conversion in callback
-  - [ ] WAV encoder: single f32->i16 conversion at serialization
+- [x] Convert graph to `AudioBuffer`
+  - [x] `graph_state.rs`: `node_outputs: Vec<AudioBuffer>`, unified `gather_inputs()`
+  - [x] `render_graph()` produces `AudioBuffer`
+  - [x] `render_channel()` outputs into `AudioBuffer` (i16 math unchanged internally)
+  - [x] `render_machine()` passes `AudioBuffer` directly (remove i16/f32 conversion)
+- [x] Convert `Machine` trait to `AudioStream`
+- [x] Convert audio backend
+  - [x] `cpal_backend.rs`: `HeapRb<f32>` ring buffer, no conversion in callback
+  - [x] WAV encoder: single f32->i16 conversion at serialization
 - [ ] Make `ChannelState` implement `AudioStream` (with `Arc<dyn AudioSource>`)
-- [ ] Remove `Frame`/`WideFrame` from graph-level code
-- [ ] Replace `BATCH_SIZE` in mb-master with shared `BLOCK_SIZE` constant
+- [x] Remove `Frame`/`WideFrame` from graph-level code — `Frame` survives only inside `channel.rs` for i16 math, as planned
+- [x] Replace `BATCH_SIZE` in mb-master with shared `BLOCK_SIZE` constant
 
 ## Summary
 
