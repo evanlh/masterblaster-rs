@@ -11,3 +11,4 @@ std = []
 [dependencies]
 arrayvec = { workspace = true }
 libm = { workspace = true }
+slotmap = { workspace = true }

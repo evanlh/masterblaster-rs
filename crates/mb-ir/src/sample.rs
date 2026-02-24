@@ -3,6 +3,11 @@
 use alloc::vec::Vec;
 use arrayvec::ArrayString;
 
+slotmap::new_key_type! {
+    /// Key for referencing samples in the VoicePool's sample bank.
+    pub struct SampleKey;
+}
+
 /// A sample definition.
 #[derive(Clone, Debug)]
 pub struct Sample {

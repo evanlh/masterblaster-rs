@@ -3,7 +3,7 @@
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
-use mb_ir::{Edit, Effect, Event, EventPayload, EventTarget, MusicalTime, NodeType, Song, SUB_BEAT_UNIT, sub_beats_per_tick};
+use mb_ir::{Edit, Effect, Event, EventPayload, EventTarget, MusicalTime, NodeType, SampleKey, Song, SUB_BEAT_UNIT, sub_beats_per_tick};
 
 use crate::channel::ChannelState;
 use crate::event_queue::EventQueue;
@@ -12,6 +12,8 @@ use crate::graph_state::{self, GraphState};
 use crate::machine::Machine;
 use crate::machines;
 use crate::scheduler;
+use crate::voice::Voice;
+use crate::voice_pool::VoicePool;
 
 /// The main playback engine.
 pub struct Engine {
@@ -47,6 +49,10 @@ pub struct Engine {
     mix_gains: Vec<f32>,
     /// Machine instances (indexed by NodeId; `Some` only for BuzzMachine nodes).
     machines: Vec<Option<Box<dyn Machine>>>,
+    /// Centralized voice pool for sample playback.
+    voice_pool: VoicePool,
+    /// Map from sample index (u8) to SampleKey in the voice pool's sample bank.
+    index_to_key: Vec<SampleKey>,
 }
 
 /// Compute the right-shift needed to attenuate N inputs to prevent clipping.
@@ -103,6 +109,14 @@ impl Engine {
         // Instantiate machines for BuzzMachine nodes
         let machines_vec = init_machines(&song, sample_rate);
 
+        // Build sample bank: move samples into SlotMap, keep index→key mapping
+        let mut voice_pool = VoicePool::new();
+        let index_to_key: Vec<SampleKey> = song
+            .samples
+            .iter()
+            .map(|s| voice_pool.sample_bank.insert(s.clone()))
+            .collect();
+
         let mut engine = Self {
             song,
             channels: Vec::new(),
@@ -120,6 +134,8 @@ impl Engine {
             song_end_time: None,
             mix_gains,
             machines: machines_vec,
+            voice_pool,
+            index_to_key,
         };
 
         // Initialize channels with panning from song settings
@@ -186,8 +202,14 @@ impl Engine {
             self.dispatch_event(&event);
         }
 
+        // 1b. Push channel state to voices after event dispatch
+        self.push_channels_to_voices();
+
         // 2. Render audio graph
         let output = self.render_graph();
+
+        // 2b. Sync voice state back to channels (position, playing)
+        self.sync_channels_from_voices();
 
         // 3. Advance time
         self.sample_counter += 1;
@@ -195,6 +217,8 @@ impl Engine {
             self.sample_counter = 0;
             self.advance_tick();
             self.process_tick();
+            // Push modulator-updated state to voices immediately
+            self.push_channels_to_voices();
         } else {
             self.interpolate_sub_beat();
         }
@@ -255,6 +279,7 @@ impl Engine {
         for machine in self.machines.iter_mut().flatten() {
             machine.tick();
         }
+        self.voice_pool.reap_finished();
     }
 
     /// Dispatch an event to its target.
@@ -270,6 +295,11 @@ impl Engine {
                 // TODO: Route to graph node
             }
         }
+    }
+
+    /// Look up the SampleKey for a sample index.
+    fn sample_key(&self, sample_idx: u8) -> Option<SampleKey> {
+        self.index_to_key.get(sample_idx as usize).copied()
     }
 
     /// Look up the sample index for an instrument + note.
@@ -318,14 +348,30 @@ impl Engine {
                 let c4_speed = self.sample_c4_speed(sample_idx);
                 let default_vol = self.song.samples.get(sample_idx as usize).map(|s| s.default_volume);
                 let sample_rate = self.sample_rate;
+                let sample_key = self.sample_key(sample_idx);
 
                 if let Some(channel) = self.channels.get_mut(ch as usize) {
+                    // Handle old voice via NNA (MOD default: Cut)
+                    if let Some(old_id) = channel.voice_id.take() {
+                        self.voice_pool.kill(old_id);
+                    }
+
                     channel.trigger(*note, inst_idx, sample_idx);
                     channel.c4_speed = c4_speed;
                     channel.period = note_to_period(*note);
                     channel.update_increment(sample_rate);
                     if let Some(vol) = default_vol {
                         channel.volume = vol;
+                    }
+
+                    // Allocate new voice
+                    if let Some(key) = sample_key {
+                        let mut voice = Voice::new(key, ch);
+                        voice.increment = channel.increment;
+                        voice.volume = channel.volume;
+                        voice.panning = channel.panning;
+                        let voice_id = self.voice_pool.allocate(voice);
+                        channel.voice_id = Some(voice_id);
                     }
                 }
             }
@@ -334,6 +380,7 @@ impl Engine {
                 let c4_speed = self.sample_c4_speed(sample_idx);
                 let default_vol = self.song.samples.get(sample_idx as usize).map(|s| s.default_volume);
                 let target_period = note_to_period(*note);
+                let new_key = self.sample_key(sample_idx);
 
                 if let Some(channel) = self.channels.get_mut(ch as usize) {
                     channel.target_period = target_period;
@@ -346,11 +393,20 @@ impl Engine {
                         if let Some(vol) = default_vol {
                             channel.volume = vol;
                         }
+                        // Update voice's sample key
+                        if let (Some(voice_id), Some(key)) = (channel.voice_id, new_key) {
+                            if let Some(voice) = self.voice_pool.get_mut(voice_id) {
+                                voice.sample_key = key;
+                            }
+                        }
                     }
                 }
             }
             EventPayload::NoteOff { note: _ } => {
                 if let Some(channel) = self.channels.get_mut(ch as usize) {
+                    if let Some(voice_id) = channel.voice_id.take() {
+                        self.voice_pool.kill(voice_id);
+                    }
                     channel.stop();
                 }
             }
@@ -391,23 +447,56 @@ impl Engine {
         }
     }
 
-    /// Render a single tracker channel, writing f32 output into node_outputs.
-    fn render_channel(&mut self, ch_index: usize, node_id: u16) {
-        let channel = match self.channels.get_mut(ch_index) {
-            Some(ch) => ch,
-            None => return,
-        };
-        if !channel.playing {
-            return;
+    /// Push channel-computed state to voices (after events/effects modify channel).
+    fn push_channels_to_voices(&mut self) {
+        for channel in &self.channels {
+            let voice_id = match channel.voice_id {
+                Some(id) => id,
+                None => continue,
+            };
+            if let Some(voice) = self.voice_pool.get_mut(voice_id) {
+                voice.volume = channel.volume;
+                voice.increment = channel.increment;
+                voice.panning = channel.panning;
+                voice.volume_offset = channel.volume_offset;
+                voice.position = channel.position;
+            }
         }
-        let sample = match self.song.samples.get(channel.sample_index as usize) {
-            Some(s) => s,
+    }
+
+    /// Sync voice state (position, playing) back to channels after rendering.
+    fn sync_channels_from_voices(&mut self) {
+        for channel in &mut self.channels {
+            let voice_id = match channel.voice_id {
+                Some(id) => id,
+                None => continue,
+            };
+            match self.voice_pool.get(voice_id) {
+                Some(voice) => {
+                    channel.position = voice.position;
+                    channel.playing = voice.playing;
+                    if !voice.playing {
+                        channel.voice_id = None; // Drop stale ref before reap frees slot
+                    }
+                }
+                None => {
+                    // Voice was reaped
+                    channel.playing = false;
+                    channel.voice_id = None;
+                }
+            }
+        }
+    }
+
+    /// Render a single tracker channel via VoicePool, writing f32 output into node_outputs.
+    fn render_channel(&mut self, ch_index: usize, node_id: u16) {
+        let voice_id = match self.channels.get(ch_index).and_then(|ch| ch.voice_id) {
+            Some(id) => id,
             None => return,
         };
-        let frame = channel.render(sample);
+
         let buf = &mut self.graph_state.node_outputs[node_id as usize];
-        buf.channel_mut(0)[0] = frame.left as f32 / 32768.0;
-        buf.channel_mut(1)[0] = frame.right as f32 / 32768.0;
+        self.voice_pool.render_voice(voice_id, buf);
     }
 
     /// Render the audio graph by traversing nodes in topological order.
@@ -524,6 +613,11 @@ impl Engine {
     /// Get a reference to the song.
     pub fn song(&self) -> &Song {
         &self.song
+    }
+
+    /// Get the voice pool (for testing).
+    pub fn voice_pool(&self) -> &VoicePool {
+        &self.voice_pool
     }
 
     /// Apply a batch of edits to the song data and update the event queue.
@@ -1542,5 +1636,227 @@ mod tests {
 
         let cell = Cell { note: Note::On(60), instrument: 1, ..Cell::empty() };
         engine.apply_edits(&[Edit::SetCell { track: 0, clip: 0, row: 999, column: 0, cell }]);
+    }
+
+    // === Voice pool integration tests ===
+
+    #[test]
+    fn note_on_allocates_voice() {
+        let song = song_with_sample(vec![127; 1000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        assert_eq!(engine.voice_pool().active_count(), 0);
+
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+
+        assert_eq!(engine.voice_pool().active_count(), 1);
+        assert!(engine.channel(0).unwrap().voice_id.is_some());
+    }
+
+    #[test]
+    fn note_off_kills_voice() {
+        let song = song_with_sample(vec![127; 1000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+        assert_eq!(engine.voice_pool().active_count(), 1);
+
+        engine.schedule(Event::new(
+            engine.position(),
+            EventTarget::Channel(0),
+            EventPayload::NoteOff { note: 0 },
+        ));
+        engine.render_frame();
+        assert_eq!(engine.voice_pool().active_count(), 0);
+        assert!(engine.channel(0).unwrap().voice_id.is_none());
+    }
+
+    #[test]
+    fn new_note_kills_old_voice_nna_cut() {
+        let song = song_with_sample(vec![127; 10000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+        assert_eq!(engine.voice_pool().active_count(), 1);
+
+        // Retrigger with a different note — old voice should be killed (NNA=Cut)
+        schedule_note(&mut engine, 60, 1);
+        engine.render_frame();
+        assert_eq!(engine.voice_pool().active_count(), 1, "should still have exactly 1 voice");
+        // Verify the voice is playing the NEW note's increment
+        let ch = engine.channel(0).unwrap();
+        let voice = engine.voice_pool().get(ch.voice_id.unwrap()).unwrap();
+        let expected_inc = period_to_increment(214, 8363, SAMPLE_RATE); // C-3 period
+        assert_eq!(voice.increment, expected_inc, "voice should play at C-3 increment");
+    }
+
+    #[test]
+    fn voice_position_matches_channel_position() {
+        let song = song_with_sample(vec![127; 10000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+
+        for _ in 0..100 {
+            engine.render_frame();
+            let ch = engine.channel(0).unwrap();
+            if let Some(voice_id) = ch.voice_id {
+                let voice = engine.voice_pool().get(voice_id).unwrap();
+                assert_eq!(voice.position, ch.position,
+                    "voice and channel position should stay in sync");
+            }
+        }
+    }
+
+    #[test]
+    fn voice_increment_matches_channel_increment() {
+        let song = song_with_sample(vec![127; 10000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+
+        for _ in 0..100 {
+            engine.render_frame();
+            let ch = engine.channel(0).unwrap();
+            if let Some(voice_id) = ch.voice_id {
+                let voice = engine.voice_pool().get(voice_id).unwrap();
+                assert_eq!(voice.increment, ch.increment);
+            }
+        }
+    }
+
+    #[test]
+    fn voice_freed_after_sample_ends() {
+        let song = song_with_sample(vec![127; 4], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+
+        for _ in 0..10000 {
+            engine.render_frame();
+        }
+
+        assert!(engine.channel(0).unwrap().voice_id.is_none());
+        assert_eq!(engine.voice_pool().active_count(), 0);
+    }
+
+    #[test]
+    fn voice_slot_reuse_no_cross_contamination() {
+        // Two-channel song: channel 0 plays and stops, channel 1 then plays.
+        // Voice slot freed by channel 0 should not contaminate channel 1.
+        let mut song = Song::with_channels("test", 2);
+        let mut sample = Sample::new("test");
+        sample.data = SampleData::Mono8(vec![127; 4]); // very short, will stop quickly
+        sample.default_volume = 64;
+        sample.c4_speed = 8363;
+        song.samples.push(sample.clone());
+        let mut long_sample = Sample::new("long");
+        long_sample.data = SampleData::Mono8(vec![100; 10000]);
+        long_sample.default_volume = 32;
+        long_sample.c4_speed = 8363;
+        song.samples.push(long_sample);
+
+        let mut inst0 = Instrument::new("i0");
+        inst0.set_single_sample(0);
+        song.instruments.push(inst0);
+        let mut inst1 = Instrument::new("i1");
+        inst1.set_single_sample(1);
+        song.instruments.push(inst1);
+
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+
+        // Channel 0: play short sample
+        engine.schedule(Event::new(
+            engine.position(),
+            EventTarget::Channel(0),
+            EventPayload::NoteOn { note: 48, velocity: 64, instrument: 1 },
+        ));
+        engine.render_frame();
+        assert_eq!(engine.voice_pool().active_count(), 1);
+
+        // Let short sample finish
+        for _ in 0..10000 {
+            engine.render_frame();
+        }
+        assert!(engine.channel(0).unwrap().voice_id.is_none());
+
+        // Channel 1: play long sample (may reuse freed slot)
+        engine.schedule(Event::new(
+            engine.position(),
+            EventTarget::Channel(1),
+            EventPayload::NoteOn { note: 60, velocity: 64, instrument: 2 },
+        ));
+        engine.render_frame();
+        assert_eq!(engine.voice_pool().active_count(), 1);
+
+        // Verify channel 1's voice has correct volume (from long_sample, not short)
+        let ch1 = engine.channel(1).unwrap();
+        let voice = engine.voice_pool().get(ch1.voice_id.unwrap()).unwrap();
+        assert_eq!(voice.volume, 32, "voice should have long_sample's volume, not short_sample's");
+        assert_eq!(voice.channel, 1, "voice should belong to channel 1");
+    }
+
+    #[test]
+    fn sample_offset_propagates_to_voice() {
+        let song = song_with_sample(vec![127; 10000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame(); // trigger note first
+
+        // Apply SampleOffset on the next frame (after voice is allocated)
+        schedule_effect(&mut engine, mb_ir::Effect::SampleOffset(5));
+        engine.render_frame();
+
+        let ch = engine.channel(0).unwrap();
+        let offset_base = 5u32 << 24;
+        assert!(ch.position >= offset_base,
+            "channel position {} should be at or past offset {}", ch.position, offset_base);
+        let voice = engine.voice_pool().get(ch.voice_id.unwrap()).unwrap();
+        assert_eq!(voice.position, ch.position,
+            "voice and channel position should be in sync after SampleOffset");
+    }
+
+    #[test]
+    fn volume_slide_propagates_to_voice() {
+        let song = song_with_sample(vec![127; 100000], 32);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, 48, 1);
+        engine.render_frame();
+
+        schedule_effect(&mut engine, mb_ir::Effect::VolumeSlide(4));
+        engine.render_frame();
+
+        // Advance a few ticks
+        for _ in 0..882 * 3 {
+            engine.render_frame();
+        }
+
+        let ch = engine.channel(0).unwrap();
+        let voice = engine.voice_pool().get(ch.voice_id.unwrap()).unwrap();
+        assert_eq!(voice.volume, ch.volume, "voice volume should match channel");
+        assert!(ch.volume > 32, "volume should have increased");
+    }
+
+    #[test]
+    fn sample_bank_built_from_song_samples() {
+        let mut song = Song::with_channels("test", 1);
+        for i in 0..5 {
+            let mut s = Sample::new(&format!("sample{}", i));
+            s.data = SampleData::Mono8(vec![i as i8 * 10; 100]);
+            s.c4_speed = 8363;
+            song.samples.push(s);
+            let mut inst = Instrument::new(&format!("inst{}", i));
+            inst.set_single_sample(i as u8);
+            song.instruments.push(inst);
+        }
+
+        let engine = Engine::new(song, SAMPLE_RATE);
+        assert_eq!(engine.voice_pool().sample_bank.len(), 5);
     }
 }

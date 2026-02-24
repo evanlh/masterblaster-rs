@@ -1357,6 +1357,7 @@ dependencies = [
  "png",
  "raw-window-handle",
  "rfd",
+ "slotmap",
  "winit",
 ]
 
@@ -1375,6 +1376,7 @@ dependencies = [
  "assert_no_alloc",
  "heapless",
  "mb-ir",
+ "slotmap",
 ]
 
 [[package]]
@@ -1391,6 +1393,7 @@ version = "0.1.0"
 dependencies = [
  "arrayvec",
  "libm",
+ "slotmap",
 ]
 
 [[package]]

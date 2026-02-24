@@ -26,6 +26,7 @@ mb-master = { path = "crates/mb-master" }
 arrayvec = "0.7"
 heapless = "0.8"
 libm = "0.2"
+slotmap = { version = "1.1.1", default-features = false }
 
 # Desktop audio
 cpal = "0.15"
@@ -62,6 +63,7 @@ glutin = { workspace = true }
 glutin-winit = { workspace = true }
 raw-window-handle = { workspace = true }
 rfd = { workspace = true }
+slotmap = { workspace = true }
 
 [[bin]]
 name = "mb-cli"

@@ -8,8 +8,10 @@ use mb_ir::{
 
 use crate::envelope_state::EnvelopeState;
 use crate::frequency::{clamp_period, note_to_period, period_to_increment, PERIOD_MAX, PERIOD_MIN};
+use crate::voice_pool::VoiceId;
 
-/// A stereo audio frame (16-bit integer, internal to channel rendering).
+/// A stereo audio frame (16-bit integer, used by parity test).
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Frame {
     pub left: i16,
@@ -94,6 +96,9 @@ pub struct ChannelState {
     pub period_offset: i16,
     /// Volume offset from tremolo
     pub volume_offset: i8,
+
+    /// Active voice in the voice pool (None if no voice is playing).
+    pub voice_id: Option<VoiceId>,
 }
 
 impl ChannelState {
@@ -117,6 +122,7 @@ impl ChannelState {
         self.loop_forward = true;
         self.period_offset = 0;
         self.volume_offset = 0;
+        self.voice_id = None; // New voice allocated by Engine
         // Clear modulators (respect no-retrig waveform flag)
         if self.vibrato_waveform & 4 == 0 {
             self.period_mod = None;
@@ -130,6 +136,7 @@ impl ChannelState {
     /// Stop playback.
     pub fn stop(&mut self) {
         self.playing = false;
+        self.voice_id = None;
     }
 
     /// Recompute the playback increment from the current period and c4_speed.
@@ -326,6 +333,7 @@ impl ChannelState {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn render(&mut self, sample: &Sample) -> Frame {
         // Read sample value with linear interpolation
         let sample_value = sample.data.get_mono_interpolated(self.position);
