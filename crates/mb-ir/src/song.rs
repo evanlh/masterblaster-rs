@@ -1,6 +1,5 @@
 //! Song structure and sequencing types.
 
-use alloc::format;
 use alloc::vec::Vec;
 use arrayvec::ArrayString;
 
@@ -134,32 +133,33 @@ impl Default for ChannelSettings {
 }
 
 /// A track in the timeline — owns a clip pool and a playback sequence.
+///
+/// Each track represents a machine (or standalone automation lane).
+/// Multi-channel tracker machines have one Track with multi-column patterns.
 #[derive(Clone, Debug)]
 pub struct Track {
-    /// Which graph node this track controls
-    pub target: NodeId,
-    /// Name of the track
-    pub name: ArrayString<32>,
+    /// Parent machine node in graph (e.g. AmigaFilter for MOD, tracker machine for BMX).
+    /// `None` = standalone/automation track.
+    pub machine_node: Option<NodeId>,
+    /// First TrackerChannel index this track drives.
+    pub base_channel: u8,
+    /// Number of channels (= pattern column count).
+    pub num_channels: u8,
     /// Pool of clips owned by this track
     pub clips: Vec<Clip>,
     /// Playback order (which clip to play when)
     pub sequence: Vec<SeqEntry>,
-    /// UI grouping tag — tracks with the same group share a sequence and
-    /// are displayed together in the pattern editor. `None` = ungrouped.
-    pub group: Option<u16>,
 }
 
 impl Track {
-    /// Create a new empty track targeting a node.
-    pub fn new(target: NodeId, name: &str) -> Self {
-        let mut track_name = ArrayString::new();
-        let _ = track_name.try_push_str(name);
+    /// Create a new track with the given channel mapping.
+    pub fn new(machine_node: Option<NodeId>, base_channel: u8, num_channels: u8) -> Self {
         Self {
-            target,
-            name: track_name,
+            machine_node,
+            base_channel,
+            num_channels,
             clips: Vec::new(),
             sequence: Vec::new(),
-            group: None,
         }
     }
 }
@@ -199,72 +199,36 @@ pub struct SeqEntry {
 
 // --- Track building from legacy format data ---
 
-/// Build per-track clips + sequences from multi-channel patterns and an order list.
+/// Find the first BuzzMachine node in the graph (e.g. AmigaFilter for MOD).
+pub fn find_machine_node(graph: &AudioGraph) -> Option<NodeId> {
+    graph.nodes.iter().enumerate()
+        .find(|(_, n)| matches!(&n.node_type, NodeType::BuzzMachine { .. }))
+        .map(|(i, _)| i as NodeId)
+}
+
+/// Build a single track from multi-channel patterns and an order list.
 ///
-/// Each channel becomes a track with single-column patterns extracted
-/// from the multi-channel originals. All tracks get `group: Some(0)`.
+/// Creates one Track with the original multi-channel patterns cloned directly
+/// (no column extraction). `base_channel = 0`, `num_channels = song.channels.len()`.
 pub fn build_tracks(
     song: &mut Song,
     patterns: &[Pattern],
     order: &[OrderEntry],
 ) {
-    let num_channels = song.channels.len();
+    let num_channels = song.channels.len() as u8;
     if num_channels == 0 {
         return;
     }
 
-    let channel_nodes: Vec<NodeId> = (0..num_channels)
-        .map(|i| find_channel_node(&song.graph, i as u8))
-        .collect();
-
-    let mut tracks: Vec<Track> = (0..num_channels)
-        .map(|i| {
-            let mut t = Track::new(channel_nodes[i], &format_channel_name(i));
-            t.group = Some(0);
-            t
-        })
-        .collect();
+    let machine_node = find_machine_node(&song.graph);
+    let mut track = Track::new(machine_node, 0, num_channels);
 
     for pattern in patterns {
-        for (ch, track) in tracks.iter_mut().enumerate() {
-            let clip = extract_single_column(pattern, ch as u8);
-            track.clips.push(Clip::Pattern(clip));
-        }
+        track.clips.push(Clip::Pattern(pattern.clone()));
     }
 
-    let sequence = build_sequence_from_order(order, patterns, song.rows_per_beat);
-    for track in &mut tracks {
-        track.sequence = sequence.clone();
-    }
-
-    song.tracks = tracks;
-}
-
-/// Find the NodeId for TrackerChannel with the given index.
-fn find_channel_node(graph: &AudioGraph, index: u8) -> NodeId {
-    graph.nodes.iter()
-        .position(|n| matches!(&n.node_type, NodeType::TrackerChannel { index: i } if *i == index))
-        .unwrap_or(0) as NodeId
-}
-
-/// Format a channel name like "Ch 1", "Ch 2", etc.
-fn format_channel_name(index: usize) -> ArrayString<32> {
-    let mut name = ArrayString::new();
-    let _ = name.try_push_str(&format!("Ch {}", index + 1));
-    name
-}
-
-/// Extract a single channel column from a multi-channel pattern.
-fn extract_single_column(pattern: &Pattern, channel: u8) -> Pattern {
-    let mut single = Pattern::new(pattern.rows, 1);
-    single.ticks_per_row = pattern.ticks_per_row;
-    single.rows_per_beat = pattern.rows_per_beat;
-    for row in 0..pattern.rows {
-        if channel < pattern.channels {
-            *single.cell_mut(row, 0) = *pattern.cell(row, channel);
-        }
-    }
-    single
+    track.sequence = build_sequence_from_order(order, patterns, song.rows_per_beat);
+    song.tracks = alloc::vec![track];
 }
 
 /// Build a sequence from a legacy order list, computing start times.
@@ -329,54 +293,34 @@ mod tests {
     }
 
     #[test]
-    fn build_tracks_creates_one_track_per_channel() {
+    fn build_tracks_creates_one_track() {
         let song = make_test_song();
-        assert_eq!(song.tracks.len(), 4);
-    }
-
-    #[test]
-    fn build_tracks_all_grouped() {
-        let song = make_test_song();
-        for track in &song.tracks {
-            assert_eq!(track.group, Some(0));
-        }
+        assert_eq!(song.tracks.len(), 1);
+        assert_eq!(song.tracks[0].num_channels, 4);
+        assert_eq!(song.tracks[0].base_channel, 0);
     }
 
     #[test]
     fn build_tracks_clips_match_patterns() {
         let song = make_test_song();
-        for track in &song.tracks {
-            assert_eq!(track.clips.len(), 2);
-        }
+        assert_eq!(song.tracks[0].clips.len(), 2);
     }
 
     #[test]
     fn build_tracks_cell_data_matches() {
         let song = make_test_song();
+        let track = &song.tracks[0];
 
-        let clip0 = song.tracks[0].clips[0].pattern().unwrap();
-        assert_eq!(clip0.channels, 1);
+        let clip0 = track.clips[0].pattern().unwrap();
+        assert_eq!(clip0.channels, 4);
         assert_eq!(clip0.rows, 4);
         assert_eq!(clip0.cell(0, 0).note, crate::pattern::Note::On(48));
         assert_eq!(clip0.cell(0, 0).instrument, 1);
+        assert_eq!(clip0.cell(0, 2).note, crate::pattern::Note::On(60));
+        assert_eq!(clip0.cell(3, 1).note, crate::pattern::Note::Off);
 
-        let clip2 = song.tracks[2].clips[0].pattern().unwrap();
-        assert_eq!(clip2.cell(0, 0).note, crate::pattern::Note::On(60));
-
-        let clip1 = song.tracks[1].clips[0].pattern().unwrap();
-        assert_eq!(clip1.cell(3, 0).note, crate::pattern::Note::Off);
-
-        let clip3_1 = song.tracks[3].clips[1].pattern().unwrap();
-        assert_eq!(clip3_1.cell(0, 0).note, crate::pattern::Note::On(72));
-    }
-
-    #[test]
-    fn build_tracks_sequences_identical() {
-        let song = make_test_song();
-        let seq0 = &song.tracks[0].sequence;
-        for track in &song.tracks[1..] {
-            assert_eq!(&track.sequence, seq0);
-        }
+        let clip1 = track.clips[1].pattern().unwrap();
+        assert_eq!(clip1.cell(0, 3).note, crate::pattern::Note::On(72));
     }
 
     #[test]
@@ -393,7 +337,6 @@ mod tests {
     #[test]
     fn total_time_matches_expected() {
         let song = make_test_song();
-        // pat0: 4 rows = 1 beat, pat1: 8 rows = 2 beats → 3 beats
         assert_eq!(song.total_time(), MusicalTime::from_beats(3));
     }
 
@@ -408,9 +351,7 @@ mod tests {
         let mut song = Song::with_channels("test", 2);
         let mut pat = Pattern::new(8, 2);
         pat.rows_per_beat = Some(8);
-        let patterns = vec![pat];
-        let order = vec![OrderEntry::Pattern(0)];
-        build_tracks(&mut song, &patterns, &order);
+        build_tracks(&mut song, &[pat], &[OrderEntry::Pattern(0)]);
 
         let clip = song.tracks[0].clips[0].pattern().unwrap();
         assert_eq!(clip.rows_per_beat, Some(8));
@@ -419,39 +360,39 @@ mod tests {
     #[test]
     fn build_tracks_preserves_empty_cells() {
         let mut song = Song::with_channels("test", 2);
-        let patterns = vec![Pattern::new(4, 2)];
-        let order = vec![OrderEntry::Pattern(0)];
-        build_tracks(&mut song, &patterns, &order);
+        build_tracks(&mut song, &[Pattern::new(4, 2)], &[OrderEntry::Pattern(0)]);
 
         let clip = song.tracks[0].clips[0].pattern().unwrap();
         for row in 0..4 {
             assert!(clip.cell(row, 0).is_empty());
+            assert!(clip.cell(row, 1).is_empty());
         }
     }
 
     #[test]
     fn build_tracks_skips_order_skip_entries() {
         let mut song = Song::with_channels("test", 1);
-        let patterns = vec![Pattern::new(4, 1)];
-        let order = vec![
-            OrderEntry::Pattern(0),
-            OrderEntry::Skip,
-            OrderEntry::Pattern(0),
-        ];
-        build_tracks(&mut song, &patterns, &order);
+        build_tracks(&mut song, &[Pattern::new(4, 1)], &[
+            OrderEntry::Pattern(0), OrderEntry::Skip, OrderEntry::Pattern(0),
+        ]);
         assert_eq!(song.tracks[0].sequence.len(), 2);
     }
 
     #[test]
     fn build_tracks_stops_at_order_end() {
         let mut song = Song::with_channels("test", 1);
-        let patterns = vec![Pattern::new(4, 1)];
-        let order = vec![
-            OrderEntry::Pattern(0),
-            OrderEntry::End,
-            OrderEntry::Pattern(0),
-        ];
-        build_tracks(&mut song, &patterns, &order);
+        build_tracks(&mut song, &[Pattern::new(4, 1)], &[
+            OrderEntry::Pattern(0), OrderEntry::End, OrderEntry::Pattern(0),
+        ]);
         assert_eq!(song.tracks[0].sequence.len(), 1);
+    }
+
+    #[test]
+    fn build_tracks_machine_node_points_to_filter() {
+        let song = make_test_song();
+        let machine = song.tracks[0].machine_node;
+        assert!(machine.is_some());
+        let node = song.graph.node(machine.unwrap()).unwrap();
+        assert!(matches!(&node.node_type, NodeType::BuzzMachine { .. }));
     }
 }

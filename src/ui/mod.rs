@@ -47,30 +47,21 @@ impl Default for GuiState {
     }
 }
 
-/// Get the clip index for the current group at the selected sequence position.
+/// Get the clip index for track 0 at the selected sequence position.
 fn selected_clip_idx(gui: &GuiState) -> Option<u16> {
-    let track = gui.controller.song().tracks.iter().find(|t| t.group == Some(0))?;
+    let track = gui.controller.song().tracks.first()?;
     track.sequence.get(gui.selected_seq_index).map(|e| e.clip_idx)
 }
 
-/// Get the number of tracks in the given group.
-fn group_track_count(gui: &GuiState) -> u8 {
-    gui.controller.song().tracks.iter()
-        .filter(|t| t.group == Some(0))
-        .count() as u8
-}
-
-/// Get the group track indices (positions in song.tracks vec).
-fn group_track_indices(gui: &GuiState) -> Vec<u16> {
-    gui.controller.song().tracks.iter()
-        .enumerate()
-        .filter(|(_, t)| t.group == Some(0))
-        .map(|(i, _)| i as u16)
-        .collect()
+/// Get the number of channels in track 0.
+fn track_channel_count(gui: &GuiState) -> u8 {
+    gui.controller.song().tracks.first()
+        .map(|t| t.num_channels)
+        .unwrap_or(0)
 }
 
 pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
-    let pos = gui.controller.track_position(Some(0));
+    let pos = gui.controller.track_position(0);
 
     let display_size = ui.io().display_size;
     ui.window("masterblaster")
@@ -219,10 +210,10 @@ pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
 }
 
 fn pattern_bounds(gui: &GuiState) -> (u16, u8) {
-    let channels = group_track_count(gui).max(1);
+    let channels = track_channel_count(gui).max(1);
     let rows = selected_clip_idx(gui)
         .and_then(|ci| {
-            let track = gui.controller.song().tracks.iter().find(|t| t.group == Some(0))?;
+            let track = gui.controller.song().tracks.first()?;
             track.clips.get(ci as usize)?.pattern().map(|p| p.rows)
         })
         .unwrap_or(1);
@@ -232,29 +223,20 @@ fn pattern_bounds(gui: &GuiState) -> (u16, u8) {
 /// Apply an edit with undo recording: reads old cell, records undo, applies edit.
 fn apply_edit_with_undo(gui: &mut GuiState, clip_idx: u16, row: u16, channel: u8, cell: mb_ir::Cell) {
     let old_cell = read_cell(gui, clip_idx, row, channel);
-    let track_indices = group_track_indices(gui);
-    let track_idx = match track_indices.get(channel as usize) {
-        Some(i) => *i,
-        None => return,
-    };
-    let forward = mb_ir::Edit::SetCell { track: track_idx, clip: clip_idx, row, column: 0, cell };
-    let reverse = mb_ir::Edit::SetCell { track: track_idx, clip: clip_idx, row, column: 0, cell: old_cell };
+    let forward = mb_ir::Edit::SetCell { track: 0, clip: clip_idx, row, column: channel, cell };
+    let reverse = mb_ir::Edit::SetCell { track: 0, clip: clip_idx, row, column: channel, cell: old_cell };
     gui.undo_stack.push(forward.clone(), reverse);
     gui.controller.apply_edit(forward);
 }
 
-/// Read a cell from a track's clip, returning empty if out of bounds.
+/// Read a cell from track 0's clip at the given row and channel (column).
 fn read_cell(gui: &GuiState, clip_idx: u16, row: u16, channel: u8) -> mb_ir::Cell {
-    let track_indices = group_track_indices(gui);
-    let track_idx = match track_indices.get(channel as usize) {
-        Some(i) => *i as usize,
-        None => return mb_ir::Cell::empty(),
-    };
     gui.controller.song().tracks
-        .get(track_idx)
+        .first()
         .and_then(|t| t.clips.get(clip_idx as usize))
         .and_then(|c| c.pattern())
-        .map(|p| *p.cell(row, 0))
+        .filter(|p| row < p.rows && channel < p.channels)
+        .map(|p| *p.cell(row, channel))
         .unwrap_or(mb_ir::Cell::empty())
 }
 
@@ -379,7 +361,6 @@ fn paste_clipboard(gui: &mut GuiState, max_rows: u16, max_channels: u8) {
     let Some(clip_idx) = selected_clip_idx(gui) else { return };
 
     let cursor = gui.editor.cursor;
-    let track_indices = group_track_indices(gui);
     let mut forward_edits = Vec::new();
     let mut reverse_edits = Vec::new();
 
@@ -395,16 +376,12 @@ fn paste_clipboard(gui: &mut GuiState, max_rows: u16, max_channels: u8) {
             }
             let new_cell = *clipboard.cell(r, ch);
             let old_cell = read_cell(gui, clip_idx, dest_row, dest_ch);
-            let track_idx = match track_indices.get(dest_ch as usize) {
-                Some(i) => *i,
-                None => continue,
-            };
 
             forward_edits.push(mb_ir::Edit::SetCell {
-                track: track_idx, clip: clip_idx, row: dest_row, column: 0, cell: new_cell,
+                track: 0, clip: clip_idx, row: dest_row, column: dest_ch, cell: new_cell,
             });
             reverse_edits.push(mb_ir::Edit::SetCell {
-                track: track_idx, clip: clip_idx, row: dest_row, column: 0, cell: old_cell,
+                track: 0, clip: clip_idx, row: dest_row, column: dest_ch, cell: old_cell,
             });
         }
     }
@@ -426,22 +403,17 @@ fn delete_selection(gui: &mut GuiState) {
     let Some(clip_idx) = selected_clip_idx(gui) else { return };
 
     let (min_row, min_ch, max_row, max_ch) = sel.bounds();
-    let track_indices = group_track_indices(gui);
     let mut forward_edits = Vec::new();
     let mut reverse_edits = Vec::new();
 
     for r in min_row..=max_row {
         for ch in min_ch..=max_ch {
             let old_cell = read_cell(gui, clip_idx, r, ch);
-            let track_idx = match track_indices.get(ch as usize) {
-                Some(i) => *i,
-                None => continue,
-            };
             forward_edits.push(mb_ir::Edit::SetCell {
-                track: track_idx, clip: clip_idx, row: r, column: 0, cell: mb_ir::Cell::empty(),
+                track: 0, clip: clip_idx, row: r, column: ch, cell: mb_ir::Cell::empty(),
             });
             reverse_edits.push(mb_ir::Edit::SetCell {
-                track: track_idx, clip: clip_idx, row: r, column: 0, cell: old_cell,
+                track: 0, clip: clip_idx, row: r, column: ch, cell: old_cell,
             });
         }
     }

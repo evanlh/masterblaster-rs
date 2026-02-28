@@ -24,45 +24,16 @@ struct FlowControl {
 }
 
 /// Schedule all events from per-track clips + sequences.
-///
-/// Groups are processed together (shared flow control).
-/// Ungrouped tracks are processed independently.
 pub fn schedule_song(song: &Song) -> ScheduleResult {
     let mut events = Vec::new();
-
-    let groups = collect_groups(&song.tracks);
-    let ungrouped: Vec<usize> = song.tracks.iter().enumerate()
-        .filter(|(_, t)| t.group.is_none())
-        .map(|(i, _)| i)
-        .collect();
-
     let mut max_time = MusicalTime::zero();
 
-    for group_id in groups {
-        let group_tracks: Vec<usize> = song.tracks.iter().enumerate()
-            .filter(|(_, t)| t.group == Some(group_id))
-            .map(|(i, _)| i)
-            .collect();
-        let t = schedule_group(&group_tracks, song, &mut events);
-        if t > max_time { max_time = t; }
-    }
-
-    for &track_idx in &ungrouped {
-        let t = schedule_ungrouped_track(&song.tracks[track_idx], track_idx, song, &mut events);
+    for track in &song.tracks {
+        let t = schedule_track(track, song, &mut events);
         if t > max_time { max_time = t; }
     }
 
     ScheduleResult { events, total_time: max_time }
-}
-
-/// Collect unique group IDs from tracks (sorted, deduplicated).
-fn collect_groups(tracks: &[Track]) -> Vec<u16> {
-    let mut groups: Vec<u16> = tracks.iter()
-        .filter_map(|t| t.group)
-        .collect();
-    groups.sort_unstable();
-    groups.dedup();
-    groups
 }
 
 /// Resolve effective speed for a pattern row.
@@ -265,47 +236,18 @@ fn schedule_effect(effect: &Effect, time: MusicalTime, channel: u8, events: &mut
     }
 }
 
-/// Resolve the channel index for a track at a given index in the song.
-pub fn track_channel_index_from_song(track_idx: u16, song: &Song) -> Option<u8> {
-    song.tracks.get(track_idx as usize).and_then(|t| track_channel_index(t, song))
+/// Resolve engine channel index from a track column.
+pub fn track_column_to_channel(track: &Track, column: u8) -> u8 {
+    track.base_channel + column
 }
 
-/// Resolve the channel index for a track by finding its TrackerChannel node.
-fn track_channel_index(track: &Track, song: &Song) -> Option<u8> {
-    song.graph.node(track.target).and_then(|n| {
-        if let mb_ir::NodeType::TrackerChannel { index } = &n.node_type {
-            Some(*index)
-        } else {
-            None
-        }
-    })
-}
-
-/// Schedule events for a group of tracks that share identical sequences.
-///
-/// Walks position-by-position, row-by-row, gathering flow control across
-/// all tracks in the group.
-fn schedule_group(
-    track_indices: &[usize],
+/// Schedule events for a single track (walks sequence, iterates multi-channel patterns).
+fn schedule_track(
+    track: &Track,
     song: &Song,
     events: &mut Vec<Event>,
 ) -> MusicalTime {
-    if track_indices.is_empty() {
-        return MusicalTime::zero();
-    }
-
-    let seq = &song.tracks[track_indices[0]].sequence;
-    if seq.is_empty() {
-        return MusicalTime::zero();
-    }
-
-    // Build (track_index, channel_index) pairs
-    let channels: Vec<(usize, u8)> = track_indices.iter()
-        .filter_map(|&ti| track_channel_index(&song.tracks[ti], song).map(|ch| (ti, ch)))
-        .collect();
-
-    // Skip non-tracker tracks (e.g. BuzzMachine nodes without TrackerChannel mapping)
-    if channels.is_empty() {
+    if track.sequence.is_empty() {
         return MusicalTime::zero();
     }
 
@@ -315,31 +257,29 @@ fn schedule_group(
     let mut row: u16 = 0;
     let mut time = MusicalTime::zero();
 
-    let max_rows = compute_group_max_rows(&channels, song);
+    let max_rows = compute_max_rows(track);
     let mut rows_processed: u64 = 0;
 
     loop {
-        if seq_idx >= seq.len() { break; }
-        let clip_idx = seq[seq_idx].clip_idx as usize;
+        if seq_idx >= track.sequence.len() { break; }
+        let clip_idx = track.sequence[seq_idx].clip_idx as usize;
 
-        let rep_clip = match get_track_clip(&song.tracks[channels[0].0], clip_idx) {
+        let clip = match get_track_clip(track, clip_idx) {
             Some(p) => p,
             None => break,
         };
-        let num_rows = rep_clip.rows;
+        let num_rows = clip.rows;
         if row >= num_rows { row = 0; }
-        let rpb = rep_clip.rows_per_beat.map_or(song_rpb, |r| r as u32);
+        let rpb = clip.rows_per_beat.map_or(song_rpb, |r| r as u32);
+        let eff_speed = effective_speed(clip, speed);
 
-        for &(ti, ch) in &channels {
-            let clip = match get_track_clip(&song.tracks[ti], clip_idx) {
-                Some(p) => p,
-                None => continue,
-            };
-            let eff_speed = effective_speed(clip, speed);
-            schedule_cell(clip.cell(row, 0), time, ch, eff_speed, rpb, events);
+        // Schedule all columns at this row
+        for col in 0..clip.channels {
+            let ch = track_column_to_channel(track, col);
+            schedule_cell(clip.cell(row, col), time, ch, eff_speed, rpb, events);
         }
 
-        let fc = scan_group_flow_control(&channels, song, clip_idx, row);
+        let fc = scan_row_flow_control(clip, row);
         if let Some(s) = fc.new_speed { speed = s; }
 
         time = time.add_rows(1 + fc.pattern_delay as u32, rpb);
@@ -365,32 +305,25 @@ fn get_track_clip(track: &Track, clip_idx: usize) -> Option<&mb_ir::Pattern> {
     track.clips.get(clip_idx).and_then(|c| c.pattern())
 }
 
-/// Compute max rows for loop detection across a group of tracks.
-fn compute_group_max_rows(channels: &[(usize, u8)], song: &Song) -> u64 {
-    let total: u64 = channels.iter()
-        .flat_map(|(ti, _)| song.tracks[*ti].clips.iter())
+/// Compute max rows for loop detection across all clips in a track.
+fn compute_max_rows(track: &Track) -> u64 {
+    let total: u64 = track.clips.iter()
         .filter_map(|c| c.pattern().map(|p| p.rows as u64))
         .sum();
     total * 2 + 256
 }
 
-/// Scan flow control effects across all tracks in a group at a given row.
-fn scan_group_flow_control(
-    channels: &[(usize, u8)],
-    song: &Song,
-    clip_idx: usize,
-    row: u16,
-) -> FlowControl {
+/// Scan flow control effects across all columns of a pattern at a given row.
+fn scan_row_flow_control(pattern: &mb_ir::Pattern, row: u16) -> FlowControl {
     let mut fc = FlowControl {
         break_row: None,
         jump_order: None,
         new_speed: None,
         pattern_delay: 0,
     };
-    for &(ti, _) in channels {
-        let Some(clip) = get_track_clip(&song.tracks[ti], clip_idx) else { continue };
-        if row >= clip.rows { continue; }
-        match clip.cell(row, 0).effect {
+    if row >= pattern.rows { return fc; }
+    for col in 0..pattern.channels {
+        match pattern.cell(row, col).effect {
             Effect::PatternBreak(r) => fc.break_row = Some(r),
             Effect::PositionJump(p) => fc.jump_order = Some(p),
             Effect::SetSpeed(s) if s > 0 => fc.new_speed = Some(s as u32),
@@ -399,41 +332,6 @@ fn scan_group_flow_control(
         }
     }
     fc
-}
-
-/// Schedule events for a single ungrouped track.
-fn schedule_ungrouped_track(
-    track: &Track,
-    _track_idx: usize,
-    song: &Song,
-    events: &mut Vec<Event>,
-) -> MusicalTime {
-    let ch = match track_channel_index(track, song) {
-        Some(ch) => ch,
-        None => return MusicalTime::zero(),
-    };
-
-    let song_rpb = song.rows_per_beat as u32;
-    let mut speed: u32 = song.initial_speed as u32;
-    let mut time = MusicalTime::zero();
-
-    for entry in &track.sequence {
-        let clip = match track.clips.get(entry.clip_idx as usize).and_then(|c| c.pattern()) {
-            Some(p) => p,
-            None => continue,
-        };
-        let rpb = clip.rows_per_beat.map_or(song_rpb, |r| r as u32);
-        for row in 0..clip.rows {
-            let eff_speed = effective_speed(clip, speed);
-            schedule_cell(clip.cell(row, 0), time, ch, eff_speed, rpb, events);
-            if let Effect::SetSpeed(s) = clip.cell(row, 0).effect {
-                if s > 0 { speed = s as u32; }
-            }
-            time = time.add_rows(1, rpb);
-        }
-    }
-
-    time
 }
 
 /// Find all MusicalTimes at which a given track clip + row appears in the sequence.

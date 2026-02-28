@@ -556,11 +556,9 @@ impl Engine {
         if row >= pat.rows || column >= pat.channels { return; }
         *pat.cell_mut(row, column) = cell;
 
-        // 2. Resolve channel index for this track
-        let ch = match scheduler::track_channel_index_from_song(track_idx, &self.song) {
-            Some(ch) => ch,
-            None => return,
-        };
+        // 2. Resolve channel index for this track + column
+        let track = &self.song.tracks[track_idx as usize];
+        let ch = scheduler::track_column_to_channel(track, column);
 
         // 3. Find times and update events
         let track = &self.song.tracks[track_idx as usize];

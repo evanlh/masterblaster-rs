@@ -111,35 +111,29 @@ impl Controller {
         Ok(self.song.instruments.len() as u8) // 1-based
     }
 
-    /// Add a new empty clip to all tracks in the given group.
-    /// Returns the clip index (same across all tracks in the group).
-    pub fn add_clip(&mut self, group: Option<u16>, rows: u16) -> u16 {
-        let clip_idx = group_clip_count(&self.song, group);
-        for track in &mut self.song.tracks {
-            if track.group == group {
-                track.clips.push(mb_ir::Clip::Pattern(mb_ir::Pattern::new(rows, 1)));
-            }
-        }
+    /// Add a new empty clip to the given track.
+    /// Returns the clip index.
+    pub fn add_clip(&mut self, track_idx: usize, rows: u16) -> u16 {
+        let Some(track) = self.song.tracks.get_mut(track_idx) else { return 0 };
+        let clip_idx = track.clips.len() as u16;
+        let channels = track.num_channels;
+        track.clips.push(mb_ir::Clip::Pattern(mb_ir::Pattern::new(rows, channels)));
         clip_idx
     }
 
-    /// Add a sequence entry to all tracks in the given group.
-    pub fn add_seq_entry(&mut self, group: Option<u16>, clip_idx: u16) {
-        let start = group_end_time(&self.song, group);
+    /// Add a sequence entry to the given track.
+    pub fn add_seq_entry(&mut self, track_idx: usize, clip_idx: u16) {
+        let start = track_end_time(&self.song, track_idx);
         let entry = mb_ir::SeqEntry { start, clip_idx };
-        for track in &mut self.song.tracks {
-            if track.group == group {
-                track.sequence.push(entry);
-            }
+        if let Some(track) = self.song.tracks.get_mut(track_idx) {
+            track.sequence.push(entry);
         }
     }
 
-    /// Remove the last sequence entry from all tracks in the given group.
-    pub fn remove_last_seq_entry(&mut self, group: Option<u16>) {
-        for track in &mut self.song.tracks {
-            if track.group == group {
-                track.sequence.pop();
-            }
+    /// Remove the last sequence entry from the given track.
+    pub fn remove_last_seq_entry(&mut self, track_idx: usize) {
+        if let Some(track) = self.song.tracks.get_mut(track_idx) {
+            track.sequence.pop();
         }
     }
 
@@ -212,14 +206,14 @@ impl Controller {
     }
 
     /// Get the current playback position in per-track coordinates.
-    pub fn track_position(&self, group: Option<u16>) -> Option<TrackPlaybackPosition> {
+    pub fn track_position(&self, track_idx: usize) -> Option<TrackPlaybackPosition> {
         let pb = self.playback.as_ref()?;
         if pb.finished.load(Ordering::Relaxed) {
             return None;
         }
         let packed = pb.current_time.load(Ordering::Relaxed);
         let time = unpack_time(packed);
-        time_to_track_position(&self.song, time, group)
+        time_to_track_position(&self.song, time, track_idx)
     }
 
     // --- Offline rendering ---
@@ -393,19 +387,10 @@ fn frames_until_report(frame_count: u64, interval: u64, batch_size: usize) -> us
     (remaining as usize).min(batch_size)
 }
 
-/// Number of clips in the first track of the given group.
-fn group_clip_count(song: &Song, group: Option<u16>) -> u16 {
-    song.tracks.iter()
-        .find(|t| t.group == group)
-        .map(|t| t.clips.len() as u16)
-        .unwrap_or(0)
-}
-
-/// End time of the group's sequence (after the last clip finishes).
-fn group_end_time(song: &Song, group: Option<u16>) -> mb_ir::MusicalTime {
+/// End time of a track's sequence (after the last clip finishes).
+fn track_end_time(song: &Song, track_idx: usize) -> mb_ir::MusicalTime {
     let rpb = song.rows_per_beat as u32;
-    song.tracks.iter()
-        .find(|t| t.group == group)
+    song.tracks.get(track_idx)
         .and_then(|t| {
             let last = t.sequence.last()?;
             let clip = t.clips.get(last.clip_idx as usize)?;

@@ -756,31 +756,26 @@ fn parse_sequ(
 
         if let Some(m) = mach.filter(|_| is_tracker) {
             let pats = all_patterns.get(machine_idx);
-            // Create one Track per channel (TrackerChannel)
-            for (ch_i, &ch_node_id) in m.channel_node_ids.iter().enumerate() {
-                let track_name = alloc::format!("{} Ch{}", mach_name, ch_i + 1);
-                let mut track = Track::new(ch_node_id, &track_name);
-                track.group = Some(0);
+            let num_channels = m.channel_node_ids.len() as u8;
+            let base_channel = m.channel_node_ids.first().copied().unwrap_or(0) as u8;
+            let mut track = Track::new(Some(m.node_id), base_channel, num_channels);
 
-                // Extract single-column clips from multi-channel patterns
-                if let Some(pats) = pats {
-                    for bp in pats {
-                        let clip = match &bp.pattern {
-                            Some(pat) => extract_single_column(pat, ch_i as u8),
-                            None => Pattern::new(bp.ticks, 1),
-                        };
-                        track.clips.push(Clip::Pattern(clip));
-                    }
+            // Clone multi-channel patterns directly (no column extraction)
+            if let Some(pats) = pats {
+                for bp in pats {
+                    let clip = match &bp.pattern {
+                        Some(pat) => pat.clone(),
+                        None => Pattern::new(bp.ticks, num_channels),
+                    };
+                    track.clips.push(Clip::Pattern(clip));
                 }
-
-                track.sequence = seq_entries.clone();
-                tracks.push(track);
             }
+
+            track.sequence = seq_entries;
+            tracks.push(track);
         } else {
             let node_id = mach.map_or(0, |m| m.node_id);
-            let mut track = Track::new(node_id, mach_name);
-            // Non-tracker machines have independent sequences/patterns —
-            // they don't belong in the tracker pattern editor group.
+            let mut track = Track::new(None, node_id as u8, 1);
 
             // Add empty clips from this machine's pattern pool
             if let Some(pats) = all_patterns.get(machine_idx) {
@@ -804,18 +799,6 @@ fn parse_sequ(
     }
 
     Ok(tracks)
-}
-
-/// Extract a single channel column from a multi-channel pattern.
-fn extract_single_column(pattern: &Pattern, channel: u8) -> Pattern {
-    let mut single = Pattern::new(pattern.rows, 1);
-    single.rows_per_beat = pattern.rows_per_beat;
-    for row in 0..pattern.rows {
-        if channel < pattern.channels {
-            *single.cell_mut(row, 0) = *pattern.cell(row, channel);
-        }
-    }
-    single
 }
 
 fn extract_event_id(raw: u32, bpe: u8) -> u32 {

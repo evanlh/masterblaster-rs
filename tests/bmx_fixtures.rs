@@ -83,11 +83,9 @@ fn tribal_60_has_instruments() {
 #[test]
 fn tribal_60_tracker_tracks_have_cell_data() {
     let song = load_fixture("tribal-60.bmx");
-    // Find tracks targeting TrackerChannel nodes
+    // Check that tracker tracks (with num_channels > 0) have cell data
     let has_notes = song.tracks.iter().any(|track| {
-        let is_tracker = song.graph.node(track.target)
-            .map_or(false, |n| matches!(n.node_type, NodeType::TrackerChannel { .. }));
-        is_tracker && track.clips.iter().any(|clip| {
+        track.num_channels > 0 && track.clips.iter().any(|clip| {
             clip.pattern().map_or(false, |pat| {
                 pat.data.iter().any(|cell| !cell.is_empty())
             })

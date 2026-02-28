@@ -106,7 +106,7 @@ pub struct PlaybackPosition {
 /// A position within the per-track sequencing model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TrackPlaybackPosition {
-    pub group: Option<u16>,
+    pub track_idx: usize,
     pub seq_index: usize,
     pub clip_idx: u16,
     pub row: u16,
@@ -114,10 +114,10 @@ pub struct TrackPlaybackPosition {
 
 /// Map a `MusicalTime` to a position within the per-track sequencing model.
 ///
-/// Uses the first track in the given group to walk the sequence.
-/// Returns `None` if time is past the end or no matching group.
-pub fn time_to_track_position(song: &Song, time: MusicalTime, group: Option<u16>) -> Option<TrackPlaybackPosition> {
-    let track = song.tracks.iter().find(|t| t.group == group)?;
+/// Walks the sequence of the track at `track_idx`.
+/// Returns `None` if time is past the end or track_idx is out of bounds.
+pub fn time_to_track_position(song: &Song, time: MusicalTime, track_idx: usize) -> Option<TrackPlaybackPosition> {
+    let track = song.tracks.get(track_idx)?;
     let rpb = song.rows_per_beat as u32;
 
     for (seq_index, entry) in track.sequence.iter().enumerate() {
@@ -129,7 +129,7 @@ pub fn time_to_track_position(song: &Song, time: MusicalTime, group: Option<u16>
         if time < clip_end {
             let row = find_row_at(entry.start, time, pat_rpb, pattern.rows);
             return Some(TrackPlaybackPosition {
-                group,
+                track_idx,
                 seq_index,
                 clip_idx: entry.clip_idx,
                 row,
@@ -225,17 +225,17 @@ mod tests {
     #[test]
     fn track_position_first_row() {
         let song = one_track_song(4);
-        let pos = time_to_track_position(&song, MusicalTime::zero(), Some(0)).unwrap();
+        let pos = time_to_track_position(&song, MusicalTime::zero(), 0).unwrap();
         assert_eq!(pos.seq_index, 0);
         assert_eq!(pos.clip_idx, 0);
         assert_eq!(pos.row, 0);
-        assert_eq!(pos.group, Some(0));
+        assert_eq!(pos.track_idx, 0);
     }
 
     #[test]
     fn track_position_mid_clip() {
         let song = one_track_song(8);
-        let pos = time_to_track_position(&song, time_at_row(2), Some(0)).unwrap();
+        let pos = time_to_track_position(&song, time_at_row(2), 0).unwrap();
         assert_eq!(pos.row, 2);
     }
 
@@ -246,7 +246,7 @@ mod tests {
         let order = vec![OrderEntry::Pattern(0), OrderEntry::Pattern(1)];
         build_tracks(&mut song, &patterns, &order);
 
-        let pos = time_to_track_position(&song, MusicalTime::from_beats(1), Some(0)).unwrap();
+        let pos = time_to_track_position(&song, MusicalTime::from_beats(1), 0).unwrap();
         assert_eq!(pos.seq_index, 1);
         assert_eq!(pos.clip_idx, 1);
         assert_eq!(pos.row, 0);
@@ -255,20 +255,20 @@ mod tests {
     #[test]
     fn track_position_past_end_returns_none() {
         let song = one_track_song(4);
-        assert!(time_to_track_position(&song, MusicalTime::from_beats(1), Some(0)).is_none());
+        assert!(time_to_track_position(&song, MusicalTime::from_beats(1), 0).is_none());
     }
 
     #[test]
-    fn track_position_no_matching_group_returns_none() {
+    fn track_position_invalid_track_returns_none() {
         let song = one_track_song(4);
-        assert!(time_to_track_position(&song, MusicalTime::zero(), Some(99)).is_none());
+        assert!(time_to_track_position(&song, MusicalTime::zero(), 99).is_none());
     }
 
     #[test]
     fn track_position_sub_beat_within_row() {
         let song = one_track_song(8);
         let t = MusicalTime { beat: 0, sub_beat: SUB_BEAT_UNIT / 8 - 1 };
-        let pos = time_to_track_position(&song, t, Some(0)).unwrap();
+        let pos = time_to_track_position(&song, t, 0).unwrap();
         assert_eq!(pos.row, 0);
     }
 }

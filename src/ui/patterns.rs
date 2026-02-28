@@ -15,7 +15,7 @@ fn clips_section(ui: &imgui::Ui, gui: &mut GuiState) {
     // Gather clip info before rendering (avoids holding borrow across mutation)
     let clip_info: Vec<(usize, u16, bool)> = {
         let song = gui.controller.song();
-        let Some(track) = song.tracks.iter().find(|t| t.group == Some(0)) else { return };
+        let Some(track) = song.tracks.first() else { return };
         track.clips.iter().enumerate().map(|(i, clip)| {
             let rows = clip.pattern().map(|p| p.rows).unwrap_or(0);
             let is_selected = gui.selected_seq_index < track.sequence.len()
@@ -28,7 +28,7 @@ fn clips_section(ui: &imgui::Ui, gui: &mut GuiState) {
         let label = format!("Clip {:02X} ({} rows)", i, rows);
         if ui.selectable_config(&label).selected(*is_selected).build() {
             let song = gui.controller.song();
-            if let Some(track) = song.tracks.iter().find(|t| t.group == Some(0)) {
+            if let Some(track) = song.tracks.first() {
                 if let Some(idx) = track.sequence.iter().position(|e| e.clip_idx == *i as u16) {
                     gui.selected_seq_index = idx;
                 }
@@ -37,7 +37,7 @@ fn clips_section(ui: &imgui::Ui, gui: &mut GuiState) {
     }
 
     if ui.button("+Clip") {
-        gui.controller.add_clip(Some(0), 64);
+        gui.controller.add_clip(0, 64);
     }
 }
 
@@ -50,7 +50,7 @@ fn sequence_section(ui: &imgui::Ui, gui: &mut GuiState, pos: Option<mb_ir::Track
     // Gather sequence info before rendering
     let seq_info: Vec<(usize, u16, bool)> = {
         let song = gui.controller.song();
-        let Some(track) = song.tracks.iter().find(|t| t.group == Some(0)) else { return };
+        let Some(track) = song.tracks.first() else { return };
         track.sequence.iter().enumerate().map(|(i, entry)| {
             let is_playing = playing_seq == Some(i);
             (i, entry.clip_idx, is_playing)
@@ -72,14 +72,13 @@ fn sequence_section(ui: &imgui::Ui, gui: &mut GuiState, pos: Option<mb_ir::Track
 
     if ui.button("+Seq") {
         if let Some(clip_idx) = super::selected_clip_idx(gui) {
-            gui.controller.add_seq_entry(Some(0), clip_idx);
+            gui.controller.add_seq_entry(0, clip_idx);
         }
     }
     ui.same_line();
     if ui.button("-Seq") {
-        gui.controller.remove_last_seq_entry(Some(0));
-        let seq_len = gui.controller.song().tracks.iter()
-            .find(|t| t.group == Some(0))
+        gui.controller.remove_last_seq_entry(0);
+        let seq_len = gui.controller.song().tracks.first()
             .map(|t| t.sequence.len())
             .unwrap_or(0);
         if gui.selected_seq_index >= seq_len && seq_len > 0 {

@@ -58,7 +58,7 @@ pub fn transport_panel(ui: &imgui::Ui, gui: &mut GuiState) {
         song.initial_tempo, song.initial_speed
     ));
 
-    if let Some(pos) = gui.controller.track_position(Some(0)) {
+    if let Some(pos) = gui.controller.track_position(0) {
         ui.same_line();
         ui.text(format!(
             "Seq: {:02X} | Clip: {:02X} | Row: {:02X}",

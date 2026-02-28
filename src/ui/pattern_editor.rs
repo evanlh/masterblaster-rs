@@ -24,18 +24,15 @@ pub fn pattern_editor(
     pos: Option<mb_ir::TrackPlaybackPosition>,
 ) -> Option<(u16, u8, CellColumn)> {
     let song = gui.controller.song();
-    let track_indices: Vec<u16> = song.tracks.iter()
-        .enumerate()
-        .filter(|(_, t)| t.group == Some(0))
-        .map(|(i, _)| i as u16)
-        .collect();
+    let track = match song.tracks.first() {
+        Some(t) => t,
+        None => {
+            ui.text("No tracks loaded.");
+            return None;
+        }
+    };
 
-    if track_indices.is_empty() {
-        ui.text("No tracks loaded.");
-        return None;
-    }
-
-    let clip_idx = match song.tracks[track_indices[0] as usize].sequence.get(gui.selected_seq_index) {
+    let clip_idx = match track.sequence.get(gui.selected_seq_index) {
         Some(e) => e.clip_idx,
         None => {
             ui.text("No clips at this sequence position.");
@@ -43,13 +40,15 @@ pub fn pattern_editor(
         }
     };
 
-    // Get rows from first track's clip
-    let rows = song.tracks[track_indices[0] as usize]
-        .clips.get(clip_idx as usize)
-        .and_then(|c| c.pattern())
-        .map(|p| p.rows)
-        .unwrap_or(0);
-    let num_channels = track_indices.len() as u8;
+    let clip = match track.clips.get(clip_idx as usize).and_then(|c| c.pattern()) {
+        Some(p) => p,
+        None => {
+            ui.text("Invalid clip.");
+            return None;
+        }
+    };
+    let rows = clip.rows;
+    let num_channels = clip.channels;
 
     let playing_row = pos
         .filter(|p| p.clip_idx == clip_idx)
@@ -135,7 +134,7 @@ pub fn pattern_editor(
                     cursor_screen_y = ui.cursor_screen_pos()[1];
                     ui.set_scroll_here_y_with_ratio(0.85);
                 }
-                render_row(ui, gui, song, &track_indices, clip_idx, rows, num_channels, row, playing_row, char_width, line_height, &mut click_target);
+                render_row(ui, gui, song, clip_idx, rows, num_channels, row, playing_row, char_width, line_height, &mut click_target);
             }
         }
 
@@ -155,7 +154,6 @@ fn render_row(
     ui: &imgui::Ui,
     gui: &GuiState,
     song: &mb_ir::Song,
-    track_indices: &[u16],
     clip_idx: u16,
     _rows: u16,
     num_channels: u8,
@@ -187,7 +185,7 @@ fn render_row(
     ui.text(format!("{:02X}", row));
     drop(_token);
 
-    // Channel columns — read from each track's clip
+    // Channel columns — read from track 0's multi-channel clip
     let empty = mb_ir::Cell::empty();
     let mouse_clicked = ui.is_mouse_clicked(imgui::MouseButton::Left);
 
@@ -195,12 +193,11 @@ fn render_row(
         ui.table_next_column();
         let cell_pos = ui.cursor_screen_pos();
 
-        let cell = track_indices.get(ch as usize)
-            .and_then(|&ti| song.tracks.get(ti as usize))
+        let cell = song.tracks.first()
             .and_then(|t| t.clips.get(clip_idx as usize))
             .and_then(|c| c.pattern())
-            .filter(|p| row < p.rows)
-            .map(|p| p.cell(row, 0))
+            .filter(|p| row < p.rows && ch < p.channels)
+            .map(|p| p.cell(row, ch))
             .unwrap_or(&empty);
 
         let is_cursor_cell = is_cursor_row && gui.editor.cursor.channel == ch;

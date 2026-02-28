@@ -100,7 +100,7 @@ fn play_audio(ctrl: &mut Controller) {
     println!();
 
     while ctrl.is_playing() {
-        if let Some(pos) = ctrl.track_position(Some(0)) {
+        if let Some(pos) = ctrl.track_position(0) {
             print!(
                 "\rSeq: {:02X} | Clip: {:02X} | Row: {:02X}",
                 pos.seq_index, pos.clip_idx, pos.row
@@ -119,7 +119,7 @@ fn play_pattern(ctrl: &mut Controller, pattern: usize) {
     println!();
 
     while ctrl.is_playing() {
-        if let Some(pos) = ctrl.track_position(Some(0)) {
+        if let Some(pos) = ctrl.track_position(0) {
             print!(
                 "\rSeq: {:02X} | Clip: {:02X} | Row: {:02X}",
                 pos.seq_index, pos.clip_idx, pos.row
