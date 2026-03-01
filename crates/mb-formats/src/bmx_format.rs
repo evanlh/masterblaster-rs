@@ -193,7 +193,7 @@ struct BmxPattern {
 
 /// Returns true for DLL names that are tracker machines (cell-based).
 fn is_tracker_dll(dll: &str) -> bool {
-    matches!(dll, "Jeskola Tracker" | "Matilde Tracker" | "Matilde Tracker 2")
+    matches!(dll, "Jeskola Tracker" | "Matilde Tracker" | "Matilde Tracker 2" | "Matilde Tracker (Mono)")
 }
 
 /// Convert a Buzz note byte to our Note type.
@@ -268,7 +268,7 @@ struct BmxWave {
 fn known_machine_byte_sizes(dll_name: &str) -> Option<(usize, usize)> {
     match dll_name {
         "Jeskola Tracker" => Some((1, 5)),
-        "Matilde Tracker" => Some((1, 5)),
+        "Matilde Tracker" | "Matilde Tracker (Mono)" => Some((1, 5)),
         "Matilde Tracker 2" => Some((4, 7)),
         "Geonik's Compressor" => Some((7, 0)),
         "Geonik's Overdrive 2" => Some((5, 0)),
@@ -504,11 +504,11 @@ fn parse_mach(
             (0, Vec::new())
         } else if is_tracker {
             // Create a single Tracker machine node for all channels
-            let id = graph.add_node(NodeType::BuzzMachine { machine_name: String::from("Tracker") });
+            let id = graph.add_node(NodeType::BuzzMachine { machine_name: name.clone(), is_tracker: true });
             let ids: Vec<NodeId> = (0..num_tracks).map(|_| id).collect();
             (id, ids)
         } else {
-            let id = graph.add_node(NodeType::BuzzMachine { machine_name: name.clone() });
+            let id = graph.add_node(NodeType::BuzzMachine { machine_name: name.clone(), is_tracker: false });
             // Add IR parameters to non-tracker graph nodes
             if let Some(node) = graph.node_mut(id) {
                 for (j, p) in para.global_params.iter().enumerate() {
@@ -716,6 +716,7 @@ fn parse_sequ(
 
     let rpb = rows_per_beat as u32;
     let mut tracks = Vec::with_capacity(num_sequences);
+    let mut next_base_channel: u8 = 0;
 
     for _ in 0..num_sequences {
         let machine_idx = r.read_u16_le()? as usize;
@@ -748,7 +749,8 @@ fn parse_sequ(
         if let Some(m) = mach.filter(|_| is_tracker) {
             let pats = all_patterns.get(machine_idx);
             let num_channels = m.channel_node_ids.len() as u8;
-            let base_channel = m.channel_node_ids.first().copied().unwrap_or(0) as u8;
+            let base_channel = next_base_channel;
+            next_base_channel += num_channels;
             let mut track = Track::new(Some(m.node_id), base_channel, num_channels);
 
             // Clone multi-channel patterns directly (no column extraction)
@@ -765,8 +767,8 @@ fn parse_sequ(
             track.sequence = seq_entries;
             tracks.push(track);
         } else {
-            let node_id = mach.map_or(0, |m| m.node_id);
-            let mut track = Track::new(None, node_id as u8, 1);
+            let node_id = mach.map(|m| m.node_id);
+            let mut track = Track::new(node_id, 0, 1);
 
             // Add empty clips from this machine's pattern pool
             if let Some(pats) = all_patterns.get(machine_idx) {
@@ -1484,6 +1486,7 @@ mod tests {
         assert!(is_tracker_dll("Jeskola Tracker"));
         assert!(is_tracker_dll("Matilde Tracker"));
         assert!(is_tracker_dll("Matilde Tracker 2"));
+        assert!(is_tracker_dll("Matilde Tracker (Mono)"));
         assert!(!is_tracker_dll("Jeskola Reverb 2"));
     }
 

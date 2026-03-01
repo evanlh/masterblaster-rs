@@ -70,7 +70,7 @@ impl Song {
         // Insert Amiga filter between tracker and master
         let filter_id = song
             .graph
-            .add_node(NodeType::BuzzMachine { machine_name: alloc::string::String::from("Amiga Filter") });
+            .add_node(NodeType::BuzzMachine { machine_name: alloc::string::String::from("Amiga Filter"), is_tracker: false });
         song.graph.node_mut(filter_id).unwrap().parameters.push(
             Parameter::new(0, "Cutoff", 1000, 22050, 4410),
         );
@@ -79,7 +79,7 @@ impl Song {
         // Single Tracker machine node for all channels
         let tracker_id = song
             .graph
-            .add_node(NodeType::BuzzMachine { machine_name: alloc::string::String::from("Tracker") });
+            .add_node(NodeType::BuzzMachine { machine_name: alloc::string::String::from("Tracker"), is_tracker: true });
         song.graph.connect(tracker_id, filter_id); // tracker → filter
 
         for i in 0..num_channels {
@@ -205,7 +205,7 @@ pub struct SeqEntry {
 /// Find the Tracker machine node in the graph.
 pub fn find_tracker_node(graph: &AudioGraph) -> Option<NodeId> {
     graph.nodes.iter().enumerate()
-        .find(|(_, n)| matches!(&n.node_type, NodeType::BuzzMachine { machine_name } if machine_name == "Tracker"))
+        .find(|(_, n)| matches!(&n.node_type, NodeType::BuzzMachine { is_tracker: true, .. }))
         .map(|(i, _)| i as NodeId)
 }
 
@@ -403,6 +403,6 @@ mod tests {
         let machine = song.tracks[0].machine_node;
         assert!(machine.is_some());
         let node = song.graph.node(machine.unwrap()).unwrap();
-        assert!(matches!(&node.node_type, NodeType::BuzzMachine { machine_name } if machine_name == "Tracker"));
+        assert!(matches!(&node.node_type, NodeType::BuzzMachine { is_tracker: true, .. }));
     }
 }

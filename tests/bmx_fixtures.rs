@@ -63,7 +63,7 @@ fn tribal_60_has_samples() {
 fn tribal_60_has_tracker_machine() {
     let song = load_fixture("tribal-60.bmx");
     let tracker_nodes: Vec<_> = song.graph.nodes.iter()
-        .filter(|n| matches!(&n.node_type, NodeType::BuzzMachine { machine_name } if machine_name == "Tracker"))
+        .filter(|n| matches!(&n.node_type, NodeType::BuzzMachine { is_tracker: true, .. }))
         .collect();
     assert!(!tracker_nodes.is_empty(), "should have Tracker machine nodes");
 }

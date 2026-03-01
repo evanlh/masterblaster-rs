@@ -114,7 +114,7 @@ fn play_audio(ctrl: &mut Controller) {
 }
 
 fn play_pattern(ctrl: &mut Controller, pattern: usize) {
-    ctrl.play_pattern(pattern);
+    ctrl.play_pattern(0, pattern);
     println!("Playing clip {}...", pattern);
     println!();
 
@@ -137,7 +137,7 @@ fn render_to_wav_pattern(ctrl: &Controller, path: &str, pattern: usize) {
     let max_seconds: u32 = 1200;
     println!("Rendering clip {} to {} at {} Hz...", pattern, path, sample_rate);
 
-    let wav = ctrl.render_pattern_to_wav(pattern, sample_rate, max_seconds);
+    let wav = ctrl.render_pattern_to_wav(0, pattern, sample_rate, max_seconds);
     println!("Rendered {} bytes", wav.len());
 
     fs::write(path, &wav).unwrap_or_else(|e| {

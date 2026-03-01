@@ -36,10 +36,10 @@ impl ActiveMod {
 pub struct ChannelState {
     /// Current sample index
     pub sample_index: u8,
-    /// Current position in sample (16.16 fixed-point)
-    pub position: u32,
-    /// Playback increment (16.16 fixed-point)
-    pub increment: u32,
+    /// Current position in sample (16.16 fixed-point, u64 for large samples)
+    pub position: u64,
+    /// Playback increment (16.16 fixed-point, u64 for large samples)
+    pub increment: u64,
     /// Is the channel currently playing?
     pub playing: bool,
 
@@ -147,7 +147,7 @@ impl ChannelState {
         match effect {
             Effect::SetVolume(v) => self.volume = (*v).min(64),
             Effect::SetPan(p) => self.panning = (*p as i16 - 128).clamp(-64, 64) as i8,
-            Effect::SampleOffset(o) => self.position = (*o as u32) << 24,
+            Effect::SampleOffset(o) => self.position = (*o as u64) << 24,
             Effect::FineVolumeSlideUp(v) => {
                 self.volume = (self.volume as i16 + *v as i16).clamp(0, 64) as u8;
             }
@@ -346,10 +346,10 @@ impl ChannelState {
 
         // Handle looping
         let pos_samples = self.position >> 16;
-        if sample.has_loop() && pos_samples >= sample.loop_end {
-            let loop_len = sample.loop_end - sample.loop_start;
+        if sample.has_loop() && pos_samples >= sample.loop_end as u64 {
+            let loop_len = (sample.loop_end - sample.loop_start) as u64;
             self.position -= loop_len << 16;
-        } else if pos_samples >= sample.len() as u32 {
+        } else if pos_samples >= sample.len() as u64 {
             self.playing = false;
         }
 

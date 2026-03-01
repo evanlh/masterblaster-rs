@@ -93,7 +93,7 @@ fn snapshot_pattern_test(fixture_name: &str, pattern: usize) {
     let mut ctrl = Controller::new();
     ctrl.load_mod(&fs::read(fixtures_dir().join(fixture_name)).unwrap())
         .unwrap();
-    let wav = ctrl.render_pattern_to_wav(pattern, SAMPLE_RATE, MAX_SECONDS);
+    let wav = ctrl.render_pattern_to_wav(0, pattern, SAMPLE_RATE, MAX_SECONDS);
     let name = format!("{}_pat{:02}", snapshot_stem(fixture_name), pattern);
     assert_snapshot(&name, &wav);
 }

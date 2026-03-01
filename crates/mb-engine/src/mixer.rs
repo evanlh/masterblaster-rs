@@ -66,14 +66,27 @@ fn compute_all_mix_gains(song: &Song) -> Vec<f32> {
     gains
 }
 
+/// Find the channel settings slice for a tracker node from the song's tracks.
+fn channels_for_node(song: &Song, node_id: u16) -> &[mb_ir::ChannelSettings] {
+    song.tracks.iter()
+        .find(|t| t.machine_node == Some(node_id) && t.num_channels > 0)
+        .map(|t| {
+            let base = t.base_channel as usize;
+            let end = base + t.num_channels as usize;
+            &song.channels[base..end.min(song.channels.len())]
+        })
+        .unwrap_or(&[])
+}
+
 /// Instantiate machines for all BuzzMachine nodes in the graph.
 fn init_machines(song: &Song, sample_rate: u32) -> Vec<Option<Box<dyn Machine>>> {
     song.graph.nodes.iter().map(|node| {
-        if let NodeType::BuzzMachine { machine_name } = &node.node_type {
-            if machine_name == "Tracker" {
-                let mix_gain = tracker_mix_gain(song.channels.len() as u32);
+        if let NodeType::BuzzMachine { is_tracker, machine_name } = &node.node_type {
+            if *is_tracker {
+                let ch_settings = channels_for_node(song, node.id);
+                let mix_gain = tracker_mix_gain(ch_settings.len() as u32);
                 let mut machine = machines::tracker::TrackerMachine::new(
-                    &song.channels,
+                    ch_settings,
                     song.samples.clone(),
                     song.instruments.clone(),
                     song.initial_speed,
@@ -483,6 +496,10 @@ mod tests {
         let mut inst = Instrument::new("test inst");
         inst.set_single_sample(0);
         song.instruments.push(inst);
+
+        // Add a Track linking the Tracker node to channels (required by init_machines)
+        let tracker_id = find_tracker_node(&song.graph);
+        song.tracks.push(mb_ir::Track::new(tracker_id, 0, 1));
 
         song
     }

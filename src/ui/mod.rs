@@ -204,7 +204,7 @@ pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
                     gui.controller.stop();
                     gui.status = "Stopped".to_string();
                 } else if let Some(clip_idx) = selected_clip_idx(gui) {
-                    gui.controller.play_pattern(clip_idx as usize);
+                    gui.controller.play_pattern(gui.selected_track, clip_idx as usize);
                     gui.status = "Playing pattern...".to_string();
                 }
             }

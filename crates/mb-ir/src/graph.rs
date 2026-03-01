@@ -81,7 +81,7 @@ pub enum NodeType {
     /// Sample player
     Sampler { sample_id: u16 },
     /// Buzz machine (emulated)
-    BuzzMachine { machine_name: String },
+    BuzzMachine { machine_name: String, is_tracker: bool },
 }
 
 impl NodeType {
@@ -90,7 +90,7 @@ impl NodeType {
         match self {
             NodeType::Master => alloc::string::String::from("Master"),
             NodeType::Sampler { sample_id } => alloc::format!("Smp {}", sample_id),
-            NodeType::BuzzMachine { machine_name } => machine_name.clone(),
+            NodeType::BuzzMachine { machine_name, .. } => machine_name.clone(),
         }
     }
 }

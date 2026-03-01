@@ -153,8 +153,8 @@ impl Controller {
         self.play_song(self.song.clone());
     }
 
-    pub fn play_pattern(&mut self, clip_idx: usize) {
-        self.play_song(self.single_clip_song(clip_idx as u16));
+    pub fn play_pattern(&mut self, track_idx: usize, clip_idx: usize) {
+        self.play_song(self.single_clip_song(track_idx, clip_idx as u16));
     }
 
     fn play_song(&mut self, song: Song) {
@@ -226,16 +226,16 @@ impl Controller {
         render_song_to_wav(self.song.clone(), sample_rate, max_seconds)
     }
 
-    pub fn render_pattern_to_wav(&self, clip_idx: usize, sample_rate: u32, max_seconds: u32) -> Vec<u8> {
-        render_song_to_wav(self.single_clip_song(clip_idx as u16), sample_rate, max_seconds)
+    pub fn render_pattern_to_wav(&self, track_idx: usize, clip_idx: usize, sample_rate: u32, max_seconds: u32) -> Vec<u8> {
+        render_song_to_wav(self.single_clip_song(track_idx, clip_idx as u16), sample_rate, max_seconds)
     }
 
     // --- Helpers ---
 
-    /// Build a song that plays only the given clip.
-    fn single_clip_song(&self, clip_idx: u16) -> Song {
+    /// Build a song that plays only the given clip on the given track.
+    fn single_clip_song(&self, track_idx: usize, clip_idx: u16) -> Song {
         let mut song = self.song.clone();
-        rebuild_track_sequences(&mut song, clip_idx);
+        rebuild_track_sequences(&mut song, track_idx, clip_idx);
         song
     }
 }
@@ -260,12 +260,12 @@ fn apply_edit_to_song(song: &mut Song, edit: &Edit) {
     }
 }
 
-/// Rebuild track sequences to play only a single clip (by clip index).
-fn rebuild_track_sequences(song: &mut Song, clip_idx: u16) {
+/// Rebuild track sequences to play only a single clip on a single track.
+fn rebuild_track_sequences(song: &mut Song, track_idx: usize, clip_idx: u16) {
     use mb_ir::SeqEntry;
     let entry = SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx };
-    for track in &mut song.tracks {
-        track.sequence = if (clip_idx as usize) < track.clips.len() {
+    for (i, track) in song.tracks.iter_mut().enumerate() {
+        track.sequence = if i == track_idx && (clip_idx as usize) < track.clips.len() {
             vec![entry]
         } else {
             Vec::new()

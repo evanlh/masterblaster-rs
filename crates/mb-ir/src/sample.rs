@@ -110,7 +110,7 @@ impl SampleData {
     ///
     /// `pos` is a 16.16 fixed-point position. Blends between the two
     /// nearest sample values using the fractional part.
-    pub fn get_mono_interpolated(&self, pos_fixed: u32) -> i16 {
+    pub fn get_mono_interpolated(&self, pos_fixed: u64) -> i16 {
         let idx = (pos_fixed >> 16) as usize;
         let frac = (pos_fixed & 0xFFFF) as i64;
 

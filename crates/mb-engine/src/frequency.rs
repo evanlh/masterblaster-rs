@@ -43,12 +43,12 @@ pub fn note_to_period(note: u8) -> u16 {
 /// Convert an Amiga period + c4_speed to a 16.16 fixed-point increment.
 ///
 /// Formula: freq = c4_speed * 428 / period, then increment = freq * 65536 / sample_rate.
-pub fn period_to_increment(period: u16, c4_speed: u32, sample_rate: u32) -> u32 {
+pub fn period_to_increment(period: u16, c4_speed: u32, sample_rate: u32) -> u64 {
     if period == 0 || sample_rate == 0 {
         return 0;
     }
     let freq = (c4_speed as u64 * C4_PERIOD as u64) / period as u64;
-    ((freq * 65536) / sample_rate as u64) as u32
+    (freq * 65536) / sample_rate as u64
 }
 
 /// Clamp a period to the valid MOD range.
@@ -61,7 +61,7 @@ pub fn clamp_period(period: u16) -> u16 {
 /// - `note`: MIDI note number (e.g. 48 = C-4 in our system)
 /// - `c4_speed`: sample's playback rate at the reference note (typically 8363 Hz)
 /// - `sample_rate`: output sample rate (e.g. 44100 Hz)
-pub fn note_to_increment(note: u8, c4_speed: u32, sample_rate: u32) -> u32 {
+pub fn note_to_increment(note: u8, c4_speed: u32, sample_rate: u32) -> u64 {
     if sample_rate == 0 || c4_speed == 0 {
         return 0;
     }
@@ -70,7 +70,7 @@ pub fn note_to_increment(note: u8, c4_speed: u32, sample_rate: u32) -> u32 {
     let freq = shift_frequency(c4_speed, semitone_offset);
 
     // increment = freq * 65536 / sample_rate
-    ((freq as u64 * 65536) / sample_rate as u64) as u32
+    (freq as u64 * 65536) / sample_rate as u64
 }
 
 /// Shift a frequency by a number of semitones using 12-TET.
@@ -123,7 +123,7 @@ mod tests {
         // Note 48 at c4_speed 8363 should produce freq 8363
         // increment = 8363 * 65536 / 44100 ≈ 12431
         let inc = note_to_increment(48, C4_SPEED, SAMPLE_RATE);
-        let expected = (C4_SPEED as u64 * 65536 / SAMPLE_RATE as u64) as u32;
+        let expected = C4_SPEED as u64 * 65536 / SAMPLE_RATE as u64;
         assert_eq!(inc, expected);
     }
 
@@ -156,7 +156,7 @@ mod tests {
         let one_up = note_to_increment(49, C4_SPEED, SAMPLE_RATE);
         // 2^(1/12) ≈ 1.05946
         // Allow ±1 for fixed-point rounding
-        let expected = (base as f64 * 1.059463) as u32;
+        let expected = (base as f64 * 1.059463) as u64;
         assert!((one_up as i64 - expected as i64).unsigned_abs() <= 1);
     }
 
