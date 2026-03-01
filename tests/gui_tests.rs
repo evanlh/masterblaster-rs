@@ -71,6 +71,15 @@ impl TestHarness {
             .expect("Failed to parse MOD");
     }
 
+    fn load_bmx(&mut self, path: &str) {
+        let data = std::fs::read(path).expect("Failed to read BMX file");
+        self.app_mut()
+            .gui
+            .controller
+            .load_bmx(&data)
+            .expect("Failed to parse BMX");
+    }
+
     fn reset_editor(&mut self) {
         self.app_mut().gui.editor = Default::default();
     }
@@ -148,6 +157,9 @@ const TESTS: &[(&str, TestFn)] = &[
     ("scroll_tracks_cursor_to_bottom", test_scroll_tracks_cursor_to_bottom),
     ("cursor_wraps_around", test_cursor_wraps_around),
     ("page_down_navigation", test_page_down_navigation),
+    ("bmx_track_switching", test_bmx_track_switching),
+    ("bmx_sequencer_view", test_bmx_sequencer_view),
+    ("bmx_pattern_view", test_bmx_pattern_view),
 ];
 
 fn main() {
@@ -284,4 +296,65 @@ fn test_page_down_navigation(h: &mut TestHarness) {
 
     assert_eq!(h.app().gui.editor.cursor.row, 16, "PageDown moves 16 rows");
     h.screenshot("tests/output/page_down.png");
+}
+
+const BMX_FIXTURE: &str = "tests/fixtures/bmx/Insomnium - Skooled RMX.bmx";
+
+fn test_bmx_track_switching(h: &mut TestHarness) {
+    h.load_bmx(BMX_FIXTURE);
+    h.reset_editor();
+    h.render(3);
+
+    let num_tracks = h.app().gui.controller.song().tracks.len();
+    assert!(num_tracks > 1, "BMX should have multiple tracks, got {}", num_tracks);
+    h.screenshot("tests/output/bmx_track0.png");
+
+    // Switch to each track and verify clips change
+    let track0_clips = h.app().gui.controller.song().tracks[0].clips.len();
+    for i in 1..num_tracks {
+        h.app_mut().gui.selected_track = i;
+        h.app_mut().gui.selected_seq_index = 0;
+        h.render(3);
+        h.screenshot(&format!("tests/output/bmx_track{}.png", i));
+    }
+
+    // Verify at least one track has a different clip count
+    let any_differ = (1..num_tracks).any(|i| {
+        h.app().gui.controller.song().tracks[i].clips.len() != track0_clips
+    });
+    assert!(any_differ, "Expected different clip counts across tracks");
+}
+
+fn test_bmx_sequencer_view(h: &mut TestHarness) {
+    use masterblaster::ui::input::EditorAction;
+
+    h.load_bmx(BMX_FIXTURE);
+    h.reset_editor();
+    h.inject(&[EditorAction::SwitchToSequencer]);
+    h.render(3);
+
+    assert_eq!(
+        h.app().gui.center_view,
+        masterblaster::ui::CenterView::Sequencer,
+        "Should be in sequencer view"
+    );
+    h.screenshot("tests/output/bmx_sequencer.png");
+}
+
+fn test_bmx_pattern_view(h: &mut TestHarness) {
+    h.load_bmx(BMX_FIXTURE);
+    h.reset_editor();
+    h.render(3);
+
+    // Track 0 pattern
+    h.screenshot("tests/output/bmx_pattern_track0.png");
+
+    // Switch to track 1
+    let num_tracks = h.app().gui.controller.song().tracks.len();
+    if num_tracks > 1 {
+        h.app_mut().gui.selected_track = 1;
+        h.app_mut().gui.selected_seq_index = 0;
+        h.render(3);
+        h.screenshot("tests/output/bmx_pattern_track1.png");
+    }
 }

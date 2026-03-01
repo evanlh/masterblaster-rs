@@ -1,12 +1,14 @@
 //! UI modules and layout composition.
 
 mod cell_format;
+pub mod colors;
 pub mod editor_state;
 mod graph;
 pub mod input;
 mod pattern_editor;
 mod patterns;
 mod samples;
+mod sequencer;
 mod transport;
 mod undo;
 
@@ -16,9 +18,10 @@ use mb_master::Controller;
 use undo::UndoStack;
 
 /// Toggle between center panel views.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CenterView {
     Pattern,
+    Sequencer,
     Graph,
 }
 
@@ -26,7 +29,9 @@ pub enum CenterView {
 /// No GL/imgui/renderer fields.
 pub struct GuiState {
     pub controller: Controller,
-    /// Which sequence position (clip) is selected in the current group.
+    /// Which track (machine) is selected for pattern/clip editing.
+    pub selected_track: usize,
+    /// Which sequence position (clip) is selected in the current track.
     pub selected_seq_index: usize,
     pub center_view: CenterView,
     pub status: String,
@@ -38,6 +43,7 @@ impl Default for GuiState {
     fn default() -> Self {
         Self {
             controller: Controller::new(),
+            selected_track: 0,
             selected_seq_index: 0,
             center_view: CenterView::Pattern,
             status: String::new(),
@@ -47,21 +53,21 @@ impl Default for GuiState {
     }
 }
 
-/// Get the clip index for track 0 at the selected sequence position.
+/// Get the clip index for the selected track at the selected sequence position.
 fn selected_clip_idx(gui: &GuiState) -> Option<u16> {
-    let track = gui.controller.song().tracks.first()?;
+    let track = gui.controller.song().tracks.get(gui.selected_track)?;
     track.sequence.get(gui.selected_seq_index).map(|e| e.clip_idx)
 }
 
-/// Get the number of channels in track 0.
+/// Get the number of channels in the selected track.
 fn track_channel_count(gui: &GuiState) -> u8 {
-    gui.controller.song().tracks.first()
+    gui.controller.song().tracks.get(gui.selected_track)
         .map(|t| t.num_channels)
         .unwrap_or(0)
 }
 
 pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
-    let pos = gui.controller.track_position(0);
+    let pos = gui.controller.track_position(gui.selected_track);
 
     let display_size = ui.io().display_size;
     ui.window("masterblaster")
@@ -76,6 +82,8 @@ pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
         )
         .build(|| {
             transport::transport_panel(ui, gui);
+            ui.separator();
+            track_position_modeline(ui, gui);
             ui.separator();
 
             let avail = ui.content_region_avail();
@@ -104,6 +112,7 @@ pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
                                 gui.editor.clear_selection();
                             }
                         }
+                        CenterView::Sequencer => sequencer::sequencer_panel(ui, gui),
                         CenterView::Graph => graph::graph_panel(ui, gui),
                     }
                 });
@@ -113,6 +122,39 @@ pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
                 .size([right_w, avail[1]])
                 .build(|| samples::samples_panel(ui, gui));
         });
+}
+
+/// Track position modeline: shows per-machine playback position.
+fn track_position_modeline(ui: &imgui::Ui, gui: &GuiState) {
+    let song = gui.controller.song();
+    if song.tracks.is_empty() {
+        return;
+    }
+    let parts: Vec<String> = song.tracks.iter().enumerate().map(|(i, track)| {
+        let initial = track_initial(&song.graph, track);
+        match gui.controller.track_position(i) {
+            Some(pos) => format!("{}: C{:02X} R{:02X}", initial, pos.clip_idx, pos.row),
+            None => format!("{}: C-- R--", initial),
+        }
+    }).collect();
+    ui.text(parts.join(" | "));
+}
+
+/// First character of the machine name for a track, for modeline display.
+fn track_initial(graph: &mb_ir::AudioGraph, track: &mb_ir::Track) -> char {
+    track.machine_node
+        .and_then(|id| graph.node(id))
+        .map(|n| n.node_type.label())
+        .and_then(|l| l.chars().next())
+        .unwrap_or('?')
+}
+
+/// Full machine label for a track (used in dropdown/headers).
+pub fn track_label(graph: &mb_ir::AudioGraph, track: &mb_ir::Track) -> String {
+    track.machine_node
+        .and_then(|id| graph.node(id))
+        .map(|n| n.node_type.label())
+        .unwrap_or_else(|| String::from("Track"))
 }
 
 pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
@@ -168,6 +210,7 @@ pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
             }
             EditorAction::SwitchToGraph => gui.center_view = CenterView::Graph,
             EditorAction::SwitchToPattern => gui.center_view = CenterView::Pattern,
+            EditorAction::SwitchToSequencer => gui.center_view = CenterView::Sequencer,
             EditorAction::AdjustOctave(d) => {
                 gui.editor.base_octave = (gui.editor.base_octave as i8 + d).clamp(0, 9) as u8;
             }
@@ -222,17 +265,18 @@ fn pattern_bounds(gui: &GuiState) -> (u16, u8) {
 
 /// Apply an edit with undo recording: reads old cell, records undo, applies edit.
 fn apply_edit_with_undo(gui: &mut GuiState, clip_idx: u16, row: u16, channel: u8, cell: mb_ir::Cell) {
+    let track = gui.selected_track as u16;
     let old_cell = read_cell(gui, clip_idx, row, channel);
-    let forward = mb_ir::Edit::SetCell { track: 0, clip: clip_idx, row, column: channel, cell };
-    let reverse = mb_ir::Edit::SetCell { track: 0, clip: clip_idx, row, column: channel, cell: old_cell };
+    let forward = mb_ir::Edit::SetCell { track, clip: clip_idx, row, column: channel, cell };
+    let reverse = mb_ir::Edit::SetCell { track, clip: clip_idx, row, column: channel, cell: old_cell };
     gui.undo_stack.push(forward.clone(), reverse);
     gui.controller.apply_edit(forward);
 }
 
-/// Read a cell from track 0's clip at the given row and channel (column).
+/// Read a cell from the selected track's clip at the given row and channel.
 fn read_cell(gui: &GuiState, clip_idx: u16, row: u16, channel: u8) -> mb_ir::Cell {
     gui.controller.song().tracks
-        .first()
+        .get(gui.selected_track)
         .and_then(|t| t.clips.get(clip_idx as usize))
         .and_then(|c| c.pattern())
         .filter(|p| row < p.rows && channel < p.channels)
@@ -377,11 +421,12 @@ fn paste_clipboard(gui: &mut GuiState, max_rows: u16, max_channels: u8) {
             let new_cell = *clipboard.cell(r, ch);
             let old_cell = read_cell(gui, clip_idx, dest_row, dest_ch);
 
+            let track = gui.selected_track as u16;
             forward_edits.push(mb_ir::Edit::SetCell {
-                track: 0, clip: clip_idx, row: dest_row, column: dest_ch, cell: new_cell,
+                track, clip: clip_idx, row: dest_row, column: dest_ch, cell: new_cell,
             });
             reverse_edits.push(mb_ir::Edit::SetCell {
-                track: 0, clip: clip_idx, row: dest_row, column: dest_ch, cell: old_cell,
+                track, clip: clip_idx, row: dest_row, column: dest_ch, cell: old_cell,
             });
         }
     }
@@ -406,14 +451,15 @@ fn delete_selection(gui: &mut GuiState) {
     let mut forward_edits = Vec::new();
     let mut reverse_edits = Vec::new();
 
+    let track = gui.selected_track as u16;
     for r in min_row..=max_row {
         for ch in min_ch..=max_ch {
             let old_cell = read_cell(gui, clip_idx, r, ch);
             forward_edits.push(mb_ir::Edit::SetCell {
-                track: 0, clip: clip_idx, row: r, column: ch, cell: mb_ir::Cell::empty(),
+                track, clip: clip_idx, row: r, column: ch, cell: mb_ir::Cell::empty(),
             });
             reverse_edits.push(mb_ir::Edit::SetCell {
-                track: 0, clip: clip_idx, row: r, column: ch, cell: old_cell,
+                track, clip: clip_idx, row: r, column: ch, cell: old_cell,
             });
         }
     }

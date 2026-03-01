@@ -3,19 +3,10 @@
 //! Applies ImHex hex-editor techniques: fixed-column table, frozen header,
 //! virtual scrolling via ListClipper, DrawList background highlights.
 
+use super::colors::*;
 use super::editor_state::CellColumn;
 use super::GuiState;
 use crate::ui::cell_format::format_cell;
-
-const PLAYING_COLOR: [f32; 4] = [0.39, 0.78, 0.51, 1.0];
-const EMPTY_COLOR: [f32; 4] = [0.24, 0.24, 0.27, 1.0];
-const DATA_COLOR: [f32; 4] = [0.78, 0.78, 0.78, 1.0];
-const PLAYING_BG: [f32; 4] = [0.15, 0.30, 0.20, 1.0];
-const CURSOR_BG: [f32; 4] = [0.25, 0.25, 0.50, 0.7];
-const CURSOR_EDIT_BG: [f32; 4] = [0.50, 0.20, 0.20, 0.7];
-const CURSOR_ROW_BG: [f32; 4] = [0.18, 0.18, 0.35, 0.40];
-const CURSOR_TEXT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-const SELECTION_BG: [f32; 4] = [0.20, 0.30, 0.50, 0.35];
 
 /// Render the pattern editor grid. Returns click target (row, channel, column) if a cell was clicked.
 pub fn pattern_editor(
@@ -24,7 +15,7 @@ pub fn pattern_editor(
     pos: Option<mb_ir::TrackPlaybackPosition>,
 ) -> Option<(u16, u8, CellColumn)> {
     let song = gui.controller.song();
-    let track = match song.tracks.first() {
+    let track = match song.tracks.get(gui.selected_track) {
         Some(t) => t,
         None => {
             ui.text("No tracks loaded.");
@@ -54,25 +45,16 @@ pub fn pattern_editor(
         .filter(|p| p.clip_idx == clip_idx)
         .map(|p| p.row);
 
-    let edit_indicator = if gui.editor.edit_mode { " [EDIT]" } else { "" };
+    let mode = if gui.editor.edit_mode { "[EDIT]" } else { "[VIEW]" };
+    let col_label = cursor_column_label(gui, clip_idx);
     ui.text(format!(
-        "Clip {:02X} ({} rows, {} ch) Oct:{} Step:{}{} Inst:{:02X}",
-        clip_idx, rows, num_channels,
-        gui.editor.base_octave, gui.editor.step_size,
-        edit_indicator,
-        gui.editor.selected_instrument,
-    ));
-    ui.separator();
-
-    // Debug modeline
-    let col_name = format!("{:?}", gui.editor.cursor.column);
-    ui.text(format!(
-        "Row {:02X}/{:02X} Ch {:02}/{:02} Col:{} | Vis {:02X}-{:02X} | Scrl {:.0}/{:.0}",
+        "Row {:02X}/{:02X} Ch {:02}/{:02} {} Oct:{} Step:{} Inst:{:02X} {}",
         gui.editor.cursor.row, rows,
         gui.editor.cursor.channel, num_channels,
-        col_name,
-        gui.editor.debug_vis_start, gui.editor.debug_vis_end,
-        gui.editor.debug_scroll_y, gui.editor.debug_scroll_max_y,
+        mode,
+        gui.editor.base_octave, gui.editor.step_size,
+        gui.editor.selected_instrument,
+        col_label,
     ));
     ui.separator();
 
@@ -193,7 +175,7 @@ fn render_row(
         ui.table_next_column();
         let cell_pos = ui.cursor_screen_pos();
 
-        let cell = song.tracks.first()
+        let cell = song.tracks.get(gui.selected_track)
             .and_then(|t| t.clips.get(clip_idx as usize))
             .and_then(|c| c.pattern())
             .filter(|p| row < p.rows && ch < p.channels)
@@ -310,6 +292,20 @@ fn x_to_cell_column(x: f32, cw: f32) -> CellColumn {
         7 => CellColumn::EffectType,
         8 => CellColumn::EffectParam0,
         _ => CellColumn::EffectParam1,
+    }
+}
+
+/// Human-readable label for the current cursor column.
+/// For effect columns, shows the effect name from the cell under the cursor.
+fn cursor_column_label(gui: &GuiState, clip_idx: u16) -> &'static str {
+    let cursor = &gui.editor.cursor;
+    match cursor.column {
+        CellColumn::Note => "Note",
+        CellColumn::Instrument0 | CellColumn::Instrument1 => "Inst",
+        CellColumn::EffectType | CellColumn::EffectParam0 | CellColumn::EffectParam1 => {
+            let cell = crate::ui::read_cell(gui, clip_idx, cursor.row, cursor.channel);
+            cell.effect.name()
+        }
     }
 }
 

@@ -21,6 +21,7 @@ pub enum EditorAction {
     TogglePlayPatternStop,
     SwitchToGraph,
     SwitchToPattern,
+    SwitchToSequencer,
     AdjustOctave(i8),
     AdjustStep(i8),
     SelectMove { drow: i32, dchannel: i32 },
@@ -76,6 +77,9 @@ fn poll_global_shortcuts(
     }
     if cmd && is_pressed(ui, imgui::Key::P) {
         actions.push(EditorAction::SwitchToPattern);
+    }
+    if cmd && is_pressed(ui, imgui::Key::E) {
+        actions.push(EditorAction::SwitchToSequencer);
     }
     if is_pressed(ui, imgui::Key::GraveAccent) {
         actions.push(EditorAction::ToggleEditMode);

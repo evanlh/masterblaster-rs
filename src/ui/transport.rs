@@ -1,6 +1,7 @@
 //! Transport bar: New, Load, Play/Stop, view toggle, song info, playback position.
 
-use super::{CenterView, GuiState};
+use super::CenterView;
+use super::GuiState;
 
 pub fn transport_panel(ui: &imgui::Ui, gui: &mut GuiState) {
     if ui.button("New") {
@@ -36,16 +37,7 @@ pub fn transport_panel(ui: &imgui::Ui, gui: &mut GuiState) {
     ui.separator();
     ui.same_line();
 
-    let view_label = match gui.center_view {
-        CenterView::Pattern => "Graph",
-        CenterView::Graph => "Pattern",
-    };
-    if ui.button(view_label) {
-        gui.center_view = match gui.center_view {
-            CenterView::Pattern => CenterView::Graph,
-            CenterView::Graph => CenterView::Pattern,
-        };
-    }
+    view_toggle_buttons(ui, gui);
     ui.same_line();
     ui.separator();
     ui.same_line();
@@ -57,14 +49,6 @@ pub fn transport_panel(ui: &imgui::Ui, gui: &mut GuiState) {
         "BPM: {} | Speed: {}",
         song.initial_tempo, song.initial_speed
     ));
-
-    if let Some(pos) = gui.controller.track_position(0) {
-        ui.same_line();
-        ui.text(format!(
-            "Seq: {:02X} | Clip: {:02X} | Row: {:02X}",
-            pos.seq_index, pos.clip_idx, pos.row
-        ));
-    }
 
     if !gui.status.is_empty() {
         ui.same_line();
@@ -105,9 +89,28 @@ fn load_mod_dialog(gui: &mut GuiState) {
                 Ok(()) => {
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
                     gui.status = format!("Loaded {}", name);
+                    gui.selected_track = 0;
                     gui.selected_seq_index = 0;
                 }
             }
         }
+    }
+}
+
+fn view_toggle_buttons(ui: &imgui::Ui, gui: &mut GuiState) {
+    const VIEWS: &[(CenterView, &str)] = &[
+        (CenterView::Pattern, "Pattern"),
+        (CenterView::Sequencer, "Sequencer"),
+        (CenterView::Graph, "Graph"),
+    ];
+    for (view, label) in VIEWS {
+        let active = gui.center_view == *view;
+        if active {
+            let _token = ui.push_style_color(imgui::StyleColor::Button, [0.30, 0.30, 0.55, 1.0]);
+            if ui.button(label) {}
+        } else if ui.button(label) {
+            gui.center_view = *view;
+        }
+        ui.same_line();
     }
 }
