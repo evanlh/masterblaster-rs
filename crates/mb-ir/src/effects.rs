@@ -67,8 +67,10 @@ pub enum Effect {
     Tremolo { speed: u8, depth: u8 },
     /// Set channel panning (0-255)
     SetPan(u8),
-    /// Set sample offset (in 256-byte units)
+    /// Set sample offset (in 256-byte units, ProTracker)
     SampleOffset(u8),
+    /// Set sample offset as fraction of sample length (param/256, Buzz)
+    FractionalSampleOffset(u8),
     /// Volume slide up/down per tick
     VolumeSlide(i8),
     /// Jump to order position
@@ -154,6 +156,7 @@ impl Effect {
             Effect::Tremolo { .. } => "Tremolo",
             Effect::SetPan(_) => "SetPan",
             Effect::SampleOffset(_) => "SampleOffset",
+            Effect::FractionalSampleOffset(_) => "FractionalSampleOffset",
             Effect::VolumeSlide(_) => "VolumeSlide",
             Effect::PositionJump(_) => "PositionJump",
             Effect::SetVolume(_) => "SetVolume",
@@ -200,6 +203,7 @@ impl Effect {
                     | Effect::SetVolume(_)
                     | Effect::SetPan(_)
                     | Effect::SampleOffset(_)
+                    | Effect::FractionalSampleOffset(_)
                     | Effect::FinePortaUp(_)
                     | Effect::FinePortaDown(_)
                     | Effect::FineVolumeSlideUp(_)

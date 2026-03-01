@@ -1,7 +1,7 @@
 # Buzz Tracker Machine Support
 
 Created: 20260216
-Updated: 20260216
+Updated: 20260301
 
 
 Feature analysis for Jeskola Tracker, Matilde Tracker, and Matilde Tracker 2.
@@ -45,18 +45,30 @@ shuffle, loop fit, spline interpolation. Source in `Matilde/Tracker/`.
 |--------|---------|-----------|-----------|----------|--------|
 | Note | C-0..B-9, off | same | same | `note: Note` | OK |
 | Wave | 1-200 | same | same | `instrument: u8` | OK |
-| Volume | 0x00-0x80 normal, 0x81-0xFE amp | same | same | `volume: VolumeCommand` | OK |
-| Effect 1 | yes | yes | yes | `effect: Effect` | OK |
-| Arg 1 | yes | yes | yes | (in Effect enum) | OK |
+| Volume | 0x00-0x80 normal, 0x81-0xFE amp | same | same | `volume: VolumeCommand` | **BUG** |
+| Effect 1 | yes | yes | yes | `effect: Effect` | OK (Matilde only) |
+| Arg 1 | yes | yes | yes | (in Effect enum) | OK (Matilde only) |
 | **Effect 2** | no | no | **yes** | **missing** | UNSUPPORTED |
 | **Arg 2** | no | no | **yes** | **missing** | UNSUPPORTED |
 | Subdivide | Jeskola only (separate column) | via 0x0F | via 0x0F | **missing** | UNSUPPORTED |
 
-### Volume Column Differences
+### Volume Column Bug
 
-Buzz trackers use 0x00-0xFE range (0x80 = full, 0xFE = ~2x gain).
-ProTracker uses 0-64. Our BMX parser scales: `(vol * 64) / 0xFE`.
-Amplification above 0x80 (>100%) is clamped to 64 — we lose the overdrive range.
+Buzz trackers use 0x00-0xFE range where **0x80 = full volume (100%)** and
+0x81-0xFE = amplification (up to ~2x gain). ProTracker uses 0-64.
+
+**Current formula is wrong**: `(vol * 64) / 0xFE` maps 0x80 → 32 (half volume!).
+
+**Correct formula**: `min((vol * 64) / 0x80, 64)` — maps 0x80 → 64 (full),
+clamps amplification range (0x81-0xFE) to 64.
+
+### Default Panning Bug
+
+BMX parser applies Amiga L-R-R-L panning pattern to all channels. Buzz trackers
+default to **center panning** — the L-R-R-L pattern is a ProTracker/MOD convention
+and should not be used for BMX files.
+
+**Fix**: Set `initial_pan: 0` for all BMX tracker channels.
 
 ### Second Effect Column
 
@@ -255,36 +267,54 @@ init state but doesn't apply them.
 
 ---
 
-## Implementation Priorities
+## Implementation Status
 
-### Phase 1: Fix Jeskola effect numbering
-- Add `parse_jeskola_effect()` for Jeskola Tracker's different encoding
-- Map 0x0A→Arpeggio, 0x0B→Retrigger, 0x0C→NoteCut
-- Fix sample offset to use fractional scaling
+### Phase 0: Parser foundation (DONE)
+- [x] BMX section directory parsing (BVER, PARA, MACH, CONN, PATT, SEQU, WAVT, CWAV)
+- [x] Machine detection: Jeskola Tracker, Matilde Tracker, Matilde Tracker 2, Matilde Tracker (Mono)
+- [x] Multi-channel tracker patterns (Track with base_channel + num_channels)
+- [x] Sequence parsing with MusicalTime beat positioning
+- [x] Wave decompression (Buzz delta compression format=1)
+- [x] Wave table parsing with root note adjustment
+- [x] Audio graph construction with machine nodes and connections
+- [x] Instrument/sample mapping (wave index → instrument number)
+- [x] Multi-machine playback (each TrackerMachine gets its own channel slice)
+- [x] u64 sample position/increment (supports samples >65535 frames)
+
+### Phase 0.5: Parser bugs (DONE)
+- [x] **Fix volume scaling**: `(vol * 64) / 0x80` clamped to 64 (was `/ 0xFE`, mapped 0x80 → 32)
+- [x] **Fix default panning**: BMX channels default to center (0), not L-R-R-L
+- [x] **Sample offset scaling**: `FractionalSampleOffset` variant, resolved in TrackerMachine with sample length
+
+### Phase 1: Jeskola Tracker compatibility
+- [ ] Add `parse_jeskola_effect()` for different effect numbering
+- [ ] Map 0x0A→Arpeggio, 0x0B→Retrigger, 0x0C→NoteCut
+- [ ] Detect Jeskola vs Matilde in `read_tracker_pattern()` and use correct parser
+- [ ] Reverse sample playback (0x60, Jeskola-specific)
 
 ### Phase 2: Core Matilde compatibility
-- Panning slide (0x05), fine panning slides (0xEE/0xEF)
-- Finetune (0xE5)
-- Note Release vs Note Cut distinction (0xDC)
-- Reverse sample playback (0xE8 / 0x60)
-- Fractional sample offset for all Buzz trackers
+- [ ] Panning slide (0x05), fine panning slides (0xEE/0xEF)
+- [ ] Finetune (0xE5)
+- [ ] Note Release vs Note Cut distinction (0xDC)
+- [ ] Reverse sample playback (0xE8)
+- [ ] Fractional sample offset for all Buzz trackers (if not done in Phase 0.5)
 
 ### Phase 3: Matilde 2 extensions
-- Second effect column (Cell struct change)
-- Subdivide (0x0F) — per-track effect rate
-- Probability (0x10, 0x30)
-- Combined note delay+cut (0x18)
-- Loop fit (0x11, 0x12)
+- [ ] Second effect column (Cell struct change)
+- [ ] Subdivide (0x0F) — per-track effect rate
+- [ ] Probability (0x10, 0x30)
+- [ ] Combined note delay+cut (0x18)
+- [ ] Loop fit (0x11, 0x12)
 
 ### Phase 4: Filter system
-- Per-channel filter state in ChannelState
-- Set cutoff/resonance (0x20, 0x28)
-- Filter slides and LFOs
-- Filter type selection
+- [ ] Per-channel filter state in ChannelState
+- [ ] Set cutoff/resonance (0x20, 0x28)
+- [ ] Filter slides and LFOs
+- [ ] Filter type selection
 
 ### Phase 5: Advanced features
-- Volume/pitch/panning envelopes from wavetable
-- Virtual channels (NNA polyphony)
-- Auto shuffle / randomize effects
-- Harmonic play
-- Machine attributes and global parameters
+- [ ] Volume/pitch/panning envelopes from wavetable
+- [ ] Virtual channels (NNA polyphony)
+- [ ] Auto shuffle / randomize effects
+- [ ] Harmonic play
+- [ ] Machine attributes and global parameters

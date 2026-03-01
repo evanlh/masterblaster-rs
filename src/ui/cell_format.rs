@@ -55,7 +55,7 @@ pub fn format_effect(effect: &mb_ir::Effect) -> String {
         VibratoVolSlide(v) => format!("6{}", vol_slide_param(*v)),
         Tremolo { speed, depth } => format!("7{:X}{:X}", speed, depth),
         SetPan(v) => format!("8{:02X}", v),
-        SampleOffset(v) => format!("9{:02X}", v),
+        SampleOffset(v) | FractionalSampleOffset(v) => format!("9{:02X}", v),
         VolumeSlide(v) => format!("A{}", vol_slide_param(*v)),
         PositionJump(v) => format!("B{:02X}", v),
         SetVolume(v) => format!("C{:02X}", v),

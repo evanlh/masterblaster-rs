@@ -14,6 +14,14 @@ use mb_ir::{
 use crate::FormatError;
 use crate::effect_parser::parse_effect;
 
+/// Parse a Buzz tracker effect, remapping SampleOffset to fractional.
+fn parse_buzz_effect(cmd: u8, param: u8) -> mb_ir::Effect {
+    match parse_effect(cmd, param) {
+        mb_ir::Effect::SampleOffset(v) => mb_ir::Effect::FractionalSampleOffset(v),
+        other => other,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // BmxReader — cursor over a byte slice
 // ---------------------------------------------------------------------------
@@ -216,12 +224,12 @@ fn buzz_note_to_note(buzz: u8) -> Note {
 }
 
 /// Convert a Buzz volume byte (0-254) to VolumeCommand. 0xFF = no change.
+/// Buzz: 0x00 = silence, 0x80 = full (100%), 0x81-0xFE = amplification (clamped).
 fn buzz_volume_to_cmd(vol: u8) -> VolumeCommand {
     if vol == 0xFF {
         VolumeCommand::None
     } else {
-        // Buzz volume range is 0-0xFE, scale to 0-64
-        let scaled = ((vol as u32) * 64 / 0xFE) as u8;
+        let scaled = ((vol as u32) * 64 / 0x80).min(64) as u8;
         VolumeCommand::Volume(scaled)
     }
 }
@@ -680,7 +688,7 @@ fn read_tracker_pattern(
                 note: buzz_note_to_note(note_byte),
                 instrument: wave_to_instrument(wave_byte, wave_lookup),
                 volume: buzz_volume_to_cmd(vol_byte),
-                effect: parse_effect(effect_cmd, effect_arg),
+                effect: parse_buzz_effect(effect_cmd, effect_arg),
             };
 
             if !cell.is_empty() {
@@ -1288,9 +1296,8 @@ pub fn load_bmx(data: &[u8]) -> Result<Song, FormatError> {
         .map(|m| m.num_tracks as usize)
         .sum();
     let channels: Vec<ChannelSettings> = (0..num_tracker_channels)
-        .map(|i| ChannelSettings {
-            // L-R-R-L panning pattern
-            initial_pan: if i % 4 == 0 || i % 4 == 3 { -64 } else { 64 },
+        .map(|_| ChannelSettings {
+            initial_pan: 0, // Buzz trackers default to center panning
             initial_vol: 64,
             muted: false,
         })
@@ -1463,8 +1470,21 @@ mod tests {
     }
 
     #[test]
-    fn buzz_volume_max() {
+    fn buzz_volume_full() {
+        // 0x80 = 100% volume in Buzz → 64 in our system
+        assert_eq!(buzz_volume_to_cmd(0x80), VolumeCommand::Volume(64));
+    }
+
+    #[test]
+    fn buzz_volume_amplified_clamps() {
+        // 0xFE = ~2x gain in Buzz → clamped to 64
         assert_eq!(buzz_volume_to_cmd(0xFE), VolumeCommand::Volume(64));
+    }
+
+    #[test]
+    fn buzz_volume_half() {
+        // 0x40 = 50% volume in Buzz → 32
+        assert_eq!(buzz_volume_to_cmd(0x40), VolumeCommand::Volume(32));
     }
 
     #[test]

@@ -517,7 +517,7 @@ fn effect_to_raw(effect: &mb_ir::Effect) -> (u8, u8) {
         VibratoVolSlide(v) => (6, vol_slide_to_raw(*v)),
         Tremolo { speed, depth } => (7, (speed << 4) | depth),
         SetPan(v) => (8, *v),
-        SampleOffset(v) => (9, *v),
+        SampleOffset(v) | FractionalSampleOffset(v) => (9, *v),
         VolumeSlide(v) => (0xA, vol_slide_to_raw(*v)),
         PositionJump(v) => (0xB, *v),
         SetVolume(v) => (0xC, *v),

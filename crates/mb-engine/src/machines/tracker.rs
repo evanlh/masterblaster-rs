@@ -158,7 +158,14 @@ impl TrackerMachine {
                         }
                     }
 
-                    if effect.is_row_effect() {
+                    // Fractional sample offset: param/256 * sample_length
+                    if let Effect::FractionalSampleOffset(param) = effect {
+                        let sample_len = self.samples
+                            .get(channel.sample_index as usize)
+                            .map_or(0, |s| s.len());
+                        let offset = (*param as u64 * sample_len as u64) / 256;
+                        channel.position = offset << 16;
+                    } else if effect.is_row_effect() {
                         channel.apply_row_effect(effect);
                         channel.update_increment(self.sample_rate);
                     } else {
