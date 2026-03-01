@@ -137,6 +137,13 @@ impl Controller {
         }
     }
 
+    /// Toggle mute state on a track. Takes effect on next `play()`.
+    pub fn toggle_track_mute(&mut self, track_idx: usize) {
+        if let Some(track) = self.song.tracks.get_mut(track_idx) {
+            track.muted = !track.muted;
+        }
+    }
+
     // --- Edit dispatch ---
 
     /// Apply an edit to the local song and push it to the audio thread if playing.

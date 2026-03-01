@@ -6,7 +6,7 @@
 use alloc::vec::Vec;
 use mb_ir::{
     Cell, Effect, Event, EventPayload, EventTarget, MusicalTime, Note, Song,
-    Track, VolumeCommand,
+    Track, VolumeCommand
 };
 
 /// Result of scheduling a song: events and total length.
@@ -29,6 +29,9 @@ pub fn schedule_song(song: &Song) -> ScheduleResult {
     let mut max_time = MusicalTime::zero();
 
     for track in &song.tracks {
+        if track.muted || !song.is_tracker(track) {
+            continue;
+        }
         let t = schedule_track(track, song, &mut events);
         if t > max_time { max_time = t; }
     }
@@ -203,7 +206,7 @@ fn schedule_track(
     let mut speed: u32 = song.initial_speed as u32;
     let mut seq_idx: usize = 0;
     let mut row: u16 = 0;
-    let mut time = MusicalTime::zero();
+    let mut time = track.sequence[seq_idx].start;
 
     let max_rows = compute_max_rows(track);
     let mut rows_processed: u64 = 0;
@@ -212,14 +215,31 @@ fn schedule_track(
         if seq_idx >= track.sequence.len() { break; }
         let clip_idx = track.sequence[seq_idx].clip_idx as usize;
 
-        let clip = match get_track_clip(track, clip_idx) {
+        let clip = match track.get_pattern_at(clip_idx) {
             Some(p) => p,
             None => break,
         };
         let num_rows = clip.rows;
-        if row >= num_rows { row = 0; }
         let rpb = clip.rows_per_beat.map_or(song_rpb, |r| r as u32);
         let eff_speed = effective_speed(clip, speed);
+
+        // Truncate: if current time has reached the next entry's start, advance
+        let next_start = track.sequence.get(seq_idx + 1).map(|e| e.start);
+        if let Some(ns) = next_start {
+            if time >= ns {
+                seq_idx += 1;
+                row = 0;
+                time = ns;
+                continue;
+            }
+        }
+
+        if row >= num_rows {
+            seq_idx += 1;
+            row = 0;
+            time = advance_to_seq_entry(track, seq_idx, time);
+            continue;
+        }
 
         // Schedule all columns at this row
         for col in 0..clip.channels {
@@ -235,12 +255,18 @@ fn schedule_track(
         if rows_processed >= max_rows { break; }
 
         match (fc.jump_order, fc.break_row) {
+            // Flow control: keep linear time (SeqEntry.start assumes no breaks)
             (Some(pos), Some(r)) => { seq_idx = pos as usize; row = r as u16; }
             (Some(pos), None) => { seq_idx = pos as usize; row = 0; }
             (None, Some(r)) => { seq_idx += 1; row = r as u16; }
+            // Normal advancement: use absolute SeqEntry.start
             (None, None) => {
                 row += 1;
-                if row >= num_rows { seq_idx += 1; row = 0; }
+                if row >= num_rows {
+                    seq_idx += 1;
+                    row = 0;
+                    time = advance_to_seq_entry(track, seq_idx, time);
+                }
             }
         }
     }
@@ -248,9 +274,14 @@ fn schedule_track(
     time
 }
 
-/// Get the Pattern from a track's clip pool.
-fn get_track_clip(track: &Track, clip_idx: usize) -> Option<&mb_ir::Pattern> {
-    track.clips.get(clip_idx).and_then(|c| c.pattern())
+
+/// Get the start time for the next sequence entry, falling back to current time.
+///
+/// Used when seq_idx advances: sets time to the entry's absolute start position.
+/// For MOD files (contiguous entries), this equals where the linear time would be.
+/// For BMX files (absolute positions), this jumps to the correct timeline position.
+fn advance_to_seq_entry(track: &Track, seq_idx: usize, current: MusicalTime) -> MusicalTime {
+    track.sequence.get(seq_idx).map_or(current, |e| e.start)
 }
 
 /// Compute max rows for loop detection across all clips in a track.

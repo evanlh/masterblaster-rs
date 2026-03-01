@@ -163,16 +163,28 @@ pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
     for action in actions {
         match action {
             EditorAction::MoveCursor { drow, dchannel, dcolumn } => {
-                gui.editor.clear_selection();
-                gui.editor.move_cursor(*drow, *dchannel, *dcolumn, max_rows, max_channels);
+                if gui.center_view == CenterView::Sequencer {
+                    move_sequencer_cursor(gui, *dchannel + *dcolumn);
+                } else {
+                    gui.editor.clear_selection();
+                    gui.editor.move_cursor(*drow, *dchannel, *dcolumn, max_rows, max_channels);
+                }
             }
             EditorAction::TabForward => {
-                gui.editor.clear_selection();
-                gui.editor.tab_forward(max_channels);
+                if gui.center_view == CenterView::Sequencer {
+                    move_sequencer_cursor(gui, 1);
+                } else {
+                    gui.editor.clear_selection();
+                    gui.editor.tab_forward(max_channels);
+                }
             }
             EditorAction::TabBackward => {
-                gui.editor.clear_selection();
-                gui.editor.tab_backward(max_channels);
+                if gui.center_view == CenterView::Sequencer {
+                    move_sequencer_cursor(gui, -1);
+                } else {
+                    gui.editor.clear_selection();
+                    gui.editor.tab_backward(max_channels);
+                }
             }
             EditorAction::PageUp => {
                 gui.editor.clear_selection();
@@ -248,8 +260,19 @@ pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
             EditorAction::Redo => {
                 apply_redo(gui);
             }
+            EditorAction::MuteSelectedTrack => {
+                gui.controller.toggle_track_mute(gui.selected_track);
+            }
         }
     }
+}
+
+/// Move the selected track cursor in the sequencer view.
+fn move_sequencer_cursor(gui: &mut GuiState, delta: i32) {
+    let num_tracks = gui.controller.song().tracks.len();
+    if num_tracks == 0 { return; }
+    let new = (gui.selected_track as i32 + delta).clamp(0, num_tracks as i32 - 1);
+    gui.selected_track = new as usize;
 }
 
 fn pattern_bounds(gui: &GuiState) -> (u16, u8) {

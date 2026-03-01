@@ -29,6 +29,7 @@ pub enum EditorAction {
     Paste,
     Undo,
     Redo,
+    MuteSelectedTrack,
 }
 
 /// Poll imgui key state and return all triggered editor actions.
@@ -111,6 +112,10 @@ fn poll_global_shortcuts(
     }
     if cmd && is_pressed(ui, imgui::Key::Z) && shift {
         actions.push(EditorAction::Redo);
+    }
+    // Mute selected track: Ctrl+M
+    if ctrl && is_pressed(ui, imgui::Key::M) {
+        actions.push(EditorAction::MuteSelectedTrack);
     }
 }
 

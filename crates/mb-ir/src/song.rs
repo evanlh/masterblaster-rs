@@ -101,6 +101,20 @@ impl Song {
             .max()
             .unwrap_or(MusicalTime::zero())
     }
+
+    pub fn is_tracker(&self, track: &Track) -> bool {
+        return track.machine_node
+            .and_then(|id| self.graph.node(id))
+            .map(|n| match n.node_type {
+                NodeType::BuzzMachine { is_tracker, .. } => {
+                    is_tracker
+                }
+                _ => {
+                    false
+                }
+            })
+            .unwrap_or(false);
+    }
 }
 
 /// An entry in a legacy order list (used during format parsing).
@@ -152,6 +166,8 @@ pub struct Track {
     pub clips: Vec<Clip>,
     /// Playback order (which clip to play when)
     pub sequence: Vec<SeqEntry>,
+    /// Whether this track is muted (skipped during scheduling).
+    pub muted: bool,
 }
 
 impl Track {
@@ -163,7 +179,20 @@ impl Track {
             num_channels,
             clips: Vec::new(),
             sequence: Vec::new(),
+            muted: false,
         }
+    }
+
+    /// Get the Pattern from a track's clip pool.
+    pub fn get_pattern_at(&self, clip_idx: usize) -> Option<&Pattern> {
+        self.clips.get(clip_idx).and_then(|c| c.pattern())
+    }
+
+    pub fn get_pattern_at_sequence(&self, seq_idx: usize) -> (Option<&Pattern>, MusicalTime) {
+        if seq_idx > self.sequence.len() {
+            return (None, MusicalTime::zero())
+        }
+        return (self.get_pattern_at(self.sequence[seq_idx].clip_idx as usize), self.sequence[seq_idx].start);
     }
 }
 
