@@ -595,8 +595,9 @@ fn parse_conn(
 }
 
 /// Convert Buzz amplitude (0..0x4000) to gain in fixed-point dB.
+/// Returns -100 for zero amplitude (maps to 0.0 linear gain).
 fn amplitude_to_gain(amp: u16) -> i16 {
-    if amp == 0 { return i16::MIN; }
+    if amp == 0 { return -100; }
     let ratio = amp as f32 / 0x4000 as f32;
     (ratio * 100.0 - 100.0) as i16
 }
@@ -1198,6 +1199,25 @@ fn buzz_root_to_midi(root: u8) -> u8 {
     octave * 12 + semi
 }
 
+/// Scale sample data by a volume factor, clamping to i16 range.
+fn scale_sample_data(data: SampleData, volume: f32) -> SampleData {
+    if (volume - 1.0).abs() < 1e-6 { return data; }
+    match data {
+        SampleData::Mono16(v) => SampleData::Mono16(
+            v.iter().map(|&s| scale_i16(s, volume)).collect(),
+        ),
+        SampleData::Stereo16(l, r) => SampleData::Stereo16(
+            l.iter().map(|&s| scale_i16(s, volume)).collect(),
+            r.iter().map(|&s| scale_i16(s, volume)).collect(),
+        ),
+        other => other, // 8-bit formats: leave as-is (uncommon in BMX)
+    }
+}
+
+fn scale_i16(s: i16, volume: f32) -> i16 {
+    (s as f32 * volume).round().clamp(-32768.0, 32767.0) as i16
+}
+
 fn build_samples(bmx_waves: &[BmxWave], wave_data: &[(u16, SampleData)]) -> Vec<Sample> {
     bmx_waves.iter().map(|bw| {
         let loop_type = match (bw.flags & 0x01 != 0, bw.flags & 0x10 != 0) {
@@ -1207,11 +1227,14 @@ fn build_samples(bmx_waves: &[BmxWave], wave_data: &[(u16, SampleData)]) -> Vec<
         };
 
         let level = bw.levels.first();
-        let data = wave_data
+        let raw_data = wave_data
             .iter()
             .find(|(idx, _)| *idx == bw.index)
             .map(|(_, d)| d.clone())
             .unwrap_or_else(|| SampleData::Mono16(Vec::new()));
+
+        // Pre-scale sample data by wave volume (preserves >1.0 amplification)
+        let data = scale_sample_data(raw_data, bw.volume);
 
         let mut sample = Sample::new(&bw.name);
         sample.data = data;
@@ -1221,7 +1244,7 @@ fn build_samples(bmx_waves: &[BmxWave], wave_data: &[(u16, SampleData)]) -> Vec<
         sample.c4_speed = level.map_or(44100, |l| {
             root_note_adjusted_c4_speed(l.sample_rate, l.root_note)
         });
-        sample.default_volume = (bw.volume * 64.0).clamp(0.0, 64.0) as u8;
+        sample.default_volume = 64; // Full volume; wave volume baked into sample data
         sample
     }).collect()
 }
@@ -1429,6 +1452,12 @@ mod tests {
     #[test]
     fn amplitude_to_gain_unity() {
         assert_eq!(amplitude_to_gain(0x4000), 0);
+    }
+
+    #[test]
+    fn amplitude_to_gain_zero_is_silence() {
+        // amp=0 should map to -100, which gain_linear maps to 0.0
+        assert_eq!(amplitude_to_gain(0), -100);
     }
 
     #[test]

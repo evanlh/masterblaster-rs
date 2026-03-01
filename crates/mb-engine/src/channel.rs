@@ -327,8 +327,8 @@ impl ChannelState {
     }
 
     pub(crate) fn render(&mut self, sample: &Sample) -> Frame {
-        // Read sample value with linear interpolation
-        let sample_value = sample.data.get_mono_interpolated(self.position);
+        // Read sample values with linear interpolation (stereo-aware)
+        let (sample_l, sample_r) = sample.data.get_stereo_interpolated(self.position);
 
         // Apply volume (with tremolo offset) and panning
         // pan: -64 (full left) to +64 (full right)
@@ -338,8 +338,8 @@ impl ChannelState {
         let left_vol = ((128 - pan_right) * vol) >> 7;
         let right_vol = (pan_right * vol) >> 7;
 
-        let left = (sample_value as i32 * left_vol) >> 6;
-        let right = (sample_value as i32 * right_vol) >> 6;
+        let left = (sample_l as i32 * left_vol) >> 6;
+        let right = (sample_r as i32 * right_vol) >> 6;
 
         // Advance position
         self.position += self.increment;

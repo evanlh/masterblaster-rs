@@ -81,8 +81,9 @@ pub fn topological_sort(graph: &AudioGraph) -> Vec<NodeId> {
 
 /// Convert wire gain to linear scale.
 /// `gain` is stored as `(ratio * 100 - 100)` where 0 = unity.
+/// Clamps to minimum 0.0 to prevent negative gain from zero-amplitude wires.
 fn gain_linear(gain: i16) -> f32 {
-    (gain as f32 + 100.0) / 100.0
+    ((gain as f32 + 100.0) / 100.0).max(0.0)
 }
 
 /// Gather input buffers from all connections feeding into `node_id`.
@@ -202,6 +203,38 @@ mod tests {
         let mut scratch = AudioBuffer::new(2, 1);
         gather_inputs(&graph, &outputs, 0, &mut scratch);
         assert!((scratch.channel(0)[0] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gain_linear_clamps_negative_to_zero() {
+        // gain = -100 maps to 0.0 linear (silence)
+        assert_eq!(gain_linear(-100), 0.0);
+        // gain = -200 would be negative without clamp
+        assert_eq!(gain_linear(-200), 0.0);
+        // gain = i16::MIN should also clamp to 0.0
+        assert_eq!(gain_linear(i16::MIN), 0.0);
+    }
+
+    #[test]
+    fn gain_linear_unity_at_zero() {
+        assert!((gain_linear(0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gather_inputs_zero_gain_is_silent() {
+        let mut graph = AudioGraph::with_master();
+        let a = graph.add_node(NodeType::Sampler { sample_id: 0 });
+        graph.connections.clear();
+        graph.connections.push(mb_ir::Connection {
+            from: a, to: 0, from_channel: 0, to_channel: 0, gain: -100,
+        });
+
+        let mut outputs: Vec<AudioBuffer> = (0..2).map(|_| AudioBuffer::new(2, 1)).collect();
+        outputs[a as usize].channel_mut(0)[0] = 1.0;
+
+        let mut scratch = AudioBuffer::new(2, 1);
+        gather_inputs(&graph, &outputs, 0, &mut scratch);
+        assert_eq!(scratch.channel(0)[0], 0.0);
     }
 
     #[test]

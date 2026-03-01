@@ -1,7 +1,6 @@
 //! Main playback engine.
 
 use alloc::boxed::Box;
-use alloc::vec;
 use alloc::vec::Vec;
 use mb_ir::{Edit, Event, EventPayload, EventTarget, MusicalTime, NodeType, Song, SUB_BEAT_UNIT};
 
@@ -39,31 +38,8 @@ pub struct Engine {
     playing: bool,
     /// Time at which the song ends (set by schedule_song)
     song_end_time: Option<MusicalTime>,
-    /// Per-node gain (linear, computed from mix shift).
-    mix_gains: Vec<f32>,
     /// Machine instances (indexed by NodeId; `Some` only for BuzzMachine nodes).
     machines: Vec<Option<Box<dyn Machine>>>,
-}
-
-/// Compute the right-shift needed to attenuate N inputs to prevent clipping.
-///
-/// For N inputs with L-R panning, at most N/2 contribute to one side.
-/// Returns the number of bits to shift right.
-fn compute_mix_shift(input_count: u32) -> u32 {
-    let sides = (input_count / 2).max(1);
-    sides.next_power_of_two().trailing_zeros()
-}
-
-/// Compute per-node mix gains from connection counts in the graph.
-fn compute_all_mix_gains(song: &Song) -> Vec<f32> {
-    let n = song.graph.nodes.len();
-    let mut gains = vec![1.0f32; n];
-    for (id, _node) in song.graph.nodes.iter().enumerate() {
-        let input_count = song.graph.connections.iter().filter(|c| c.to == id as u16).count() as u32;
-        let shift = compute_mix_shift(input_count);
-        gains[id] = 1.0 / (1u32 << shift) as f32;
-    }
-    gains
 }
 
 /// Find the channel settings slice for a tracker node from the song's tracks.
@@ -110,6 +86,15 @@ fn init_machines(song: &Song, sample_rate: u32) -> Vec<Option<Box<dyn Machine>>>
     }).collect()
 }
 
+/// Compute the right-shift needed to attenuate N inputs to prevent clipping.
+///
+/// For N inputs with L-R panning, at most N/2 contribute to one side.
+/// Returns the number of bits to shift right.
+fn compute_mix_shift(input_count: u32) -> u32 {
+    let sides = (input_count / 2).max(1);
+    sides.next_power_of_two().trailing_zeros()
+}
+
 /// Compute the mix gain for the TrackerMachine.
 ///
 /// Previously N TrackerChannel nodes fed into AmigaFilter, which applied
@@ -129,9 +114,6 @@ impl Engine {
 
         let graph_state = GraphState::from_graph(&song.graph);
 
-        // Compute per-node mix gains from connection counts
-        let mix_gains = compute_all_mix_gains(&song);
-
         // Instantiate machines for BuzzMachine nodes
         let machines_vec = init_machines(&song, sample_rate);
 
@@ -149,7 +131,6 @@ impl Engine {
             tick_in_beat: 0,
             playing: false,
             song_end_time: None,
-            mix_gains,
             machines: machines_vec,
         };
 
@@ -320,33 +301,18 @@ impl Engine {
             };
 
             match &node.node_type {
-                NodeType::Master => {
-                    let gain = self.mix_gains.get(node_id as usize).copied().unwrap_or(1.0);
-                    graph_state::gather_inputs(
-                        &self.song.graph,
-                        &self.graph_state.node_outputs,
-                        node_id,
-                        &mut self.graph_state.scratch,
-                    );
-                    self.graph_state.scratch.apply_gain(gain);
-                    let left = self.graph_state.scratch.channel(0)[0];
-                    let right = self.graph_state.scratch.channel(1)[0];
-                    let buf = &mut self.graph_state.node_outputs[node_id as usize];
-                    buf.channel_mut(0)[0] = left;
-                    buf.channel_mut(1)[0] = right;
-                }
                 NodeType::BuzzMachine { .. } => {
                     self.render_machine(node_id);
                 }
                 _ => {
-                    let gain = self.mix_gains.get(node_id as usize).copied().unwrap_or(1.0);
+                    // Master and other pass-through nodes: gather wire inputs
+                    // Wire-level gain (from gather_inputs) handles all mixing
                     graph_state::gather_inputs(
                         &self.song.graph,
                         &self.graph_state.node_outputs,
                         node_id,
                         &mut self.graph_state.scratch,
                     );
-                    self.graph_state.scratch.apply_gain(gain);
                     let left = self.graph_state.scratch.channel(0)[0];
                     let right = self.graph_state.scratch.channel(1)[0];
                     let buf = &mut self.graph_state.node_outputs[node_id as usize];
@@ -361,16 +327,15 @@ impl Engine {
         [master.channel(0)[0], master.channel(1)[0]]
     }
 
-    /// Render a BuzzMachine node: gather inputs → f32 → machine.render() → output.
+    /// Render a BuzzMachine node: gather inputs → machine.render() → output.
+    /// Wire-level gain handles mixing; no per-node attenuation needed.
     fn render_machine(&mut self, node_id: u16) {
-        let gain = self.mix_gains.get(node_id as usize).copied().unwrap_or(1.0);
         graph_state::gather_inputs(
             &self.song.graph,
             &self.graph_state.node_outputs,
             node_id,
             &mut self.graph_state.scratch,
         );
-        self.graph_state.scratch.apply_gain(gain);
 
         if let Some(Some(machine)) = self.machines.get_mut(node_id as usize) {
             machine.render(&mut self.graph_state.scratch);

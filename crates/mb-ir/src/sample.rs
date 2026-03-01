@@ -120,6 +120,25 @@ impl SampleData {
         (a + (((b - a) * frac) >> 16)) as i16
     }
 
+    /// Get linearly interpolated stereo sample values as (left, right).
+    ///
+    /// For mono samples, returns the same value for both channels.
+    /// `pos` is a 16.16 fixed-point position.
+    pub fn get_stereo_interpolated(&self, pos_fixed: u64) -> (i16, i16) {
+        let idx = (pos_fixed >> 16) as usize;
+        let frac = (pos_fixed & 0xFFFF) as i64;
+
+        let al = self.get_mono(idx) as i64;
+        let bl = self.get_mono(idx + 1) as i64;
+        let left = (al + (((bl - al) * frac) >> 16)) as i16;
+
+        let ar = self.get_right(idx) as i64;
+        let br = self.get_right(idx + 1) as i64;
+        let right = (ar + (((br - ar) * frac) >> 16)) as i16;
+
+        (left, right)
+    }
+
     /// Number of channels in the sample data.
     pub fn num_channels(&self) -> u16 {
         match self {
@@ -225,6 +244,29 @@ mod tests {
         let a = data.get_mono(0) as i32; // 25600
         let expected = (a / 2) as i16;
         assert!((val as i32 - expected as i32).abs() <= 1);
+    }
+
+    #[test]
+    fn stereo_interpolated_returns_separate_channels() {
+        let data = SampleData::Stereo16(vec![1000, 2000], vec![3000, 4000]);
+        let (left, right) = data.get_stereo_interpolated(0); // index 0, frac 0
+        assert_eq!(left, 1000);
+        assert_eq!(right, 3000);
+    }
+
+    #[test]
+    fn stereo_interpolated_blends_midpoint() {
+        let data = SampleData::Stereo16(vec![1000, 3000], vec![2000, 6000]);
+        let (left, right) = data.get_stereo_interpolated(32768); // index 0, frac 0.5
+        assert!((left as i32 - 2000).abs() <= 1);
+        assert!((right as i32 - 4000).abs() <= 1);
+    }
+
+    #[test]
+    fn stereo_interpolated_mono_returns_same_both_channels() {
+        let data = mono8_sample(&[0, 100]);
+        let (left, right) = data.get_stereo_interpolated(0);
+        assert_eq!(left, right);
     }
 
     // --- AudioSource impl tests ---

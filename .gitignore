@@ -1,2 +1,4 @@
 /target
 tests/output/
+.claude/
+.DS_Store
