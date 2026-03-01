@@ -254,11 +254,15 @@ fn get_track_clip(track: &Track, clip_idx: usize) -> Option<&mb_ir::Pattern> {
 }
 
 /// Compute max rows for loop detection across all clips in a track.
+///
+/// Scales by num_channels to match pre-coalescing behavior where each channel
+/// was a separate track contributing to the group's row budget.
 fn compute_max_rows(track: &Track) -> u64 {
+    let channels = (track.num_channels as u64).max(1);
     let total: u64 = track.clips.iter()
         .filter_map(|c| c.pattern().map(|p| p.rows as u64))
         .sum();
-    total * 2 + 256
+    total * channels * 2 + 256
 }
 
 /// Scan flow control effects across all columns of a pattern at a given row.
