@@ -119,7 +119,7 @@ mod tests {
     fn four_channels_to_master() {
         let mut graph = AudioGraph::with_master(); // node 0 = Master
         for i in 0..4u8 {
-            let id = graph.add_node(NodeType::TrackerChannel { index: i });
+            let id = graph.add_node(NodeType::Sampler { sample_id: i as u16 });
             graph.connect(id, 0);
         }
         let order = topological_sort(&graph);
@@ -137,7 +137,7 @@ mod tests {
     fn chain_topology() {
         // A → B → Master
         let mut graph = AudioGraph::with_master(); // 0 = Master
-        let a = graph.add_node(NodeType::TrackerChannel { index: 0 }); // 1
+        let a = graph.add_node(NodeType::Sampler { sample_id: 0 }); // 1
         let b = graph.add_node(NodeType::Sampler { sample_id: 0 }); // 2
         graph.connect(a, b);
         graph.connect(b, 0);
@@ -155,8 +155,8 @@ mod tests {
     #[test]
     fn gather_inputs_sums_sources() {
         let mut graph = AudioGraph::with_master();
-        let a = graph.add_node(NodeType::TrackerChannel { index: 0 });
-        let b = graph.add_node(NodeType::TrackerChannel { index: 1 });
+        let a = graph.add_node(NodeType::Sampler { sample_id: 0 });
+        let b = graph.add_node(NodeType::Sampler { sample_id: 1 });
         graph.connect(a, 0);
         graph.connect(b, 0);
 
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn gather_inputs_with_gain() {
         let mut graph = AudioGraph::with_master();
-        let a = graph.add_node(NodeType::TrackerChannel { index: 0 });
+        let a = graph.add_node(NodeType::Sampler { sample_id: 0 });
         // Manually set gain to -50 (half volume)
         graph.connections.clear();
         graph.connections.push(mb_ir::Connection {
@@ -208,7 +208,7 @@ mod tests {
     fn graph_state_from_graph() {
         let mut graph = AudioGraph::with_master();
         for i in 0..4u8 {
-            let id = graph.add_node(NodeType::TrackerChannel { index: i });
+            let id = graph.add_node(NodeType::Sampler { sample_id: i as u16 });
             graph.connect(id, 0);
         }
         let state = GraphState::from_graph(&graph);

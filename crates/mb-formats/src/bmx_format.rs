@@ -442,7 +442,6 @@ fn parse_mach(
     let num_machines = r.read_u16_le()? as usize;
     let mut machines = Vec::with_capacity(num_machines);
     let mut para_defs = Vec::with_capacity(num_machines);
-    let mut next_channel_idx: u8 = 0;
     let mut master_bpm: u16 = 126;
     let mut master_tpb: u8 = 4;
 
@@ -504,16 +503,10 @@ fn parse_mach(
         let (node_id, channel_node_ids) = if machine_type == 0 {
             (0, Vec::new())
         } else if is_tracker {
-            // Create one TrackerChannel node per track
-            // Channel index is sequential (0-based), NOT the graph node ID
-            let mut ids = Vec::with_capacity(num_tracks);
-            for t in 0..num_tracks {
-                let ch_idx = next_channel_idx + t as u8;
-                ids.push(graph.add_node(NodeType::TrackerChannel { index: ch_idx }));
-            }
-            next_channel_idx += num_tracks as u8;
-            let primary = ids.first().copied().unwrap_or(0);
-            (primary, ids)
+            // Create a single Tracker machine node for all channels
+            let id = graph.add_node(NodeType::BuzzMachine { machine_name: String::from("Tracker") });
+            let ids: Vec<NodeId> = (0..num_tracks).map(|_| id).collect();
+            (id, ids)
         } else {
             let id = graph.add_node(NodeType::BuzzMachine { machine_name: name.clone() });
             // Add IR parameters to non-tracker graph nodes
@@ -568,13 +561,11 @@ fn parse_conn(
             let to_id = machines[dst_idx].node_id;
 
             if machines[src_idx].is_tracker {
-                // Connect each TrackerChannel to the destination
-                for &ch_id in &machines[src_idx].channel_node_ids {
-                    graph.connections.push(Connection {
-                        from: ch_id, to: to_id,
-                        from_channel: 0, to_channel: 0, gain,
-                    });
-                }
+                // Connect single Tracker node to destination
+                graph.connections.push(Connection {
+                    from: machines[src_idx].node_id, to: to_id,
+                    from_channel: 0, to_channel: 0, gain,
+                });
             } else {
                 graph.connections.push(Connection {
                     from: machines[src_idx].node_id, to: to_id,
@@ -1289,10 +1280,11 @@ pub fn load_bmx(data: &[u8]) -> Result<Song, FormatError> {
         .transpose()?
         .unwrap_or_default();
 
-    // Set up ChannelSettings for all TrackerChannel nodes
-    let num_tracker_channels = machines.iter()
-        .flat_map(|m| &m.channel_node_ids)
-        .count();
+    // Set up ChannelSettings for all tracker channels
+    let num_tracker_channels: usize = machines.iter()
+        .filter(|m| m.is_tracker)
+        .map(|m| m.num_tracks as usize)
+        .sum();
     let channels: Vec<ChannelSettings> = (0..num_tracker_channels)
         .map(|i| ChannelSettings {
             // L-R-R-L panning pattern

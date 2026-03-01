@@ -21,4 +21,4 @@ pub use envelope_state::EnvelopeState;
 pub use event_queue::EventQueue;
 pub use frequency::{note_to_increment, note_to_period, period_to_increment, clamp_period, PERIOD_MIN, PERIOD_MAX};
 pub use mixer::Engine;
-pub use scheduler::{schedule_cell, schedule_song, time_for_track_clip_row, ScheduleResult};
+pub use scheduler::{schedule_cell, schedule_song, target_for_track_column, time_for_track_clip_row, ScheduleResult};

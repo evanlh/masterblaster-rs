@@ -61,13 +61,13 @@ impl Song {
 
     /// Create a song with a given number of channels (for tracker formats).
     ///
-    /// Graph: Chan0→AmigaFilter→Master, Chan1→AmigaFilter→Master, ...
+    /// Graph: Tracker→AmigaFilter→Master
     pub fn with_channels(title: &str, num_channels: u8) -> Self {
         use crate::graph::{NodeType, Parameter};
 
         let mut song = Self::new(title);
 
-        // Insert Amiga filter between channels and master
+        // Insert Amiga filter between tracker and master
         let filter_id = song
             .graph
             .add_node(NodeType::BuzzMachine { machine_name: alloc::string::String::from("Amiga Filter") });
@@ -76,6 +76,12 @@ impl Song {
         );
         song.graph.connect(filter_id, 0); // filter → master
 
+        // Single Tracker machine node for all channels
+        let tracker_id = song
+            .graph
+            .add_node(NodeType::BuzzMachine { machine_name: alloc::string::String::from("Tracker") });
+        song.graph.connect(tracker_id, filter_id); // tracker → filter
+
         for i in 0..num_channels {
             song.channels.push(ChannelSettings {
                 // Classic Amiga panning: L R R L pattern
@@ -83,9 +89,6 @@ impl Song {
                 initial_vol: 64,
                 muted: false,
             });
-
-            let node_id = song.graph.add_node(NodeType::TrackerChannel { index: i });
-            song.graph.connect(node_id, filter_id); // channel → filter
         }
 
         song
@@ -199,6 +202,13 @@ pub struct SeqEntry {
 
 // --- Track building from legacy format data ---
 
+/// Find the Tracker machine node in the graph.
+pub fn find_tracker_node(graph: &AudioGraph) -> Option<NodeId> {
+    graph.nodes.iter().enumerate()
+        .find(|(_, n)| matches!(&n.node_type, NodeType::BuzzMachine { machine_name } if machine_name == "Tracker"))
+        .map(|(i, _)| i as NodeId)
+}
+
 /// Find the first BuzzMachine node in the graph (e.g. AmigaFilter for MOD).
 pub fn find_machine_node(graph: &AudioGraph) -> Option<NodeId> {
     graph.nodes.iter().enumerate()
@@ -220,7 +230,7 @@ pub fn build_tracks(
         return;
     }
 
-    let machine_node = find_machine_node(&song.graph);
+    let machine_node = find_tracker_node(&song.graph);
     let mut track = Track::new(machine_node, 0, num_channels);
 
     for pattern in patterns {
@@ -388,11 +398,11 @@ mod tests {
     }
 
     #[test]
-    fn build_tracks_machine_node_points_to_filter() {
+    fn build_tracks_machine_node_points_to_tracker() {
         let song = make_test_song();
         let machine = song.tracks[0].machine_node;
         assert!(machine.is_some());
         let node = song.graph.node(machine.unwrap()).unwrap();
-        assert!(matches!(&node.node_type, NodeType::BuzzMachine { .. }));
+        assert!(matches!(&node.node_type, NodeType::BuzzMachine { machine_name } if machine_name == "Tracker"));
     }
 }

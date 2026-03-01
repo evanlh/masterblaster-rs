@@ -33,6 +33,8 @@ pub enum EventTarget {
     Channel(u8),
     /// Audio graph node (for Buzz machines, synths, effects)
     Node(NodeId),
+    /// Sub-channel within a machine node (e.g. tracker channels within TrackerMachine)
+    NodeChannel(NodeId, u8),
     /// Global events (tempo, transport)
     Global,
 }

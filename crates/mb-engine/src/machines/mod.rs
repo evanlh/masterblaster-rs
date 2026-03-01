@@ -2,6 +2,7 @@
 
 mod amiga_filter;
 mod passthrough;
+pub mod tracker;
 
 use alloc::boxed::Box;
 

@@ -42,4 +42,4 @@ pub use modulator::{
 pub use musical_time::{unpack_time, pack_time, MusicalTime, SUB_BEAT_UNIT};
 pub use pattern::{Cell, Note, Pattern};
 pub use sample::{AutoVibrato, LoopType, Sample, SampleData};
-pub use song::{build_tracks, ChannelSettings, Clip, OrderEntry, SeqEntry, Song, Track, find_machine_node};
+pub use song::{build_tracks, ChannelSettings, Clip, OrderEntry, SeqEntry, Song, Track, find_machine_node, find_tracker_node};

@@ -1,5 +1,7 @@
 # Sequencing Model Design
 
+**NOTE**: Much of what's in this doc has been heavily modified by the work in [track-coalescing.md](./track-coalescing.md)
+
 ## Status
 
 - [x] Core types (Track, Clip, SeqEntry)

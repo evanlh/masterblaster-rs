@@ -80,8 +80,6 @@ pub enum NodeType {
     Master,
     /// Sample player
     Sampler { sample_id: u16 },
-    /// Traditional tracker channel (implicit sampler + effects)
-    TrackerChannel { index: u8 },
     /// Buzz machine (emulated)
     BuzzMachine { machine_name: String },
 }
@@ -92,7 +90,6 @@ impl NodeType {
         match self {
             NodeType::Master => alloc::string::String::from("Master"),
             NodeType::Sampler { sample_id } => alloc::format!("Smp {}", sample_id),
-            NodeType::TrackerChannel { index } => alloc::format!("Chan {}", index),
             NodeType::BuzzMachine { machine_name } => machine_name.clone(),
         }
     }

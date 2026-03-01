@@ -60,12 +60,12 @@ fn tribal_60_has_samples() {
 }
 
 #[test]
-fn tribal_60_has_tracker_channels() {
+fn tribal_60_has_tracker_machine() {
     let song = load_fixture("tribal-60.bmx");
     let tracker_nodes: Vec<_> = song.graph.nodes.iter()
-        .filter(|n| matches!(n.node_type, NodeType::TrackerChannel { .. }))
+        .filter(|n| matches!(&n.node_type, NodeType::BuzzMachine { machine_name } if machine_name == "Tracker"))
         .collect();
-    assert!(!tracker_nodes.is_empty(), "should have TrackerChannel nodes");
+    assert!(!tracker_nodes.is_empty(), "should have Tracker machine nodes");
 }
 
 #[test]
@@ -95,20 +95,17 @@ fn tribal_60_tracker_tracks_have_cell_data() {
 }
 
 #[test]
-fn tribal_60_channel_indices_are_sequential() {
+fn tribal_60_channels_match_tracker_tracks() {
     let song = load_fixture("tribal-60.bmx");
-    let mut indices: Vec<u8> = song.graph.nodes.iter()
-        .filter_map(|n| match &n.node_type {
-            NodeType::TrackerChannel { index } => Some(*index),
-            _ => None,
-        })
-        .collect();
-    indices.sort();
-    // Indices should be 0..N, matching song.channels length
-    let expected: Vec<u8> = (0..indices.len() as u8).collect();
-    assert_eq!(indices, expected, "channel indices should be 0-based sequential");
-    assert_eq!(song.channels.len(), indices.len(),
-        "song.channels count should match TrackerChannel count");
+    // song.channels should have entries for each tracker channel
+    assert!(!song.channels.is_empty(), "should have channel settings");
+    // All tracker tracks should have num_channels > 0
+    let total_tracker_channels: u8 = song.tracks.iter()
+        .filter(|t| t.machine_node.is_some())
+        .map(|t| t.num_channels)
+        .sum();
+    assert_eq!(song.channels.len(), total_tracker_channels as usize,
+        "song.channels count should match total tracker channels");
 }
 
 #[test]

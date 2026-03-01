@@ -58,6 +58,14 @@ fn note_delay_amount(effect: &Effect) -> u32 {
     }
 }
 
+/// Build the event target for a track column.
+pub fn target_for_track_column(track: &Track, column: u8) -> EventTarget {
+    match track.machine_node {
+        Some(node_id) => EventTarget::NodeChannel(node_id, column),
+        None => EventTarget::Channel(track.base_channel + column),
+    }
+}
+
 /// Convert a single cell into events and append them to the output.
 ///
 /// `speed` and `rpb` are needed for NoteDelay sub-beat computation:
@@ -65,12 +73,11 @@ fn note_delay_amount(effect: &Effect) -> u32 {
 pub fn schedule_cell(
     cell: &Cell,
     time: MusicalTime,
-    channel: u8,
+    target: EventTarget,
     speed: u32,
     rpb: u32,
     events: &mut Vec<Event>,
 ) {
-    let target = EventTarget::Channel(channel);
     let delay = note_delay_amount(&cell.effect);
     let tpb = speed * rpb;
     let note_time = time.add_ticks(delay, tpb);
@@ -109,91 +116,32 @@ pub fn schedule_cell(
     }
 
     // Volume command is delayed with the note
-    schedule_volume_command(&cell.volume, note_time, channel, events);
+    schedule_volume_command(&cell.volume, note_time, target, events);
     // Effect fires at row time (except NoteDelay/PatternDelay are consumed)
-    schedule_effect(&cell.effect, time, channel, events);
+    schedule_effect(&cell.effect, time, target, events);
 }
 
 /// Convert a volume column command into an event.
 fn schedule_volume_command(
     vol: &VolumeCommand,
     time: MusicalTime,
-    channel: u8,
+    target: EventTarget,
     events: &mut Vec<Event>,
 ) {
-    match vol {
-        VolumeCommand::None => {}
-        VolumeCommand::Volume(v) => {
-            events.push(Event::new(
-                time,
-                EventTarget::Channel(channel),
-                EventPayload::Effect(Effect::SetVolume(*v)),
-            ));
-        }
-        VolumeCommand::Panning(p) => {
-            events.push(Event::new(
-                time,
-                EventTarget::Channel(channel),
-                EventPayload::Effect(Effect::SetPan(*p)),
-            ));
-        }
-        VolumeCommand::TonePorta(v) => {
-            events.push(Event::new(
-                time,
-                EventTarget::Channel(channel),
-                EventPayload::Effect(Effect::TonePorta(*v)),
-            ));
-        }
-        VolumeCommand::Vibrato(v) => {
-            events.push(Event::new(
-                time,
-                EventTarget::Channel(channel),
-                EventPayload::Effect(Effect::Vibrato { speed: 0, depth: *v }),
-            ));
-        }
-        VolumeCommand::VolumeSlideDown(v) => {
-            events.push(Event::new(
-                time,
-                EventTarget::Channel(channel),
-                EventPayload::Effect(Effect::VolumeSlide(-(*v as i8))),
-            ));
-        }
-        VolumeCommand::VolumeSlideUp(v) => {
-            events.push(Event::new(
-                time,
-                EventTarget::Channel(channel),
-                EventPayload::Effect(Effect::VolumeSlide(*v as i8)),
-            ));
-        }
-        VolumeCommand::FineVolSlideDown(v) => {
-            events.push(Event::new(
-                time,
-                EventTarget::Channel(channel),
-                EventPayload::Effect(Effect::FineVolumeSlideDown(*v)),
-            ));
-        }
-        VolumeCommand::FineVolSlideUp(v) => {
-            events.push(Event::new(
-                time,
-                EventTarget::Channel(channel),
-                EventPayload::Effect(Effect::FineVolumeSlideUp(*v)),
-            ));
-        }
-        VolumeCommand::PortaDown(v) => {
-            events.push(Event::new(
-                time,
-                EventTarget::Channel(channel),
-                EventPayload::Effect(Effect::PortaDown(*v)),
-            ));
-        }
-        VolumeCommand::PortaUp(v) => {
-            events.push(Event::new(
-                time,
-                EventTarget::Channel(channel),
-                EventPayload::Effect(Effect::PortaUp(*v)),
-            ));
-        }
-    }
+    let effect = match vol {
+        VolumeCommand::None => return,
+        VolumeCommand::Volume(v) => Effect::SetVolume(*v),
+        VolumeCommand::Panning(p) => Effect::SetPan(*p),
+        VolumeCommand::TonePorta(v) => Effect::TonePorta(*v),
+        VolumeCommand::Vibrato(v) => Effect::Vibrato { speed: 0, depth: *v },
+        VolumeCommand::VolumeSlideDown(v) => Effect::VolumeSlide(-(*v as i8)),
+        VolumeCommand::VolumeSlideUp(v) => Effect::VolumeSlide(*v as i8),
+        VolumeCommand::FineVolSlideDown(v) => Effect::FineVolumeSlideDown(*v),
+        VolumeCommand::FineVolSlideUp(v) => Effect::FineVolumeSlideUp(*v),
+        VolumeCommand::PortaDown(v) => Effect::PortaDown(*v),
+        VolumeCommand::PortaUp(v) => Effect::PortaUp(*v),
+    };
+    events.push(Event::new(time, target, EventPayload::Effect(effect)));
 }
 
 /// Returns true if the effect is consumed by the scheduler (not emitted as event).
@@ -208,7 +156,7 @@ fn is_scheduler_directive(effect: &Effect) -> bool {
 }
 
 /// Convert an effect command into an event, routing tempo/speed to Global.
-fn schedule_effect(effect: &Effect, time: MusicalTime, channel: u8, events: &mut Vec<Event>) {
+fn schedule_effect(effect: &Effect, time: MusicalTime, target: EventTarget, events: &mut Vec<Event>) {
     match effect {
         Effect::None => {}
         e if is_scheduler_directive(e) => {} // consumed by scheduler
@@ -229,7 +177,7 @@ fn schedule_effect(effect: &Effect, time: MusicalTime, channel: u8, events: &mut
         other => {
             events.push(Event::new(
                 time,
-                EventTarget::Channel(channel),
+                target,
                 EventPayload::Effect(*other),
             ));
         }
@@ -275,8 +223,8 @@ fn schedule_track(
 
         // Schedule all columns at this row
         for col in 0..clip.channels {
-            let ch = track_column_to_channel(track, col);
-            schedule_cell(clip.cell(row, col), time, ch, eff_speed, rpb, events);
+            let target = target_for_track_column(track, col);
+            schedule_cell(clip.cell(row, col), time, target, eff_speed, rpb, events);
         }
 
         let fc = scan_row_flow_control(clip, row);
@@ -401,7 +349,7 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].time, MusicalTime::zero());
-        assert_eq!(events[0].target, EventTarget::Channel(0));
+        assert_eq!(events[0].target, EventTarget::NodeChannel(2, 0));
         assert_eq!(
             events[0].payload,
             EventPayload::NoteOn { note: 60, velocity: 64, instrument: 1 }
@@ -444,8 +392,8 @@ mod tests {
         let events = schedule_events(&song);
 
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].target, EventTarget::Channel(0));
-        assert_eq!(events[1].target, EventTarget::Channel(2));
+        assert_eq!(events[0].target, EventTarget::NodeChannel(2, 0));
+        assert_eq!(events[1].target, EventTarget::NodeChannel(2, 2));
         assert_eq!(events[0].time, MusicalTime::zero());
         assert_eq!(events[1].time, MusicalTime::zero());
     }
@@ -516,7 +464,7 @@ mod tests {
         let events = schedule_events(&one_channel_song(pat));
 
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].target, EventTarget::Channel(0));
+        assert_eq!(events[0].target, EventTarget::NodeChannel(2, 0));
         assert_eq!(events[0].payload, EventPayload::Effect(Effect::VolumeSlide(4)));
     }
 

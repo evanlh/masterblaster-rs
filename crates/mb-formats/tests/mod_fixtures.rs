@@ -16,16 +16,16 @@ fn load_fixture(name: &str) -> mb_ir::Song {
     load_mod(&data).unwrap_or_else(|e| panic!("Failed to parse {}: {:?}", name, e))
 }
 
-/// Count notes across all track clips (each track has single-column clips).
+/// Count notes across all track clips (multi-channel patterns).
 fn count_notes(song: &mb_ir::Song) -> usize {
-    // Each multi-channel pattern was split into N single-column clips.
-    // To count total notes, iterate the clip pool of each track.
-    // Since clips are duplicated across tracks (one column per track),
-    // we just need to iterate all tracks' clips and count notes.
     song.tracks.iter()
         .flat_map(|t| t.clips.iter())
         .filter_map(|c| c.pattern())
-        .flat_map(|pat| (0..pat.rows).map(move |row| pat.cell(row, 0)))
+        .flat_map(|pat| {
+            (0..pat.rows).flat_map(move |row| {
+                (0..pat.channels as u8).map(move |col| pat.cell(row, col))
+            })
+        })
         .filter(|cell| matches!(cell.note, Note::On(_)))
         .count()
 }
@@ -60,17 +60,16 @@ fn assert_mod_invariants(song: &mb_ir::Song) {
     assert_eq!(song.initial_tempo, 125);
     assert_eq!(song.initial_speed, 6);
 
-    // 4-channel MOD → 4 tracks
+    // 4-channel MOD → 1 coalesced track with 4 channels
     assert_eq!(song.channels.len(), 4);
-    assert_eq!(song.tracks.len(), 4);
+    assert_eq!(song.tracks.len(), 1);
+    assert_eq!(song.tracks[0].num_channels, 4);
 
-    // All clips: 64 rows, 1 channel (single-column after split)
-    for (ti, track) in song.tracks.iter().enumerate() {
-        for (ci, clip) in track.clips.iter().enumerate() {
-            if let Some(pat) = clip.pattern() {
-                assert_eq!(pat.rows, 64, "Track {} clip {} rows", ti, ci);
-                assert_eq!(pat.channels, 1, "Track {} clip {} channels", ti, ci);
-            }
+    // All clips: 64 rows, 4 channels
+    for (ci, clip) in song.tracks[0].clips.iter().enumerate() {
+        if let Some(pat) = clip.pattern() {
+            assert_eq!(pat.rows, 64, "Clip {} rows", ci);
+            assert_eq!(pat.channels, 4, "Clip {} channels", ci);
         }
     }
 

@@ -1,6 +1,6 @@
 //! Machine trait for audio generators and effects.
 
-use mb_ir::AudioStream;
+use mb_ir::{AudioStream, EventPayload};
 
 /// Whether a machine generates or processes audio.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,4 +37,10 @@ pub trait Machine: AudioStream + Send {
     fn tick(&mut self);
     fn stop(&mut self);
     fn set_param(&mut self, param: u16, value: i32);
+
+    /// Dispatch a channel event to a sub-channel within this machine.
+    fn apply_event(&mut self, _channel: u8, _payload: &EventPayload) {}
+
+    /// Notify the machine of a speed change (ticks per row).
+    fn set_speed(&mut self, _speed: u8) {}
 }
