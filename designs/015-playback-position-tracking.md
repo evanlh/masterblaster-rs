@@ -1,5 +1,9 @@
 # Playback Position Tracking During Flow Control Jumps
 
+Created: 20260301
+Updated: 20260301
+
+
 ## Problem
 
 When a MOD file has a `PositionJump` backward (e.g., ELYSIUM.MOD pattern 21 row 63 has `PositionJump(9)`), the scheduler follows the jump and the engine's `current_time` keeps increasing monotonically. But `time_to_track_position()` (`crates/mb-ir/src/analysis.rs:119`) walks the **static** sequence entries whose time ranges only cover the first linear pass. Once `current_time` exceeds the static sequence's end, the function returns `None` and the GUI stops highlighting the active sequence entry.

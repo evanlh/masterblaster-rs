@@ -1,5 +1,9 @@
 # Sequencing Model Design
 
+Created: 20260212
+Updated: 20260301
+
+
 **NOTE**: Much of what's in this doc has been heavily modified by the work in [track-coalescing.md](./track-coalescing.md)
 
 ## Status

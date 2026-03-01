@@ -1,5 +1,9 @@
 # Edit command system: node bypass, parameters, and pattern editing
 
+Created: 20260214
+Updated: 20260215
+
+
 ## Status
 
 - [x] `Edit` enum in mb-ir (SetCell only; SetNodeParam, SetNodeBypass, pattern ops not yet)

@@ -1,5 +1,9 @@
 # Timing Model Design
 
+Created: 20260212
+Updated: 20260214
+
+
 ## Status
 
 - [x] Phase 1 — Beat-based musical time

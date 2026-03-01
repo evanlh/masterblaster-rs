@@ -1,4 +1,5 @@
 # Rough Notes
+
 Miscellaneous thoughts & TODOs that we need to address or turn into design/ plans.
 
 ## TODOs

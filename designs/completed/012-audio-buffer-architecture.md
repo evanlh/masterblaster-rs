@@ -1,5 +1,9 @@
 # Audio Buffer Architecture
 
+Created: 20260222
+Updated: 20260224
+
+
 ## Status
 
 - [x] Add types to mb-ir

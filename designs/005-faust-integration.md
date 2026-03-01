@@ -1,5 +1,9 @@
 # Faust DSP Integration Design
 
+Created: 20260213
+Updated: 20260222
+
+
 ## Status
 
 - [ ] Shared infrastructure

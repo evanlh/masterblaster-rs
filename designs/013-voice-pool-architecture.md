@@ -1,5 +1,9 @@
 # Voice Pool Architecture
 
+Created: 20260222
+Updated: 20260224
+
+
 ## Status
 
 - [ ] Voice type

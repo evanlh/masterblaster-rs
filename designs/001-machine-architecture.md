@@ -1,5 +1,9 @@
 # Machine Architecture Design
 
+Created: 20260212
+Updated: 20260216
+
+
 ## Status
 
 - [x] Machine trait (`Machine`, `MachineInfo`, `MachineType`, `ParamInfo`, `WorkMode`)

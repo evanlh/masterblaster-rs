@@ -1,5 +1,9 @@
 # Stable IDs (SlotMap) + Allocation-Free Render Path
 
+Created: 20260216
+Updated: 20260222
+
+
 ## Checklist
 
 - [x] 1. Add `assert_no_alloc` test infrastructure and setup/realtime phase boundary

@@ -1,5 +1,9 @@
 # Track Coalescing: Multi-Channel Tracks
 
+Created: 20260228
+Updated: 20260228
+
+
 ## Checklist
 
 ### Phase 1: Track Coalescing
@@ -21,15 +25,15 @@
 - [x] Tests: expect 1 track with N-channel patterns
 - [x] Snapshot tests: byte-identical WAV output
 
-### Phase 2: TrackerMachine (future)
-- [ ] Create `crates/mb-engine/src/machines/tracker.rs` with `TrackerMachine: Machine`
-- [ ] Implement `render()`: render all channels, mix to stereo AudioBuffer
-- [ ] Implement `tick()`: advance channel modulators
-- [ ] Add `EventTarget::NodeChannel(NodeId, u8)` for sub-channel routing
-- [ ] Replace N TrackerChannel graph nodes with 1 TrackerMachine node
-- [ ] Move `apply_channel_event()`, `resolve_sample()` from Engine to TrackerMachine
-- [ ] Remove `NodeType::TrackerChannel` from IR
-- [ ] Remove Engine's hardcoded channel rendering (`render_channel()`, `channels` field)
+### Phase 2: TrackerMachine
+- [x] Create `crates/mb-engine/src/machines/tracker.rs` with `TrackerMachine: Machine`
+- [x] Implement `render()`: render all channels, mix to stereo AudioBuffer
+- [x] Implement `tick()`: advance channel modulators
+- [x] Add `EventTarget::NodeChannel(NodeId, u8)` for sub-channel routing
+- [x] Replace N TrackerChannel graph nodes with 1 TrackerMachine node
+- [x] Move `apply_channel_event()`, `resolve_sample()` from Engine to TrackerMachine
+- [x] Remove `NodeType::TrackerChannel` from IR
+- [x] Remove Engine's hardcoded channel rendering (`render_channel()`, `channels` field)
 
 ## Problem
 

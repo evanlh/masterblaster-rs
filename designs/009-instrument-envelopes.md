@@ -1,5 +1,9 @@
 # Plan: Unify Instrument Envelopes on ModEnvelope + Strengthen MOD Instrument Path
 
+Created: 20260216
+Updated: 20260216
+
+
 ## Context
 
 The `Instrument` type has `volume_envelope`, `panning_envelope`, and `pitch_envelope`
