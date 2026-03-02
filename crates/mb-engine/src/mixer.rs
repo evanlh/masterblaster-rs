@@ -312,7 +312,7 @@ impl Engine {
                     // Master and other pass-through nodes: gather wire inputs
                     // Wire-level gain (from gather_inputs) handles all mixing
                     graph_state::gather_inputs(
-                        &self.song.graph,
+                        &self.graph_state.conn_by_dest,
                         &self.graph_state.node_outputs,
                         node_id,
                         &mut self.graph_state.scratch,
@@ -339,7 +339,7 @@ impl Engine {
         }
 
         graph_state::gather_inputs(
-            &self.song.graph,
+            &self.graph_state.conn_by_dest,
             &self.graph_state.node_outputs,
             node_id,
             &mut self.graph_state.scratch,

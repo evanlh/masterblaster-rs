@@ -46,12 +46,14 @@ impl AudioBuffer {
     }
 
     /// Read-only access to one channel's sample data.
+    #[inline(always)]
     pub fn channel(&self, ch: u16) -> &[f32] {
         let start = ch as usize * self.frames as usize;
         &self.data[start..start + self.frames as usize]
     }
 
     /// Mutable access to one channel's sample data.
+    #[inline(always)]
     pub fn channel_mut(&mut self, ch: u16) -> &mut [f32] {
         let start = ch as usize * self.frames as usize;
         let len = self.frames as usize;
@@ -59,6 +61,7 @@ impl AudioBuffer {
     }
 
     /// Sum overlapping channels from `source` into this buffer.
+    #[inline(always)]
     pub fn mix_from(&mut self, source: &AudioBuffer) {
         let chs = self.channels.min(source.channels);
         let frs = self.frames.min(source.frames) as usize;
@@ -82,13 +85,6 @@ impl AudioBuffer {
             for i in 0..frs {
                 dst[i] += src[i] * gain;
             }
-        }
-    }
-
-    /// Scale all samples by `gain`.
-    pub fn apply_gain(&mut self, gain: f32) {
-        for s in &mut self.data {
-            *s *= gain;
         }
     }
 }
@@ -147,16 +143,6 @@ mod tests {
         dst.mix_from_scaled(&src, 0.5);
         assert!((dst.channel(0)[0] - 0.5).abs() < 1e-6);
         assert!((dst.channel(0)[1] - -0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn apply_gain_scales_all() {
-        let mut buf = AudioBuffer::new(2, 1);
-        buf.channel_mut(0)[0] = 1.0;
-        buf.channel_mut(1)[0] = -0.5;
-        buf.apply_gain(2.0);
-        assert!((buf.channel(0)[0] - 2.0).abs() < 1e-6);
-        assert!((buf.channel(1)[0] - -1.0).abs() < 1e-6);
     }
 
     #[test]

@@ -13,18 +13,25 @@ pub struct GraphState {
     pub topo_order: Vec<NodeId>,
     /// Scratch buffer for gather_inputs (avoids borrow conflicts).
     pub scratch: AudioBuffer,
+    /// Pre-indexed connections by destination node: `conn_by_dest[node_id] = [(from, gain)]`.
+    /// Gains are precomputed to linear scale at init time.
+    pub conn_by_dest: Vec<Vec<(NodeId, f32)>>,
 }
 
 impl GraphState {
-    /// Build graph state from an AudioGraph, computing the topological order.
+    /// Build graph state from an AudioGraph, computing the topological order
+    /// and pre-indexing connections by destination with precomputed gains.
     pub fn from_graph(graph: &AudioGraph) -> Self {
         let topo_order = topological_sort(graph);
+        let n = graph.nodes.len();
+        let conn_by_dest = index_connections_by_dest(graph, n);
         Self {
-            node_outputs: (0..graph.nodes.len())
+            node_outputs: (0..n)
                 .map(|_| AudioBuffer::new(2, 1))
                 .collect(),
             topo_order,
             scratch: AudioBuffer::new(2, 1),
+            conn_by_dest,
         }
     }
 
@@ -86,20 +93,33 @@ fn gain_linear(gain: i16) -> f32 {
     ((gain as f32 + 100.0) / 100.0).max(0.0)
 }
 
+/// Pre-index connections by destination node with precomputed linear gains.
+fn index_connections_by_dest(graph: &AudioGraph, n: usize) -> Vec<Vec<(NodeId, f32)>> {
+    let mut by_dest = vec![Vec::new(); n];
+    for conn in &graph.connections {
+        if (conn.to as usize) < n {
+            by_dest[conn.to as usize].push((conn.from, gain_linear(conn.gain)));
+        }
+    }
+    by_dest
+}
+
 /// Gather input buffers from all connections feeding into `node_id`.
-/// Results are accumulated into `scratch`, which is silenced first.
+/// Uses pre-indexed connections for O(inputs) instead of O(all_connections).
 pub fn gather_inputs(
-    graph: &AudioGraph,
+    conn_by_dest: &[Vec<(NodeId, f32)>],
     node_outputs: &[AudioBuffer],
     node_id: NodeId,
     scratch: &mut AudioBuffer,
 ) {
     scratch.silence();
-    for conn in &graph.connections {
-        if conn.to == node_id {
-            if let Some(src) = node_outputs.get(conn.from as usize) {
-                scratch.mix_from_scaled(src, gain_linear(conn.gain));
-            }
+    let inputs = match conn_by_dest.get(node_id as usize) {
+        Some(v) => v,
+        None => return,
+    };
+    for &(from, gain) in inputs {
+        if let Some(src) = node_outputs.get(from as usize) {
+            scratch.mix_from_scaled(src, gain);
         }
     }
 }
@@ -108,6 +128,10 @@ pub fn gather_inputs(
 mod tests {
     use super::*;
     use mb_ir::{AudioGraph, NodeType};
+
+    fn conn_index(graph: &AudioGraph) -> Vec<Vec<(NodeId, f32)>> {
+        index_connections_by_dest(graph, graph.nodes.len())
+    }
 
     #[test]
     fn master_only_graph() {
@@ -168,7 +192,7 @@ mod tests {
         outputs[b as usize].channel_mut(1)[0] = 150.0 / 32768.0;
 
         let mut scratch = AudioBuffer::new(2, 1);
-        gather_inputs(&graph, &outputs, 0, &mut scratch);
+        gather_inputs(&conn_index(&graph), &outputs, 0, &mut scratch);
         assert!((scratch.channel(0)[0] - 300.0 / 32768.0).abs() < 1e-6);
         assert!((scratch.channel(1)[0] - 200.0 / 32768.0).abs() < 1e-6);
     }
@@ -178,7 +202,7 @@ mod tests {
         let graph = AudioGraph::with_master();
         let outputs = vec![AudioBuffer::new(2, 1)];
         let mut scratch = AudioBuffer::new(2, 1);
-        gather_inputs(&graph, &outputs, 0, &mut scratch);
+        gather_inputs(&conn_index(&graph), &outputs, 0, &mut scratch);
         assert_eq!(scratch.channel(0)[0], 0.0);
         assert_eq!(scratch.channel(1)[0], 0.0);
     }
@@ -201,7 +225,7 @@ mod tests {
         outputs[a as usize].channel_mut(0)[0] = 1.0;
 
         let mut scratch = AudioBuffer::new(2, 1);
-        gather_inputs(&graph, &outputs, 0, &mut scratch);
+        gather_inputs(&conn_index(&graph), &outputs, 0, &mut scratch);
         assert!((scratch.channel(0)[0] - 0.5).abs() < 1e-6);
     }
 
@@ -233,7 +257,7 @@ mod tests {
         outputs[a as usize].channel_mut(0)[0] = 1.0;
 
         let mut scratch = AudioBuffer::new(2, 1);
-        gather_inputs(&graph, &outputs, 0, &mut scratch);
+        gather_inputs(&conn_index(&graph), &outputs, 0, &mut scratch);
         assert_eq!(scratch.channel(0)[0], 0.0);
     }
 

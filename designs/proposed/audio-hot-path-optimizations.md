@@ -101,120 +101,27 @@ pub fn get_stereo_interpolated(&self, pos_fixed: u64) -> (i16, i16) {
 
 ---
 
-## P3: gather_inputs Linear Scan
+## P3: gather_inputs Linear Scan — DONE
 
-**File:** `crates/mb-engine/src/graph_state.rs:91-105`
+**File:** `crates/mb-engine/src/graph_state.rs`
 
-**Problem:** `gather_inputs` iterates ALL graph connections to find those targeting a specific node. Called once per node per frame. For a 4-channel MOD with 6 connections and 3 nodes, that's 18 connection checks per frame — but scales poorly with larger BMX graphs (dozens of machines, hundreds of connections).
+**Problem:** `gather_inputs` iterated ALL graph connections to find those targeting a specific node. Called once per node per frame. For a 4-channel MOD with 6 connections and 3 nodes, that's 18 connection checks per frame — but scales poorly with larger BMX graphs (dozens of machines, hundreds of connections).
 
-**Current code:**
-```rust
-pub fn gather_inputs(
-    graph: &AudioGraph,
-    node_outputs: &[AudioBuffer],
-    node_id: NodeId,
-    scratch: &mut AudioBuffer,
-) {
-    scratch.silence();
-    for conn in &graph.connections {
-        if conn.to == node_id {
-            if let Some(src) = node_outputs.get(conn.from as usize) {
-                scratch.mix_from_scaled(src, gain_linear(conn.gain));
-            }
-        }
-    }
-}
-```
+**Fix applied:** Added `conn_by_dest: Vec<Vec<(NodeId, f32)>>` to `GraphState`, pre-indexed at init via `index_connections_by_dest()`. `gather_inputs` now takes the pre-indexed slice and iterates only the inputs for the target node. Gains are precomputed to linear f32 at init time (also resolves P4).
 
-**Proposed fix:** Pre-index connections by destination node at init time. Store in `GraphState`:
-
-```rust
-/// Pre-indexed connections: conn_by_dest[node_id] = [(from, gain_linear)]
-pub struct GraphState {
-    pub node_outputs: Vec<AudioBuffer>,
-    pub topo_order: Vec<NodeId>,
-    pub scratch: AudioBuffer,
-    pub conn_by_dest: Vec<Vec<(NodeId, f32)>>,  // NEW
-}
-
-impl GraphState {
-    pub fn from_graph(graph: &AudioGraph) -> Self {
-        let topo_order = topological_sort(graph);
-        let n = graph.nodes.len();
-
-        // Pre-index connections by destination, precompute gain
-        let mut conn_by_dest = vec![Vec::new(); n];
-        for conn in &graph.connections {
-            let gain = gain_linear(conn.gain);  // P4: precomputed here
-            conn_by_dest[conn.to as usize].push((conn.from, gain));
-        }
-
-        Self {
-            node_outputs: (0..n).map(|_| AudioBuffer::new(2, 1)).collect(),
-            topo_order,
-            scratch: AudioBuffer::new(2, 1),
-            conn_by_dest,
-        }
-    }
-}
-
-/// Gather inputs using pre-indexed connections (O(inputs) not O(all_connections)).
-pub fn gather_inputs_indexed(
-    conn_by_dest: &[(NodeId, f32)],
-    node_outputs: &[AudioBuffer],
-    scratch: &mut AudioBuffer,
-) {
-    scratch.silence();
-    for &(from, gain) in conn_by_dest {
-        if let Some(src) = node_outputs.get(from as usize) {
-            scratch.mix_from_scaled(src, gain);
-        }
-    }
-}
-```
-
-**Impact:** Reduces per-frame work from O(total_connections) to O(node_inputs). Also resolves P4 (gain precomputation) as a side effect. Most impactful for BMX files with large graphs.
+**Impact:** Reduces per-frame work from O(total_connections) to O(node_inputs). Eliminates the `<&Vec as IntoIterator>::into_iter` hot-path hit visible in profiling.
 
 ---
 
-## P4: gain_linear Recomputed Per Frame
+## P4: gain_linear Recomputed Per Frame — DONE
 
-**File:** `crates/mb-engine/src/graph_state.rs:85-87`
+**File:** `crates/mb-engine/src/graph_state.rs`
 
-**Problem:** `gain_linear` does floating-point arithmetic on every connection every frame:
+**Problem:** `gain_linear` did floating-point arithmetic on every connection every frame. Wire gains are static after load.
 
-```rust
-fn gain_linear(gain: i16) -> f32 {
-    ((gain as f32 + 100.0) / 100.0).max(0.0)
-}
-```
+**Fix applied:** Resolved as part of P3. The `conn_by_dest` structure stores precomputed `f32` gains directly — `gain_linear` is called once per connection at init, never in the render loop.
 
-Wire gains are static after load — they never change during playback.
-
-**Proposed fix:** Precompute at init time as part of the P3 fix (shown above). The `conn_by_dest` structure stores `f32` gains directly.
-
-If P3 is not implemented, a simpler alternative is to cache gains in a parallel `Vec<f32>` alongside `graph.connections`:
-
-```rust
-pub struct GraphState {
-    // ...existing fields...
-    pub conn_gains: Vec<f32>,  // Parallel to graph.connections
-}
-
-// At init:
-conn_gains: graph.connections.iter().map(|c| gain_linear(c.gain)).collect(),
-
-// In gather_inputs:
-for (conn, &gain) in graph.connections.iter().zip(self.conn_gains.iter()) {
-    if conn.to == node_id {
-        if let Some(src) = node_outputs.get(conn.from as usize) {
-            scratch.mix_from_scaled(src, gain);
-        }
-    }
-}
-```
-
-**Impact:** Eliminates per-frame float division. Minor on its own but free when bundled with P3.
+**Impact:** Eliminates per-frame float division for every connection.
 
 ---
 
@@ -472,10 +379,178 @@ if sample.has_loop() && pos_samples >= sample.loop_end as u64 {
 | Issue | Impact | Effort | Recommendation |
 |-------|--------|--------|----------------|
 | P2 | High (most samples are mono) | Low | Do first — simple, high ROI |
-| P3+P4 | Medium (scales with graph size) | Medium | Do together — pre-index at init |
+| ~~P3+P4~~ | ~~Medium (scales with graph size)~~ | ~~Medium~~ | ~~Done — pre-indexed conn_by_dest at init~~ |
 | P6 | Medium (removes div from 97% of frames) | Low | Easy win — lazy position |
 | P7 | Low-Medium (branch predictor helps) | Medium-High | Normalize at load time |
 | P5 | Low (events are infrequent) | Low | Quick cleanup |
 | Q1-Q5 | Negligible | Low | Address opportunistically |
 
 Total estimated reduction in per-frame work: ~30-40% fewer instructions in the sample read path (P2+P7), O(n) → O(1) connection lookup (P3), eliminated unnecessary computation (P4, P6).
+
+---
+
+## P1: Block-Based Graph Rendering (SIMD prerequisite)
+
+### Why SIMD doesn't help today
+
+All the mixing functions (`mix_from_scaled`, `silence`, `clear_outputs`) operate on `AudioBuffer` with `frames: 1` — two f32 values per channel. SIMD needs contiguous runs of data (128+ samples) to outperform scalar code. With 1-frame buffers, the loop bodies execute twice and the overhead of SIMD setup would dominate.
+
+LLVM *will* auto-vectorize simple loops like `dst[i] += src[i] * gain` in release builds — no manual intrinsics needed — but only when `frames` is large enough for the vectorizer to emit SIMD instructions instead of scalar fallback.
+
+### Current architecture: per-frame graph traversal
+
+The audio thread already batches work into `BLOCK_SIZE` (256) chunks in `run_audio_loop` (`mb-master/src/lib.rs:387`):
+
+```rust
+let n = frames_until_report(frame_count, report_interval, BLOCK_SIZE);
+engine.render_frames_into(&mut batch[..n]);
+```
+
+But `render_frames_into` just loops over `render_frame()`:
+
+```rust
+pub fn render_frames_into(&mut self, buf: &mut [[f32; 2]]) {
+    for frame in buf.iter_mut() {
+        *frame = self.render_frame();
+    }
+}
+```
+
+And each `render_frame()` does a full graph traversal for 1 sample:
+
+```
+render_frame_inner()
+  ├── drain_until() + dispatch events
+  ├── render_graph()                    // full topo walk
+  │   ├── clear_outputs()              // zero N×2 floats
+  │   ├── for each node:
+  │   │   ├── gather_inputs()          // mix 1 sample per connection
+  │   │   └── machine.render()         // process 1 sample
+  │   └── read master output           // 2 floats
+  └── advance time + maybe process_tick
+```
+
+Per-frame overhead that would be amortized by blocks:
+- Topo order iteration (index loop, node lookup, match on NodeType)
+- `clear_outputs()` — N buffer silences
+- `gather_inputs()` — connection iteration, bounds checks
+- scratch→output copy per node
+
+### Target architecture: block-based graph traversal
+
+Process 256 frames per graph traversal. Node output buffers become `AudioBuffer::new(2, 256)`. Each machine renders a full block. `mix_from_scaled` loops over 256 f32s — LLVM auto-vectorizes this to SSE/AVX on x86 and NEON on ARM.
+
+```
+render_block(block_size: usize) -> &AudioBuffer
+  ├── drain events up to block end time
+  ├── render_graph(block_size)           // one topo walk for 256 frames
+  │   ├── clear_outputs()               // zero N×512 floats (vectorized)
+  │   ├── for each node:
+  │   │   ├── gather_inputs()           // mix 256 samples per connection (vectorized)
+  │   │   └── machine.render(256)       // process 256 samples (vectorized)
+  │   └── return master output buffer
+  └── advance time by block_size samples
+```
+
+### The hard part: tick/event splitting
+
+The reason this isn't trivial is that events and tick processing currently happen *between individual samples* inside `render_frame_inner`:
+
+1. **Events** fire at specific `MusicalTime` positions. A NoteOn mid-block means the first N frames are silent and the remaining 256-N frames have audio. The block must be split at event boundaries.
+
+2. **Tick processing** (`process_tick`) runs every `samples_per_tick` samples (~735 at 125 BPM). Per-tick effects (volume slide, vibrato, portamento) change channel parameters that affect rendering. A 256-frame block at 44100 Hz spans ~5.8ms, while a tick at 125 BPM is ~16.7ms, so most blocks won't contain a tick boundary — but some will.
+
+3. **Tempo changes** (`SetTempo`) alter `samples_per_tick` mid-song. Speed changes (`SetSpeed`) alter tick timing. Both can occur at any event time.
+
+### Proposed approach: sub-block splitting
+
+Split each block at tick boundaries and event times. Within each sub-block, parameters are constant and rendering can be vectorized:
+
+```rust
+fn render_block(&mut self, output: &mut AudioBuffer) {
+    let total_frames = output.frames() as usize;
+    let mut offset = 0;
+
+    while offset < total_frames {
+        // Find next boundary: tick or event, whichever comes first
+        let frames_to_tick = self.samples_per_tick - self.sample_counter;
+        let frames_to_event = self.frames_until_next_event();
+        let sub_block = frames_to_tick
+            .min(frames_to_event)
+            .min(total_frames - offset) as usize;
+
+        // Render sub-block: parameters constant, SIMD-friendly
+        self.render_graph_block(output, offset, sub_block);
+        offset += sub_block;
+
+        // Advance time and process any boundaries
+        self.sample_counter += sub_block as u32;
+        if self.sample_counter >= self.samples_per_tick {
+            self.sample_counter = 0;
+            self.advance_tick();
+            self.process_tick();
+        }
+        self.dispatch_pending_events();
+    }
+}
+```
+
+The key insight: within a sub-block, all channel parameters (volume, period, panning, increment) are frozen. `ChannelState::render` can then fill N frames in a tight loop that LLVM vectorizes, instead of returning one `Frame` at a time.
+
+### What needs to change
+
+| Component | Current (per-frame) | Target (per-block) |
+|-----------|--------------------|--------------------|
+| `GraphState` node_outputs | `AudioBuffer::new(2, 1)` | `AudioBuffer::new(2, BLOCK_SIZE)` |
+| `GraphState` scratch | `AudioBuffer::new(2, 1)` | `AudioBuffer::new(2, BLOCK_SIZE)` |
+| `ChannelState::render` | Returns `Frame` (1 sample) | Fills `&mut [f32]` slice (N samples) |
+| `TrackerMachine::render` | Loops channels, 1 frame each | Loops channels, N frames each |
+| `Engine::render_frame_inner` | Events → graph → advance | Split block at boundaries, render sub-blocks |
+| `run_audio_loop` interleave | Per-sample `batch[i][0/1]` | Could use planar→interleaved bulk copy |
+| `AmigaFilter` | Processes 1 sample | Processes N samples (filter state carries across) |
+
+### ChannelState block rendering
+
+The innermost hot loop. Currently:
+
+```rust
+pub(crate) fn render(&mut self, sample: &Sample) -> Frame {
+    let (sample_l, sample_r) = sample.data.get_stereo_interpolated(self.position);
+    // ... volume, panning math ...
+    self.position += self.increment;
+    // ... loop handling ...
+    Frame { left, right }
+}
+```
+
+Block version — tight loop with constant volume/panning, SIMD-friendly:
+
+```rust
+pub(crate) fn render_block(
+    &mut self, sample: &Sample, left: &mut [f32], right: &mut [f32],
+) {
+    let vol = (self.volume as i32 + self.volume_offset as i32).clamp(0, 64);
+    let pan_right = self.panning as i32 + 64;
+    let left_vol = ((128 - pan_right) * vol) >> 7;
+    let right_vol = (pan_right * vol) >> 7;
+
+    for i in 0..left.len() {
+        let (sl, sr) = sample.data.get_stereo_interpolated(self.position);
+        left[i] += (sl as i32 * left_vol) as f32 / (32768.0 * 64.0);
+        right[i] += (sr as i32 * right_vol) as f32 / (32768.0 * 64.0);
+        self.position += self.increment;
+    }
+    self.handle_loop(sample);
+}
+```
+
+Volume/panning are hoisted out of the loop (constant within a sub-block). The inner loop is a simple multiply-accumulate that LLVM can vectorize. Loop boundary checks move to end-of-block.
+
+### Estimated impact
+
+- **Graph overhead**: Amortized across 256 frames instead of per-frame. ~100x reduction in topo walk / node lookup / connection iteration overhead.
+- **SIMD auto-vectorization**: `mix_from_scaled` over 256 f32s → 4x-8x throughput on SSE/AVX. `silence()` similarly vectorized.
+- **Cache efficiency**: Processing 256 contiguous samples per channel improves spatial locality vs jumping between channels every sample.
+- **Reduced function call overhead**: One `render()` call per machine per block vs 256 calls.
+
+This is the single largest potential optimization — likely 3-5x overall throughput improvement in the graph rendering path. It's also the highest effort, touching the engine's core render loop, every machine, and `ChannelState`. Should be done after the simpler P2-P7 fixes.
