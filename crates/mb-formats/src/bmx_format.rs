@@ -244,8 +244,9 @@ fn build_wave_lookup(bmx_waves: &[BmxWave]) -> Vec<(u16, u8)> {
 /// Look up instrument number from Buzz wave index. 0 = no instrument.
 fn wave_to_instrument(wave: u8, lookup: &[(u16, u8)]) -> u8 {
     if wave == 0 { return 0; }
+    let slot = (wave - 1) as u16; // Pattern byte is 1-based, WAVT index is 0-based
     lookup.iter()
-        .find(|(idx, _)| *idx == wave as u16)
+        .find(|(idx, _)| *idx == slot)
         .map(|(_, inst)| *inst)
         .unwrap_or(0)
 }
@@ -1545,10 +1546,10 @@ mod tests {
     #[test]
     fn wave_lookup_maps_correctly() {
         let lookup = vec![(5u16, 1u8), (12, 2)];
-        assert_eq!(wave_to_instrument(0, &lookup), 0);
-        assert_eq!(wave_to_instrument(5, &lookup), 1);
-        assert_eq!(wave_to_instrument(12, &lookup), 2);
-        assert_eq!(wave_to_instrument(99, &lookup), 0);
+        assert_eq!(wave_to_instrument(0, &lookup), 0);   // No instrument
+        assert_eq!(wave_to_instrument(6, &lookup), 1);   // Wave byte 6 → slot 5 → instrument 1
+        assert_eq!(wave_to_instrument(13, &lookup), 2);  // Wave byte 13 → slot 12 → instrument 2
+        assert_eq!(wave_to_instrument(99, &lookup), 0);  // Unknown → no instrument
     }
 
     #[test]

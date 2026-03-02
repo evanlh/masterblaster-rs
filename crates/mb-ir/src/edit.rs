@@ -13,4 +13,6 @@ pub enum Edit {
         column: u8,
         cell: Cell,
     },
+    /// Bypass (mute) or unbypass a graph node.
+    SetNodeBypass { node: u16, bypassed: bool },
 }

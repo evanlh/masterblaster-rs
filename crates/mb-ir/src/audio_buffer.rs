@@ -72,6 +72,7 @@ impl AudioBuffer {
     }
 
     /// Sum overlapping channels from `source` into this buffer with gain.
+    #[inline(always)]
     pub fn mix_from_scaled(&mut self, source: &AudioBuffer, gain: f32) {
         let chs = self.channels.min(source.channels);
         let frs = self.frames.min(source.frames) as usize;

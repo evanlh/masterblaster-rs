@@ -140,10 +140,14 @@ impl Controller {
         }
     }
 
-    /// Toggle mute state on a track. Takes effect on next `play()`.
+    /// Toggle mute state on a track. Sends bypass to audio thread for live mute.
     pub fn toggle_track_mute(&mut self, track_idx: usize) {
-        if let Some(track) = self.song.tracks.get_mut(track_idx) {
-            track.muted = !track.muted;
+        let Some(track) = self.song.tracks.get_mut(track_idx) else { return };
+        track.muted = !track.muted;
+        let muted = track.muted;
+        let node_id = track.machine_node;
+        if let Some(node_id) = node_id {
+            self.push_edit(Edit::SetNodeBypass { node: node_id, bypassed: muted });
         }
     }
 
@@ -152,6 +156,11 @@ impl Controller {
     /// Apply an edit to the local song and push it to the audio thread if playing.
     pub fn apply_edit(&mut self, edit: Edit) {
         apply_edit_to_song(&mut self.song, &edit);
+        self.push_edit(edit);
+    }
+
+    /// Push an edit to the audio thread (if playing).
+    fn push_edit(&mut self, edit: Edit) {
         if let Some(pb) = &mut self.playback {
             let _ = pb.edit_producer.try_push(edit);
         }
@@ -170,6 +179,12 @@ impl Controller {
     fn play_song(&mut self, song: Song) {
         self.stop();
 
+        // Collect initial mute state before song is moved to audio thread
+        let initial_bypasses: Vec<_> = song.tracks.iter()
+            .filter(|t| t.muted)
+            .filter_map(|t| t.machine_node)
+            .collect();
+
         let stop_signal = Arc::new(AtomicBool::new(false));
         let current_time = Arc::new(AtomicU64::new(0));
         let finished = Arc::new(AtomicBool::new(false));
@@ -185,13 +200,20 @@ impl Controller {
             audio_thread(song, stop, time, done, edit_consumer);
         });
 
-        self.playback = Some(PlaybackHandle {
+        let mut pb = PlaybackHandle {
             stop_signal,
             current_time,
             finished,
             thread: Some(thread),
             edit_producer,
-        });
+        };
+
+        // Send initial bypass state for tracks muted before play
+        for node_id in initial_bypasses {
+            let _ = pb.edit_producer.try_push(Edit::SetNodeBypass { node: node_id, bypassed: true });
+        }
+
+        self.playback = Some(pb);
     }
 
     pub fn stop(&mut self) {
@@ -267,6 +289,7 @@ fn apply_edit_to_song(song: &mut Song, edit: &Edit) {
                 *pat.cell_mut(*row, *column) = *cell;
             }
         }
+        Edit::SetNodeBypass { .. } => {} // Handled by engine directly
     }
 }
 

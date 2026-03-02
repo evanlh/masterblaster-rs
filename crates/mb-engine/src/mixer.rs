@@ -40,6 +40,8 @@ pub struct Engine {
     song_end_time: Option<MusicalTime>,
     /// Machine instances (indexed by NodeId; `Some` only for BuzzMachine nodes).
     machines: Vec<Option<Box<dyn Machine>>>,
+    /// Per-node bypass flags (indexed by NodeId).
+    node_bypass: Vec<bool>,
 }
 
 /// Find the channel settings slice for a tracker node from the song's tracks.
@@ -116,6 +118,7 @@ impl Engine {
 
         // Instantiate machines for BuzzMachine nodes
         let machines_vec = init_machines(&song, sample_rate);
+        let node_bypass = vec![false; song.graph.nodes.len()];
 
         let mut engine = Self {
             song,
@@ -132,6 +135,7 @@ impl Engine {
             playing: false,
             song_end_time: None,
             machines: machines_vec,
+            node_bypass,
         };
 
         engine.update_samples_per_tick();
@@ -330,6 +334,10 @@ impl Engine {
     /// Render a BuzzMachine node: gather inputs → machine.render() → output.
     /// Wire-level gain handles mixing; no per-node attenuation needed.
     fn render_machine(&mut self, node_id: u16) {
+        if self.node_bypass.get(node_id as usize).copied().unwrap_or(false) {
+            return; // Bypassed: node_outputs already zeroed by clear_outputs
+        }
+
         graph_state::gather_inputs(
             &self.song.graph,
             &self.graph_state.node_outputs,
@@ -396,6 +404,11 @@ impl Engine {
         match edit {
             Edit::SetCell { track, clip, row, column, cell } => {
                 self.apply_set_cell(*track, *clip, *row, *column, *cell);
+            }
+            Edit::SetNodeBypass { node, bypassed } => {
+                if let Some(slot) = self.node_bypass.get_mut(*node as usize) {
+                    *slot = *bypassed;
+                }
             }
         }
     }
@@ -617,5 +630,46 @@ mod tests {
 
         let cell = Cell { note: Note::On(60), instrument: 1, ..Cell::empty() };
         engine.apply_edits(&[Edit::SetCell { track: 0, clip: 0, row: 999, column: 0, cell }]);
+    }
+
+    // === Node bypass tests ===
+
+    fn engine_with_note(song: &Song) -> Engine {
+        let mut engine = Engine::new(song.clone(), SAMPLE_RATE);
+        engine.play();
+        schedule_note(&mut engine, song, 48, 1);
+        engine
+    }
+
+    #[test]
+    fn bypass_silences_machine() {
+        let song = song_with_sample(vec![127; 1000], 64);
+        let node_id = tracker_node(&song);
+        let mut engine = engine_with_note(&song);
+
+        engine.apply_edits(&[Edit::SetNodeBypass { node: node_id, bypassed: true }]);
+        let frame = engine.render_frame();
+        assert_eq!(frame, [0.0, 0.0], "bypassed node should produce silence");
+    }
+
+    #[test]
+    fn unbypass_restores_audio() {
+        let song = song_with_sample(vec![127; 1000], 64);
+        let node_id = tracker_node(&song);
+        let mut engine = engine_with_note(&song);
+
+        engine.apply_edits(&[Edit::SetNodeBypass { node: node_id, bypassed: true }]);
+        engine.render_frame();
+
+        engine.apply_edits(&[Edit::SetNodeBypass { node: node_id, bypassed: false }]);
+        let frame = engine.render_frame();
+        assert!(is_nonsilent(&frame), "unbypassed node should produce audio");
+    }
+
+    #[test]
+    fn bypass_invalid_node_is_noop() {
+        let song = song_with_sample(vec![127; 1000], 64);
+        let mut engine = Engine::new(song, SAMPLE_RATE);
+        engine.apply_edits(&[Edit::SetNodeBypass { node: 999, bypassed: true }]);
     }
 }

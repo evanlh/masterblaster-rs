@@ -16,3 +16,4 @@ Miscellaneous thoughts & TODOs that we need to address or turn into design/ plan
 - [ ] feat: Keybindings for nav between pannels-- pause this on deciding whether Clips and Samples columns are how we want to do this, but basically we want a keybinding to navigate between panels (Tab probably) so you can navigate all of the viewports via the keyboard. Also will need arrow/selection of Clips & Samples.
 - [ ] feat: We can't play one-off samples to preview what they sound like. This should work in either Edit or non-Edit mode, keyboard should shift the pitch. The way we do this for Patterns is building a whole Song & sending it over because we clone the Song for the audio thread. Might need to investigate more efficient ways of doing that, as there is also some noticeable latency when playing patterns.
 - [ ] bug: Can't scroll past 1F in pattern views with 256 rows in Endorphin Rush - Skooled.
+- [ ] bug: Mute but doesn't do anything once song is playing
