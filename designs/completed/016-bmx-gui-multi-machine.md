@@ -13,7 +13,7 @@ Updated: 2026-03-02
 - [x] `NodeType::label()` method (named `label` instead of `name`)
 - [x] Track position modeline (`track_position_modeline()`)
 - [x] View-specific modelines (pattern + sequencer)
-- [ ] GUI tests for BMX track switching + sequencer view
+- [x] GUI tests for BMX track switching + sequencer view
 
 ## Context
 
