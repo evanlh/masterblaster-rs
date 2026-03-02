@@ -220,6 +220,15 @@ impl Clip {
     }
 }
 
+/// How a sequence entry's playback was terminated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SeqTermination {
+    #[default]
+    Natural,
+    Mute,
+    Break,
+}
+
 /// An entry in a track's sequence (playback order).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeqEntry {
@@ -227,6 +236,10 @@ pub struct SeqEntry {
     pub start: MusicalTime,
     /// Index into the track's `clips` pool
     pub clip_idx: u16,
+    /// Playback length in rows (may be truncated by Mute/Break).
+    pub length: u16,
+    /// How this entry's playback ends.
+    pub termination: SeqTermination,
 }
 
 // --- Track building from legacy format data ---
@@ -283,7 +296,8 @@ fn build_sequence_from_order(
     for entry in order {
         match entry {
             OrderEntry::Pattern(idx) => {
-                sequence.push(SeqEntry { start: time, clip_idx: *idx as u16 });
+                let length = patterns.get(*idx as usize).map_or(0, |p| p.rows);
+                sequence.push(SeqEntry { start: time, clip_idx: *idx as u16, length, termination: SeqTermination::Natural });
                 if let Some(pattern) = patterns.get(*idx as usize) {
                     let pat_rpb = pattern.rows_per_beat.map_or(rpb, |r| r as u32);
                     time = time.add_rows(pattern.rows as u32, pat_rpb);
@@ -300,10 +314,11 @@ fn build_sequence_from_order(
 /// Compute the end time for a track (time after its last clip finishes).
 fn track_end_time(track: &Track, song_rpb: u8) -> Option<MusicalTime> {
     let last = track.sequence.last()?;
-    let clip = track.clips.get(last.clip_idx as usize)?;
-    let pattern = clip.pattern()?;
-    let rpb = pattern.rows_per_beat.map_or(song_rpb as u32, |r| r as u32);
-    Some(last.start.add_rows(pattern.rows as u32, rpb))
+    let rpb = track.clips.get(last.clip_idx as usize)
+        .and_then(|c| c.pattern())
+        .and_then(|p| p.rows_per_beat)
+        .map_or(song_rpb as u32, |r| r as u32);
+    Some(last.start.add_rows(last.length as u32, rpb))
 }
 
 #[cfg(test)]

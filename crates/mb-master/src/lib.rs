@@ -124,7 +124,10 @@ impl Controller {
     /// Add a sequence entry to the given track.
     pub fn add_seq_entry(&mut self, track_idx: usize, clip_idx: u16) {
         let start = track_end_time(&self.song, track_idx);
-        let entry = mb_ir::SeqEntry { start, clip_idx };
+        let length = self.song.tracks.get(track_idx)
+            .and_then(|t| t.get_pattern_at(clip_idx as usize))
+            .map_or(0, |p| p.rows);
+        let entry = mb_ir::SeqEntry { start, clip_idx, length, termination: mb_ir::SeqTermination::Natural };
         if let Some(track) = self.song.tracks.get_mut(track_idx) {
             track.sequence.push(entry);
         }
@@ -270,7 +273,10 @@ fn apply_edit_to_song(song: &mut Song, edit: &Edit) {
 /// Rebuild track sequences to play only a single clip on a single track.
 fn rebuild_track_sequences(song: &mut Song, track_idx: usize, clip_idx: u16) {
     use mb_ir::SeqEntry;
-    let entry = SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx };
+    let length = song.tracks.get(track_idx)
+        .and_then(|t| t.get_pattern_at(clip_idx as usize))
+        .map_or(0, |p| p.rows);
+    let entry = SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx, length, termination: mb_ir::SeqTermination::Natural };
     for (i, track) in song.tracks.iter_mut().enumerate() {
         track.sequence = if i == track_idx && (clip_idx as usize) < track.clips.len() {
             vec![entry]
@@ -400,10 +406,11 @@ fn track_end_time(song: &Song, track_idx: usize) -> mb_ir::MusicalTime {
     song.tracks.get(track_idx)
         .and_then(|t| {
             let last = t.sequence.last()?;
-            let clip = t.clips.get(last.clip_idx as usize)?;
-            let pat = clip.pattern()?;
-            let pat_rpb = pat.rows_per_beat.map_or(rpb, |r| r as u32);
-            Some(last.start.add_rows(pat.rows as u32, pat_rpb))
+            let pat_rpb = t.clips.get(last.clip_idx as usize)
+                .and_then(|c| c.pattern())
+                .and_then(|p| p.rows_per_beat)
+                .map_or(rpb, |r| r as u32);
+            Some(last.start.add_rows(last.length as u32, pat_rpb))
         })
         .unwrap_or(mb_ir::MusicalTime::zero())
 }

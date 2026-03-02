@@ -99,8 +99,8 @@ pub fn sequencer_panel(ui: &imgui::Ui, gui: &mut GuiState) {
 
         // Build lookup: for each track, map beat → clip_idx
         let song = gui.controller.song();
-        let lookups: Vec<std::collections::HashMap<u32, u16>> = song.tracks.iter()
-            .map(|t| seq_beat_lookup(t, beats_per_seq_row))
+        let lookups: Vec<std::collections::HashMap<u32, SeqCellContent>> = song.tracks.iter()
+            .map(|t| seq_beat_lookup(t, beats_per_seq_row, rpb))
             .collect();
 
         // Playing positions per track
@@ -140,10 +140,13 @@ pub fn sequencer_panel(ui: &imgui::Ui, gui: &mut GuiState) {
                     draw_playing_bg(ui, track_col_width);
                 }
 
-                let color = cell_color(is_playing, muted[ti], lookup.contains_key(&beat));
+                let has_data = lookup.contains_key(&beat);
+                let color = cell_color(is_playing, muted[ti], has_data);
                 let _token = ui.push_style_color(imgui::StyleColor::Text, color);
                 match lookup.get(&beat) {
-                    Some(clip_idx) => ui.text(format!("{:02X}", clip_idx)),
+                    Some(SeqCellContent::Pattern(idx)) => ui.text(format!("{:02X}", idx)),
+                    Some(SeqCellContent::Mute) => ui.text("--"),
+                    Some(SeqCellContent::Break) => ui.text("=="),
                     None => ui.text(".."),
                 }
             }
@@ -164,14 +167,37 @@ fn cell_color(is_playing: bool, is_muted: bool, has_data: bool) -> [f32; 4] {
     }
 }
 
-/// Build a map from beat offset → clip_idx for a track's sequence.
-fn seq_beat_lookup(track: &mb_ir::Track, beats_per_row: u32) -> std::collections::HashMap<u32, u16> {
+/// Content for a sequencer grid cell.
+#[derive(Clone, Copy)]
+enum SeqCellContent {
+    Pattern(u16),
+    Mute,
+    Break,
+}
+
+/// Build a map from beat offset → cell content for a track's sequence.
+fn seq_beat_lookup(track: &mb_ir::Track, beats_per_row: u32, rpb: u32) -> std::collections::HashMap<u32, SeqCellContent> {
     let mut map = std::collections::HashMap::new();
     for entry in &track.sequence {
         let beat = entry.start.beat as u32;
         let grid_beat = (beat / beats_per_row.max(1)) * beats_per_row.max(1);
         if grid_beat == beat {
-            map.insert(beat, entry.clip_idx);
+            map.insert(beat, SeqCellContent::Pattern(entry.clip_idx));
+        }
+
+        // Insert termination marker at the truncation point
+        if entry.termination != mb_ir::SeqTermination::Natural {
+            let end_time = entry.start.add_rows(entry.length as u32, rpb);
+            let end_beat = end_time.beat as u32;
+            let grid_end = (end_beat / beats_per_row.max(1)) * beats_per_row.max(1);
+            if grid_end == end_beat {
+                let marker = match entry.termination {
+                    mb_ir::SeqTermination::Mute => SeqCellContent::Mute,
+                    mb_ir::SeqTermination::Break => SeqCellContent::Break,
+                    _ => unreachable!(),
+                };
+                map.insert(end_beat, marker);
+            }
         }
     }
     map

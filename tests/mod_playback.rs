@@ -210,7 +210,7 @@ fn musiklinjen_pattern7_diagnostics() {
 
     // Render clip 7 in isolation — rebuild sequences to play only clip 7
     let mut isolated = song.clone();
-    let entry = mb_ir::SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx: 7 };
+    let entry = mb_ir::SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx: 7, length: 64, termination: mb_ir::SeqTermination::Natural };
     for track in &mut isolated.tracks {
         track.sequence = if track.clips.len() > 7 {
             vec![entry]
@@ -286,7 +286,7 @@ fn setspeed_produces_ritardando() {
 
     // Render clip 20 in isolation
     let mut isolated = song.clone();
-    let entry = mb_ir::SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx: 20 };
+    let entry = mb_ir::SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx: 20, length: 64, termination: mb_ir::SeqTermination::Natural };
     for track in &mut isolated.tracks {
         track.sequence = if track.clips.len() > 20 {
             vec![entry]

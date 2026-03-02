@@ -741,18 +741,39 @@ fn parse_sequ(
         let mach_name = mach.map_or("?", |m| m.name.as_str());
         let is_tracker = mach.is_some_and(|m| m.is_tracker);
 
-        // Parse sequence events
-        let mut seq_entries = Vec::new();
+        // Parse sequence events — two-pass: collect raw, then build SeqEntries
+        let mut raw_events: Vec<(u32, u32)> = Vec::new();
         for _ in 0..num_events {
             let position = r.read_var_uint(bpep)?;
             let raw_event = r.read_var_uint(bpe)?;
             let event_id = extract_event_id(raw_event, bpe);
+            raw_events.push((position, event_id));
+        }
 
-            if event_id >= 16 {
+        let mut seq_entries: Vec<SeqEntry> = Vec::new();
+        let mut prev_position: u32 = 0;
+        for &(position, event_id) in &raw_events {
+            if event_id == 0 || event_id == 1 {
+                // Mute / Break — shorten the preceding entry
+                if let Some(prev) = seq_entries.last_mut() {
+                    let truncated_length = position.saturating_sub(prev_position) as u16;
+                    prev.length = prev.length.min(truncated_length);
+                    prev.termination = if event_id == 0 {
+                        mb_ir::SeqTermination::Mute
+                    } else {
+                        mb_ir::SeqTermination::Break
+                    };
+                }
+            } else if event_id >= 16 {
                 let pat_idx = (event_id - 16) as u16;
                 let start = MusicalTime::zero().add_rows(position, rpb);
-                seq_entries.push(SeqEntry { start, clip_idx: pat_idx });
+                let pat_length = all_patterns.get(machine_idx)
+                    .and_then(|pats| pats.get(pat_idx as usize))
+                    .map_or(0, |bp| bp.ticks);
+                seq_entries.push(SeqEntry { start, clip_idx: pat_idx, length: pat_length, termination: mb_ir::SeqTermination::Natural });
+                prev_position = position;
             }
+            // event_id 2 (Thru) and 3-15: ignored
         }
 
         if let Some(m) = mach.filter(|_| is_tracker) {
