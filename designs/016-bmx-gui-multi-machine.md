@@ -1,7 +1,19 @@
 # 016: BMX GUI — Multi-Machine Pattern Editing + Sequence Grid
 
 Created: 2026-03-01
-Updated: 2026-03-01
+Updated: 2026-03-02
+
+## Status
+
+- [x] Add `selected_track` to GuiState, replace all hardcoded `tracks[0]`
+- [x] Machine/track selector dropdown in Clips panel (`track_selector()`)
+- [x] Sequencer grid view (`src/ui/sequencer.rs`)
+- [x] `CenterView::Sequencer` variant + view switching (3 toggle buttons)
+- [x] Shared color constants (`src/ui/colors.rs`)
+- [x] `NodeType::label()` method (named `label` instead of `name`)
+- [x] Track position modeline (`track_position_modeline()`)
+- [x] View-specific modelines (pattern + sequencer)
+- [ ] GUI tests for BMX track switching + sequencer view
 
 ## Context
 

@@ -1,8 +1,22 @@
-# Playback Position Tracking During Flow Control Jumps
+# 015: Playback Position Tracking During Flow Control Jumps
 
 Created: 20260301
 Updated: 20260301
 
+## Status
+
+### Short-Term Fix: Precomputed Playback Map
+- [ ] Add `PlaybackMapEntry` and `build_playback_map()` to scheduler.rs
+- [ ] Re-export new symbols in mb-engine lib.rs
+- [ ] Store playback map on Controller
+- [ ] Add `track_position_from_map()` with binary search
+- [ ] Update `Controller::track_position()` to use map when available
+
+*Note: Current implementation uses atomic time packing + `time_to_track_position()` instead of a precomputed map. The short-term fix has not been implemented.*
+
+### Long-Term Vision
+- [ ] Engine-side position tracking via atomics (Option A stepping stone)
+- [ ] Reactive/incremental scheduling (Option B end-state)
 
 ## Problem
 

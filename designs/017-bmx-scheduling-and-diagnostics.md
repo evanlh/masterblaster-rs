@@ -1,7 +1,15 @@
-# BMX Scheduling Bug + Diagnostic Affordances
+# 017: BMX Scheduling Bug + Diagnostic Affordances
 
 Created: 20260301
-Updated: 20260301
+Updated: 20260302
+
+## Status
+
+- [x] Fix scheduler to honor `SeqEntry.start` (Approach A)
+- [x] Pattern truncation at next entry's start time
+- [x] Sequencer playback position highlighting
+- [x] Track mute (`Track.muted` flag + scheduler skip + UI toggle)
+- [x] Node bypass (`SetNodeBypass` edit, `node_bypass` in engine, live mute/unmute)
 
 ## Symptom
 

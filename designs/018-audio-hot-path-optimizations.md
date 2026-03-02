@@ -1,4 +1,29 @@
-# Audio Hot-Path Optimizations
+# 018: Audio Hot-Path Optimizations
+
+Created: 20260302
+Updated: 20260302
+
+## Status
+
+### Per-Frame Fixes
+- [ ] P2: Redundant mono sample reads — early-return `(left, left)` for mono
+- [x] P3: gather_inputs linear scan — pre-indexed `conn_by_dest` at init
+- [x] P4: gain_linear recomputed per frame — precomputed in `conn_by_dest`
+- [ ] P5: Event clone in render loop — extract target+payload before dispatch
+- [ ] P6: u64 division every non-tick frame — lazy sub-beat evaluation
+- [ ] P7: Enum match on every sample read — normalize to Mono16 at load
+
+### Minor (Q-Level)
+- [ ] Q1: Double `channel_mut` calls in TrackerMachine::render
+- [ ] Q2: scratch→output copy in render_machine
+- [ ] Q3: Uncached `spt()` in TrackerMachine
+- [ ] Q4: Per-frame `clear_outputs`
+- [ ] Q5: `has_loop()` re-check in Channel::render
+
+### Block-Based Rendering
+- [ ] P1: Block-based graph rendering (SIMD prerequisite)
+
+---
 
 Performance issues in the per-frame render path (`render_frame_inner`), called 44,100 times/sec.
 Each issue is prioritized P2-P7 (lower = higher impact) with Q-level minor issues at the end.

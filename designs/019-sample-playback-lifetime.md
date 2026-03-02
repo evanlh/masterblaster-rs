@@ -1,4 +1,28 @@
-# Fix Sample Playback Lifetime: Ring-Out + Mute/Break NoteOff
+# 019: Fix Sample Playback Lifetime: Ring-Out + Mute/Break NoteOff
+
+Created: 20260302
+Updated: 20260302
+
+## Status
+
+### Part 1: Engine Ring-Out
+- [ ] Add `Machine::has_active_voices()` trait method (default false)
+- [ ] Implement for TrackerMachine (`channels.iter().any(|ch| ch.playing)`)
+- [ ] Add `Engine::voices_active()` method
+- [ ] Update `run_audio_loop` to continue past `is_finished()` while voices active
+- [ ] Update `render_song_frames` similarly
+
+### Part 2: Mute/Break NoteOff
+- [ ] Add `emit_termination_noteoffs()` helper in scheduler
+- [ ] Call at 3 entry-completion points (row overflow, normal advance, time truncation)
+
+### Tests
+- [ ] `natural_end_allows_ring_out`
+- [ ] `voices_active_false_after_sample_ends`
+- [ ] `mute_termination_emits_noteoff_for_all_channels`
+- [ ] `break_termination_emits_noteoff_for_all_channels`
+- [ ] `natural_termination_no_noteoff`
+- [ ] `mute_noteoff_time_matches_truncation_point`
 
 ## Context
 
