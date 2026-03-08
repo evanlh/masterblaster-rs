@@ -6,14 +6,14 @@ Updated: 20260303
 ## Status
 
 ### Per-Frame Allocation Fixes
-- [ ] Cell formatting scratch buffer (eliminate 256+ String allocs/frame)
-- [ ] Cache sequencer beat lookups (eliminate HashMap rebuild/frame)
-- [ ] Cache modeline strings (invalidate on position change)
-- [ ] Cache clip/sequence info Vecs in patterns panel
+- [x] Cell formatting scratch buffer (eliminate 256+ String allocs/frame)
+- [x] Cache sequencer beat lookups (eliminate HashMap rebuild/frame)
+- [x] Cache modeline strings (invalidate on position change)
+- [x] Cache clip/sequence info Vecs in patterns panel
 
 ### Frame Rate Management
-- [ ] Idle mode when stopped (only redraw on input)
-- [ ] Cap UI updates during playback
+- [x] Idle mode when stopped (only redraw on input)
+- [x] Cap UI updates during playback (covered by caching — rebuilds only on edits/loads)
 
 ### Shader-Based Rendering
 - [ ] Sample waveform visualization (custom shader)

@@ -8,6 +8,7 @@ pub fn transport_panel(ui: &imgui::Ui, gui: &mut GuiState) {
         gui.controller.new_song(4);
         gui.selected_seq_index = 0;
         gui.editor.cursor = Default::default();
+        gui.invalidate_caches();
         gui.status = "New song".to_string();
     }
     ui.same_line();
@@ -91,6 +92,7 @@ fn load_mod_dialog(gui: &mut GuiState) {
                     gui.status = format!("Loaded {}", name);
                     gui.selected_track = 0;
                     gui.selected_seq_index = 0;
+                    gui.invalidate_caches();
                 }
             }
         }

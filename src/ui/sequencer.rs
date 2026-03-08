@@ -79,9 +79,11 @@ pub fn sequencer_panel(ui: &imgui::Ui, gui: &mut GuiState) {
                 let _c = ui.push_style_color(imgui::StyleColor::Button, [0.6, 0.2, 0.2, 1.0]);
                 if ui.small_button(&btn_label) {
                     gui.controller.toggle_track_mute(i);
+                    gui.invalidate_caches();
                 }
             } else if ui.small_button(&btn_label) {
                 gui.controller.toggle_track_mute(i);
+                gui.invalidate_caches();
             }
         }
 
@@ -97,11 +99,15 @@ pub fn sequencer_panel(ui: &imgui::Ui, gui: &mut GuiState) {
             ui.table_header(&track_labels[i]);
         }
 
-        // Build lookup: for each track, map beat → clip_idx
+        // Build lookup: for each track, map beat → clip_idx (cached on GuiState)
         let song = gui.controller.song();
-        let lookups: Vec<std::collections::HashMap<u32, SeqCellContent>> = song.tracks.iter()
-            .map(|t| seq_beat_lookup(t, beats_per_seq_row, rpb))
-            .collect();
+        if gui.seq_lookups.is_none() {
+            let built: Vec<std::collections::HashMap<u32, SeqCellContent>> = song.tracks.iter()
+                .map(|t| seq_beat_lookup(t, beats_per_seq_row, rpb))
+                .collect();
+            gui.seq_lookups = Some(built);
+        }
+        let lookups = gui.seq_lookups.as_ref().unwrap();
 
         // Playing positions per track
         let playing: Vec<Option<mb_ir::TrackPlaybackPosition>> = (0..num_tracks)
@@ -169,14 +175,14 @@ fn cell_color(is_playing: bool, is_muted: bool, has_data: bool) -> [f32; 4] {
 
 /// Content for a sequencer grid cell.
 #[derive(Clone, Copy)]
-enum SeqCellContent {
+pub(crate) enum SeqCellContent {
     Pattern(u16),
     Mute,
     Break,
 }
 
 /// Build a map from beat offset → cell content for a track's sequence.
-fn seq_beat_lookup(track: &mb_ir::Track, beats_per_row: u32, rpb: u32) -> std::collections::HashMap<u32, SeqCellContent> {
+pub(crate) fn seq_beat_lookup(track: &mb_ir::Track, beats_per_row: u32, rpb: u32) -> std::collections::HashMap<u32, SeqCellContent> {
     let mut map = std::collections::HashMap::new();
     for entry in &track.sequence {
         let beat = entry.start.beat as u32;

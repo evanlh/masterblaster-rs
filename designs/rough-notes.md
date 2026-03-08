@@ -18,7 +18,7 @@ Miscellaneous thoughts & TODOs that we need to address or turn into design/ plan
 - [ ] feat: We can't play one-off samples to preview what they sound like. This should work in either Edit or non-Edit mode, keyboard should shift the pitch. The way we do this for Patterns is building a whole Song & sending it over because we clone the Song for the audio thread. Might need to investigate more efficient ways of doing that, as there is also some noticeable latency when playing patterns.
 - [ ] bug: Can't scroll past 1F in pattern views with 256 rows in Endorphin Rush - Skooled.
 - [ ] bug: Can't navigate in Pattern view, probably broke during sequencer additions. Add GUI test. (Actually, maybe specific to Endorphin Rush->Drums->P4 somehow)
-
+- [ ] feat: Support OT import/export via https://gitlab.com/ot-tools/ot-tools-io or similar
 
 ## Design Philosophy
 - Keyboard-driven, keycombos available for every interaction, nothing that *requires* a mouse.

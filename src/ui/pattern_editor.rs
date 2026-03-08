@@ -6,7 +6,7 @@
 use super::colors::*;
 use super::editor_state::CellColumn;
 use super::GuiState;
-use crate::ui::cell_format::format_cell;
+use crate::ui::cell_format::format_cell_into;
 
 /// Render the pattern editor grid. Returns click target (row, channel, column) if a cell was clicked.
 pub fn pattern_editor(
@@ -107,6 +107,7 @@ pub fn pattern_editor(
         let mut vis_start: i32 = 0;
         let mut vis_end: i32 = 0;
         let mut cursor_screen_y: f32 = -1.0;
+        let mut cell_buf = String::with_capacity(16);
         while clipper.step() {
             vis_start = clipper.display_start();
             vis_end = clipper.display_end();
@@ -116,7 +117,7 @@ pub fn pattern_editor(
                     cursor_screen_y = ui.cursor_screen_pos()[1];
                     ui.set_scroll_here_y_with_ratio(0.85);
                 }
-                render_row(ui, gui, song, clip_idx, rows, num_channels, row, playing_row, char_width, line_height, &mut click_target);
+                render_row(ui, gui, song, clip_idx, rows, num_channels, row, playing_row, char_width, line_height, &mut click_target, &mut cell_buf);
             }
         }
 
@@ -144,6 +145,7 @@ fn render_row(
     char_width: f32,
     line_height: f32,
     click_target: &mut Option<(u16, u8, CellColumn)>,
+    cell_buf: &mut String,
 ) {
     let is_playing = playing_row == Some(row);
     let is_cursor_row = gui.editor.cursor.row == row;
@@ -210,7 +212,8 @@ fn render_row(
             DATA_COLOR
         };
         let _token = ui.push_style_color(imgui::StyleColor::Text, color);
-        ui.text(format_cell(cell));
+        format_cell_into(cell, cell_buf);
+        ui.text(&*cell_buf);
 
         // Click detection
         if mouse_clicked && point_in_rect(ui.io().mouse_pos, cell_pos, cell_width, line_height) {

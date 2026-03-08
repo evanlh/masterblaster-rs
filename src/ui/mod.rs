@@ -12,9 +12,12 @@ mod sequencer;
 mod transport;
 mod undo;
 
+use std::collections::HashMap;
+
 use editor_state::{Clipboard, EditorState};
 use input::EditorAction;
 use mb_master::Controller;
+use sequencer::SeqCellContent;
 use undo::UndoStack;
 
 /// Toggle between center panel views.
@@ -37,6 +40,15 @@ pub struct GuiState {
     pub status: String,
     pub editor: EditorState,
     pub undo_stack: UndoStack,
+    // --- Performance caches (invalidated by invalidate_caches) ---
+    /// A2: Cached sequencer beat lookups per track.
+    pub(crate) seq_lookups: Option<Vec<HashMap<u32, SeqCellContent>>>,
+    /// A3: Cached modeline string keyed by packed track positions.
+    pub(crate) modeline_cache: Option<(Vec<Option<mb_ir::TrackPlaybackPosition>>, String)>,
+    /// A4: Cached clip info for patterns panel (selected_track, [(index, rows)]).
+    pub(crate) cached_clip_info: Option<(usize, Vec<(usize, u16)>)>,
+    /// A4: Cached sequence info for patterns panel (selected_track, [(index, clip_idx)]).
+    pub(crate) cached_seq_info: Option<(usize, Vec<(usize, u16)>)>,
 }
 
 impl Default for GuiState {
@@ -49,7 +61,21 @@ impl Default for GuiState {
             status: String::new(),
             editor: EditorState::default(),
             undo_stack: UndoStack::new(),
+            seq_lookups: None,
+            modeline_cache: None,
+            cached_clip_info: None,
+            cached_seq_info: None,
         }
+    }
+}
+
+impl GuiState {
+    /// Invalidate all per-frame caches. Call after song load, edits, track mute, etc.
+    pub(crate) fn invalidate_caches(&mut self) {
+        self.seq_lookups = None;
+        self.cached_clip_info = None;
+        self.cached_seq_info = None;
+        // modeline_cache invalidates itself via position comparison
     }
 }
 
@@ -125,19 +151,39 @@ pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
 }
 
 /// Track position modeline: shows per-machine playback position.
-fn track_position_modeline(ui: &imgui::Ui, gui: &GuiState) {
+/// Cached — only rebuilds the string when any track position changes.
+fn track_position_modeline(ui: &imgui::Ui, gui: &mut GuiState) {
     let song = gui.controller.song();
     if song.tracks.is_empty() {
         return;
     }
+    let positions: Vec<Option<mb_ir::TrackPlaybackPosition>> =
+        (0..song.tracks.len()).map(|i| gui.controller.track_position(i)).collect();
+
+    let need_rebuild = match &gui.modeline_cache {
+        Some((cached_pos, _)) => cached_pos != &positions,
+        None => true,
+    };
+
+    if need_rebuild {
+        let text = build_modeline_string(song, &positions);
+        gui.modeline_cache = Some((positions, text));
+    }
+
+    if let Some((_, ref text)) = gui.modeline_cache {
+        ui.text(text);
+    }
+}
+
+fn build_modeline_string(song: &mb_ir::Song, positions: &[Option<mb_ir::TrackPlaybackPosition>]) -> String {
     let parts: Vec<String> = song.tracks.iter().enumerate().map(|(i, track)| {
         let initial = track_initial(&song.graph, track);
-        match gui.controller.track_position(i) {
+        match &positions[i] {
             Some(pos) => format!("{}: C{:02X} R{:02X}", initial, pos.clip_idx, pos.row),
             None => format!("{}: C-- R--", initial),
         }
     }).collect();
-    ui.text(parts.join(" | "));
+    parts.join(" | ")
 }
 
 /// First character of the machine name for a track, for modeline display.
@@ -262,6 +308,7 @@ pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
             }
             EditorAction::MuteSelectedTrack => {
                 gui.controller.toggle_track_mute(gui.selected_track);
+                gui.invalidate_caches();
             }
         }
     }
@@ -294,6 +341,7 @@ fn apply_edit_with_undo(gui: &mut GuiState, clip_idx: u16, row: u16, channel: u8
     let reverse = mb_ir::Edit::SetCell { track, clip: clip_idx, row, column: channel, cell: old_cell };
     gui.undo_stack.push(forward.clone(), reverse);
     gui.controller.apply_edit(forward);
+    gui.invalidate_caches();
 }
 
 /// Read a cell from the selected track's clip at the given row and channel.
@@ -458,6 +506,7 @@ fn paste_clipboard(gui: &mut GuiState, max_rows: u16, max_channels: u8) {
     for edit in forward_edits {
         gui.controller.apply_edit(edit);
     }
+    gui.invalidate_caches();
 
     gui.editor.clear_selection();
     gui.status = format!("Pasted {}x{}", clipboard.rows, clipboard.channels);
@@ -491,6 +540,7 @@ fn delete_selection(gui: &mut GuiState) {
     for edit in forward_edits {
         gui.controller.apply_edit(edit);
     }
+    gui.invalidate_caches();
 
     gui.editor.clear_selection();
     gui.status = "Deleted selection".to_string();
@@ -509,6 +559,7 @@ fn apply_undo(gui: &mut GuiState) {
     for edit in edits {
         gui.controller.apply_edit(edit);
     }
+    gui.invalidate_caches();
     gui.status = "Undo".to_string();
 }
 
@@ -523,6 +574,7 @@ fn apply_redo(gui: &mut GuiState) {
     for edit in edits {
         gui.controller.apply_edit(edit);
     }
+    gui.invalidate_caches();
     gui.status = "Redo".to_string();
 }
 

@@ -1,12 +1,15 @@
-//! Cell formatting — unchanged from egui version.
+//! Cell formatting using a reusable scratch buffer to avoid per-cell heap allocations.
 
-pub fn format_cell(cell: &mb_ir::Cell) -> String {
-    format!(
-        "{} {} {}",
-        format_note(cell.note),
-        format_instrument(cell.instrument),
-        format_effect(&cell.effect),
-    )
+use core::fmt::Write;
+
+/// Write a formatted cell into the given buffer (clears it first).
+pub fn format_cell_into(cell: &mb_ir::Cell, buf: &mut String) {
+    buf.clear();
+    write_note(buf, cell.note);
+    buf.push(' ');
+    write_instrument(buf, cell.instrument);
+    buf.push(' ');
+    write_effect(buf, &cell.effect);
 }
 
 pub fn format_note(note: mb_ir::Note) -> &'static str {
@@ -16,6 +19,10 @@ pub fn format_note(note: mb_ir::Note) -> &'static str {
         mb_ir::Note::Fade => "^^^",
         mb_ir::Note::On(n) => note_name(n),
     }
+}
+
+fn write_note(buf: &mut String, note: mb_ir::Note) {
+    buf.push_str(format_note(note));
 }
 
 fn note_name(n: u8) -> &'static str {
@@ -34,55 +41,129 @@ fn note_name(n: u8) -> &'static str {
     NAMES.get(n as usize).unwrap_or(&"???")
 }
 
-pub fn format_instrument(inst: u8) -> String {
+fn write_instrument(buf: &mut String, inst: u8) {
     if inst > 0 {
-        format!("{:02X}", inst)
+        let _ = write!(buf, "{:02X}", inst);
     } else {
-        "..".to_string()
+        buf.push_str("..");
     }
 }
 
-pub fn format_effect(effect: &mb_ir::Effect) -> String {
+fn write_effect(buf: &mut String, effect: &mb_ir::Effect) {
     use mb_ir::Effect::*;
     match effect {
-        None => "...".to_string(),
-        Arpeggio { x, y } => format!("0{:X}{:X}", x, y),
-        PortaUp(v) => format!("1{:02X}", v),
-        PortaDown(v) => format!("2{:02X}", v),
-        TonePorta(v) => format!("3{:02X}", v),
-        Vibrato { speed, depth } => format!("4{:X}{:X}", speed, depth),
-        TonePortaVolSlide(v) => format!("5{}", vol_slide_param(*v)),
-        VibratoVolSlide(v) => format!("6{}", vol_slide_param(*v)),
-        Tremolo { speed, depth } => format!("7{:X}{:X}", speed, depth),
-        SetPan(v) => format!("8{:02X}", v),
-        SampleOffset(v) | FractionalSampleOffset(v) => format!("9{:02X}", v),
-        VolumeSlide(v) => format!("A{}", vol_slide_param(*v)),
-        PositionJump(v) => format!("B{:02X}", v),
-        SetVolume(v) => format!("C{:02X}", v),
-        PatternBreak(v) => format!("D{:02X}", v),
-        FinePortaUp(v) => format!("E1{:X}", v),
-        FinePortaDown(v) => format!("E2{:X}", v),
-        SetVibratoWaveform(v) => format!("E4{:X}", v),
-        SetFinetune(v) => format!("E5{:X}", *v as u8 & 0xF),
-        PatternLoop(v) => format!("E6{:X}", v),
-        SetTremoloWaveform(v) => format!("E7{:X}", v),
-        SetPanPosition(v) => format!("E8{:X}", v),
-        RetriggerNote(v) => format!("E9{:X}", v),
-        FineVolumeSlideUp(v) => format!("EA{:X}", v),
-        FineVolumeSlideDown(v) => format!("EB{:X}", v),
-        NoteCut(v) => format!("EC{:X}", v),
-        NoteDelay(v) => format!("ED{:X}", v),
-        PatternDelay(v) => format!("EE{:X}", v),
-        SetSpeed(v) => format!("F{:02X}", v),
-        SetTempo(v) => format!("F{:02X}", v),
-        other => format!("{:.3}", other.name()),
+        None => buf.push_str("..."),
+        Arpeggio { x, y } => { let _ = write!(buf, "0{:X}{:X}", x, y); }
+        PortaUp(v) => { let _ = write!(buf, "1{:02X}", v); }
+        PortaDown(v) => { let _ = write!(buf, "2{:02X}", v); }
+        TonePorta(v) => { let _ = write!(buf, "3{:02X}", v); }
+        Vibrato { speed, depth } => { let _ = write!(buf, "4{:X}{:X}", speed, depth); }
+        TonePortaVolSlide(v) => { write_vol_slide_effect(buf, '5', *v); }
+        VibratoVolSlide(v) => { write_vol_slide_effect(buf, '6', *v); }
+        Tremolo { speed, depth } => { let _ = write!(buf, "7{:X}{:X}", speed, depth); }
+        SetPan(v) => { let _ = write!(buf, "8{:02X}", v); }
+        SampleOffset(v) | FractionalSampleOffset(v) => { let _ = write!(buf, "9{:02X}", v); }
+        VolumeSlide(v) => { write_vol_slide_effect(buf, 'A', *v); }
+        PositionJump(v) => { let _ = write!(buf, "B{:02X}", v); }
+        SetVolume(v) => { let _ = write!(buf, "C{:02X}", v); }
+        PatternBreak(v) => { let _ = write!(buf, "D{:02X}", v); }
+        FinePortaUp(v) => { let _ = write!(buf, "E1{:X}", v); }
+        FinePortaDown(v) => { let _ = write!(buf, "E2{:X}", v); }
+        SetVibratoWaveform(v) => { let _ = write!(buf, "E4{:X}", v); }
+        SetFinetune(v) => { let _ = write!(buf, "E5{:X}", *v as u8 & 0xF); }
+        PatternLoop(v) => { let _ = write!(buf, "E6{:X}", v); }
+        SetTremoloWaveform(v) => { let _ = write!(buf, "E7{:X}", v); }
+        SetPanPosition(v) => { let _ = write!(buf, "E8{:X}", v); }
+        RetriggerNote(v) => { let _ = write!(buf, "E9{:X}", v); }
+        FineVolumeSlideUp(v) => { let _ = write!(buf, "EA{:X}", v); }
+        FineVolumeSlideDown(v) => { let _ = write!(buf, "EB{:X}", v); }
+        NoteCut(v) => { let _ = write!(buf, "EC{:X}", v); }
+        NoteDelay(v) => { let _ = write!(buf, "ED{:X}", v); }
+        PatternDelay(v) => { let _ = write!(buf, "EE{:X}", v); }
+        SetSpeed(v) => { let _ = write!(buf, "F{:02X}", v); }
+        SetTempo(v) => { let _ = write!(buf, "F{:02X}", v); }
+        other => {
+            let name = other.name();
+            // Take up to 3 chars
+            let truncated: String = name.chars().take(3).collect();
+            buf.push_str(&truncated);
+        }
     }
 }
 
-fn vol_slide_param(v: i8) -> String {
+fn write_vol_slide_effect(buf: &mut String, prefix: char, v: i8) {
+    buf.push(prefix);
     if v >= 0 {
-        format!("{:X}0", v)
+        let _ = write!(buf, "{:X}0", v);
     } else {
-        format!("0{:X}", -v)
+        let _ = write!(buf, "0{:X}", -v);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn format_cell(cell: &mb_ir::Cell) -> String {
+        let mut buf = String::with_capacity(16);
+        format_cell_into(cell, &mut buf);
+        buf
+    }
+
+    #[test]
+    fn empty_cell() {
+        let cell = mb_ir::Cell::empty();
+        assert_eq!(format_cell(&cell), "--- .. ...");
+    }
+
+    fn cell(note: mb_ir::Note, instrument: u8, effect: mb_ir::Effect) -> mb_ir::Cell {
+        mb_ir::Cell { note, instrument, effect, ..mb_ir::Cell::empty() }
+    }
+
+    #[test]
+    fn note_on_with_instrument_and_effect() {
+        assert_eq!(format_cell(&cell(mb_ir::Note::On(48), 1, mb_ir::Effect::SetVolume(64))), "C-4 01 C40");
+    }
+
+    #[test]
+    fn note_off() {
+        assert_eq!(format_cell(&cell(mb_ir::Note::Off, 0, mb_ir::Effect::None)), "=== .. ...");
+    }
+
+    #[test]
+    fn volume_slide_up() {
+        assert_eq!(format_cell(&cell(mb_ir::Note::None, 0, mb_ir::Effect::VolumeSlide(3))), "--- .. A30");
+    }
+
+    #[test]
+    fn volume_slide_down() {
+        assert_eq!(format_cell(&cell(mb_ir::Note::None, 0, mb_ir::Effect::VolumeSlide(-5))), "--- .. A05");
+    }
+
+    #[test]
+    fn scratch_buffer_reuse() {
+        let mut buf = String::with_capacity(16);
+        let cell1 = cell(mb_ir::Note::On(48), 1, mb_ir::Effect::SetVolume(64));
+
+        format_cell_into(&cell1, &mut buf);
+        assert_eq!(buf, "C-4 01 C40");
+
+        format_cell_into(&mb_ir::Cell::empty(), &mut buf);
+        assert_eq!(buf, "--- .. ...");
+    }
+
+    #[test]
+    fn arpeggio_format() {
+        assert_eq!(format_cell(&cell(mb_ir::Note::None, 0, mb_ir::Effect::Arpeggio { x: 3, y: 7 })), "--- .. 037");
+    }
+
+    #[test]
+    fn porta_up_format() {
+        assert_eq!(format_cell(&cell(mb_ir::Note::None, 0, mb_ir::Effect::PortaUp(15))), "--- .. 10F");
+    }
+
+    #[test]
+    fn sample_offset_format() {
+        assert_eq!(format_cell(&cell(mb_ir::Note::On(60), 2, mb_ir::Effect::SampleOffset(128))), "C-5 02 980");
     }
 }
