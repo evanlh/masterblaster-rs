@@ -326,7 +326,7 @@ fn pattern_bounds(gui: &GuiState) -> (u16, u8) {
     let channels = track_channel_count(gui).max(1);
     let rows = selected_clip_idx(gui)
         .and_then(|ci| {
-            let track = gui.controller.song().tracks.first()?;
+            let track = gui.controller.song().tracks.get(gui.selected_track)?;
             track.clips.get(ci as usize)?.pattern().map(|p| p.rows)
         })
         .unwrap_or(1);
