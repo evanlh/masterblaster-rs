@@ -36,6 +36,10 @@ pub struct GuiState {
     pub selected_track: usize,
     /// Which sequence position (clip) is selected in the current track.
     pub selected_seq_index: usize,
+    /// Sequencer grid cursor row (beat-grid row index, not beat number).
+    pub seq_cursor_row: u32,
+    /// Hex nibble accumulator for two-digit clip entry in sequencer.
+    pub seq_hex_nibble: Option<u8>,
     pub center_view: CenterView,
     pub status: String,
     pub editor: EditorState,
@@ -47,8 +51,6 @@ pub struct GuiState {
     pub(crate) modeline_cache: Option<(Vec<Option<mb_ir::TrackPlaybackPosition>>, String)>,
     /// A4: Cached clip info for patterns panel (selected_track, [(index, rows)]).
     pub(crate) cached_clip_info: Option<(usize, Vec<(usize, u16)>)>,
-    /// A4: Cached sequence info for patterns panel (selected_track, [(index, clip_idx)]).
-    pub(crate) cached_seq_info: Option<(usize, Vec<(usize, u16)>)>,
 }
 
 impl Default for GuiState {
@@ -57,6 +59,8 @@ impl Default for GuiState {
             controller: Controller::new(),
             selected_track: 0,
             selected_seq_index: 0,
+            seq_cursor_row: 0,
+            seq_hex_nibble: None,
             center_view: CenterView::Pattern,
             status: String::new(),
             editor: EditorState::default(),
@@ -64,7 +68,6 @@ impl Default for GuiState {
             seq_lookups: None,
             modeline_cache: None,
             cached_clip_info: None,
-            cached_seq_info: None,
         }
     }
 }
@@ -74,7 +77,6 @@ impl GuiState {
     pub(crate) fn invalidate_caches(&mut self) {
         self.seq_lookups = None;
         self.cached_clip_info = None;
-        self.cached_seq_info = None;
         // modeline_cache invalidates itself via position comparison
     }
 }
@@ -126,7 +128,8 @@ pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
                 .size([center_w, avail[1]])
                 .build(|| {
                     // Process keyboard actions in center panel
-                    let actions = input::poll_editor_actions(ui, &gui.editor);
+                    let hex_only = gui.center_view == CenterView::Sequencer;
+                    let actions = input::poll_editor_actions(ui, &gui.editor, hex_only);
                     process_actions(gui, &actions);
 
                     match gui.center_view {
@@ -210,6 +213,7 @@ pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
         match action {
             EditorAction::MoveCursor { drow, dchannel, dcolumn } => {
                 if gui.center_view == CenterView::Sequencer {
+                    move_sequencer_row(gui, *drow);
                     move_sequencer_cursor(gui, *dchannel + *dcolumn);
                 } else {
                     gui.editor.clear_selection();
@@ -233,12 +237,20 @@ pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
                 }
             }
             EditorAction::PageUp => {
-                gui.editor.clear_selection();
-                gui.editor.page_up(max_rows);
+                if gui.center_view == CenterView::Sequencer {
+                    move_sequencer_row(gui, -4);
+                } else {
+                    gui.editor.clear_selection();
+                    gui.editor.page_up(max_rows);
+                }
             }
             EditorAction::PageDown => {
-                gui.editor.clear_selection();
-                gui.editor.page_down(max_rows);
+                if gui.center_view == CenterView::Sequencer {
+                    move_sequencer_row(gui, 4);
+                } else {
+                    gui.editor.clear_selection();
+                    gui.editor.page_down(max_rows);
+                }
             }
             EditorAction::ToggleEditMode => {
                 gui.editor.edit_mode = !gui.editor.edit_mode;
@@ -282,14 +294,20 @@ pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
                 enter_note_off(gui, max_rows);
             }
             EditorAction::DeleteCell => {
-                if gui.editor.selection.is_some() {
+                if gui.center_view == CenterView::Sequencer && gui.editor.edit_mode {
+                    seq_delete_entry(gui);
+                } else if gui.editor.selection.is_some() {
                     delete_selection(gui);
                 } else {
                     delete_cell(gui, max_rows);
                 }
             }
             EditorAction::EnterHexDigit(digit) => {
-                enter_hex_digit(gui, *digit, max_rows);
+                if gui.center_view == CenterView::Sequencer && gui.editor.edit_mode {
+                    seq_enter_hex_digit(gui, *digit);
+                } else {
+                    enter_hex_digit(gui, *digit, max_rows);
+                }
             }
             EditorAction::SelectMove { drow, dchannel } => {
                 gui.editor.select_move(*drow, *dchannel, max_rows, max_channels);
@@ -310,8 +328,21 @@ pub fn process_actions(gui: &mut GuiState, actions: &[EditorAction]) {
                 gui.controller.toggle_track_mute(gui.selected_track);
                 gui.invalidate_caches();
             }
+            EditorAction::EnterOnCell => {
+                if gui.center_view == CenterView::Sequencer {
+                    seq_enter_on_cell(gui);
+                }
+            }
         }
     }
+}
+
+/// Move the sequencer cursor row, clamping to valid range.
+fn move_sequencer_row(gui: &mut GuiState, delta: i32) {
+    let max = sequencer_num_rows(gui).saturating_sub(1) as i32;
+    gui.seq_cursor_row = (gui.seq_cursor_row as i32 + delta).clamp(0, max) as u32;
+    gui.seq_hex_nibble = None;
+    sync_selected_seq_index(gui);
 }
 
 /// Move the selected track cursor in the sequencer view.
@@ -320,6 +351,46 @@ fn move_sequencer_cursor(gui: &mut GuiState, delta: i32) {
     if num_tracks == 0 { return; }
     let new = (gui.selected_track as i32 + delta).clamp(0, num_tracks as i32 - 1);
     gui.selected_track = new as usize;
+    gui.seq_hex_nibble = None;
+    sync_selected_seq_index(gui);
+}
+
+/// Number of rows in the sequencer grid.
+pub(crate) fn sequencer_num_rows(gui: &GuiState) -> u32 {
+    let song = gui.controller.song();
+    if song.tracks.is_empty() { return 1; }
+    let rpb = song.rows_per_beat as u32;
+    let beats_per_seq_row = sequencer::ROWS_PER_SEQ_ROW / rpb.max(1);
+    let total_beats = song.total_time().beat as u32;
+    (total_beats / beats_per_seq_row.max(1)).max(1) + 1
+}
+
+/// Beat number for a sequencer grid row.
+pub(crate) fn seq_row_to_beat(gui: &GuiState, row: u32) -> u32 {
+    let song = gui.controller.song();
+    let rpb = song.rows_per_beat as u32;
+    let beats_per_seq_row = sequencer::ROWS_PER_SEQ_ROW / rpb.max(1);
+    row * beats_per_seq_row
+}
+
+/// Sync selected_seq_index from the cursor position in the sequencer.
+fn sync_selected_seq_index(gui: &mut GuiState) {
+    let beat = seq_row_to_beat(gui, gui.seq_cursor_row);
+    let song = gui.controller.song();
+    let Some(track) = song.tracks.get(gui.selected_track) else { return };
+    let rpb = song.rows_per_beat as u32;
+    // Find the sequence entry whose time range covers this beat
+    if let Some(idx) = track.sequence.iter().position(|e| {
+        let start_beat = e.start.beat as u32;
+        let pat_rpb = track.get_pattern_at(e.clip_idx as usize)
+            .and_then(|p| p.rows_per_beat)
+            .map_or(rpb, |r| r as u32);
+        let end = e.start.add_rows(e.length as u32, pat_rpb);
+        let end_beat = end.beat as u32;
+        beat >= start_beat && beat < end_beat
+    }) {
+        gui.selected_seq_index = idx;
+    }
 }
 
 fn pattern_bounds(gui: &GuiState) -> (u16, u8) {
@@ -430,6 +501,57 @@ fn enter_hex_digit(gui: &mut GuiState, digit: u8, max_rows: u16) {
     gui.editor.cursor.column = new_col;
     if wrapped {
         gui.editor.advance_by_step(max_rows);
+    }
+}
+
+// --- Sequencer editing ---
+
+/// Enter a hex digit in the sequencer grid (two-digit clip index entry).
+fn seq_enter_hex_digit(gui: &mut GuiState, digit: u8) {
+    match gui.seq_hex_nibble {
+        None => {
+            // First nibble: store high nibble
+            gui.seq_hex_nibble = Some(digit);
+            gui.status = format!("Clip: {:X}_", digit);
+        }
+        Some(high) => {
+            // Second nibble: combine into clip_idx and place
+            let clip_idx = (high << 4) | digit;
+            gui.seq_hex_nibble = None;
+            let beat = seq_row_to_beat(gui, gui.seq_cursor_row);
+            if let Some((fwd, rev)) = gui.controller.set_seq_entry(gui.selected_track, beat, clip_idx as u16) {
+                gui.undo_stack.push(fwd, rev);
+                gui.invalidate_caches();
+                gui.status = format!("Placed clip {:02X}", clip_idx);
+                // Auto-advance cursor down
+                move_sequencer_row(gui, 1);
+            } else {
+                gui.status = "Overlap — cannot place".to_string();
+            }
+        }
+    }
+}
+
+/// Jump from sequencer to pattern view at the cursor's clip.
+fn seq_enter_on_cell(gui: &mut GuiState) {
+    let beat = seq_row_to_beat(gui, gui.seq_cursor_row);
+    let song = gui.controller.song();
+    let Some(track) = song.tracks.get(gui.selected_track) else { return };
+    if let Some(idx) = track.seq_entry_index_at_beat(beat) {
+        gui.selected_seq_index = idx;
+        gui.center_view = CenterView::Pattern;
+        gui.editor.cursor.row = 0;
+        gui.editor.cursor.channel = 0;
+    }
+}
+
+/// Delete the sequence entry at the cursor position.
+fn seq_delete_entry(gui: &mut GuiState) {
+    let beat = seq_row_to_beat(gui, gui.seq_cursor_row);
+    if let Some((fwd, rev)) = gui.controller.remove_seq_entry(gui.selected_track, beat) {
+        gui.undo_stack.push(fwd, rev);
+        gui.invalidate_caches();
+        gui.status = "Removed seq entry".to_string();
     }
 }
 

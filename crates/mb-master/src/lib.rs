@@ -140,6 +140,53 @@ impl Controller {
         }
     }
 
+    /// Place a clip at a specific beat in a track's sequence.
+    /// Returns the forward and reverse edits, or None if overlap detected.
+    pub fn set_seq_entry(&mut self, track_idx: usize, beat: u32, clip_idx: u16) -> Option<(Edit, Edit)> {
+        let track = self.song.tracks.get(track_idx)?;
+        let length = track.get_pattern_at(clip_idx as usize).map_or(16, |p| p.rows);
+        let rpb = self.song.rows_per_beat;
+        if would_overlap(track, beat, length, rpb) {
+            return None;
+        }
+        let data = mb_ir::SeqEntryData {
+            clip_idx,
+            length,
+            termination: mb_ir::SeqTermination::Natural,
+        };
+        // Build reverse: restore whatever was at this beat before
+        let old_entry = track.seq_entry_at_beat(beat).map(|e| mb_ir::SeqEntryData {
+            clip_idx: e.clip_idx,
+            length: e.length,
+            termination: e.termination,
+        });
+        let forward = Edit::SetSeqEntry { track: track_idx as u16, beat, entry: Some(data) };
+        let reverse = Edit::SetSeqEntry { track: track_idx as u16, beat, entry: old_entry };
+        self.apply_edit(forward.clone());
+        Some((forward, reverse))
+    }
+
+    /// Remove a sequence entry at a specific beat.
+    /// Returns the forward and reverse edits, or None if nothing there.
+    pub fn remove_seq_entry(&mut self, track_idx: usize, beat: u32) -> Option<(Edit, Edit)> {
+        let track = self.song.tracks.get(track_idx)?;
+        let old = track.seq_entry_at_beat(beat)?;
+        let old_data = mb_ir::SeqEntryData {
+            clip_idx: old.clip_idx,
+            length: old.length,
+            termination: old.termination,
+        };
+        let forward = Edit::SetSeqEntry { track: track_idx as u16, beat, entry: None };
+        let reverse = Edit::SetSeqEntry { track: track_idx as u16, beat, entry: Some(old_data) };
+        self.apply_edit(forward.clone());
+        Some((forward, reverse))
+    }
+
+    /// Read helper: get the sequence entry at a specific beat.
+    pub fn seq_entry_at(&self, track_idx: usize, beat: u32) -> Option<&mb_ir::SeqEntry> {
+        self.song.tracks.get(track_idx)?.seq_entry_at_beat(beat)
+    }
+
     /// Toggle mute state on a track. Sends bypass to audio thread for live mute.
     pub fn toggle_track_mute(&mut self, track_idx: usize) {
         let Some(track) = self.song.tracks.get_mut(track_idx) else { return };
@@ -290,6 +337,30 @@ fn apply_edit_to_song(song: &mut Song, edit: &Edit) {
             }
         }
         Edit::SetNodeBypass { .. } => {} // Handled by engine directly
+        Edit::SetSeqEntry { track, beat, entry } => {
+            apply_set_seq_entry(song, *track, *beat, entry);
+        }
+    }
+}
+
+/// Apply a SetSeqEntry edit: remove any entry at beat, optionally insert new one.
+fn apply_set_seq_entry(song: &mut Song, track_idx: u16, beat: u32, entry: &Option<mb_ir::SeqEntryData>) {
+    let Some(track) = song.tracks.get_mut(track_idx as usize) else { return };
+    // Remove existing entry at this beat
+    track.sequence.retain(|e| e.start.beat as u32 != beat);
+    // Insert new entry if provided
+    if let Some(data) = entry {
+        let new_entry = mb_ir::SeqEntry {
+            start: mb_ir::MusicalTime::from_beats(beat as u64),
+            clip_idx: data.clip_idx,
+            length: data.length,
+            termination: data.termination,
+        };
+        // Insert sorted by start time
+        let pos = track.sequence.iter()
+            .position(|e| e.start > new_entry.start)
+            .unwrap_or(track.sequence.len());
+        track.sequence.insert(pos, new_entry);
     }
 }
 
@@ -423,6 +494,23 @@ fn frames_until_report(frame_count: u64, interval: u64, batch_size: usize) -> us
     (remaining as usize).min(batch_size)
 }
 
+/// Check if placing a clip of the given length at the given beat would overlap
+/// any existing sequence entry (excluding an entry already at that beat).
+fn would_overlap(track: &mb_ir::Track, beat: u32, length: u16, rpb: u8) -> bool {
+    let new_start = mb_ir::MusicalTime::from_beats(beat as u64);
+    let new_end = new_start.add_rows(length as u32, rpb as u32);
+    track.sequence.iter()
+        .filter(|e| e.start.beat as u32 != beat) // skip entry we'd replace
+        .any(|e| {
+            let pat_rpb = track.get_pattern_at(e.clip_idx as usize)
+                .and_then(|p| p.rows_per_beat)
+                .map_or(rpb as u32, |r| r as u32);
+            let e_end = e.start.add_rows(e.length as u32, pat_rpb);
+            // Overlap if ranges intersect
+            new_start < e_end && e.start < new_end
+        })
+}
+
 /// End time of a track's sequence (after the last clip finishes).
 fn track_end_time(song: &Song, track_idx: usize) -> mb_ir::MusicalTime {
     let rpb = song.rows_per_beat as u32;
@@ -436,4 +524,120 @@ fn track_end_time(song: &Song, track_idx: usize) -> mb_ir::MusicalTime {
             Some(last.start.add_rows(last.length as u32, pat_rpb))
         })
         .unwrap_or(mb_ir::MusicalTime::zero())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a controller with a simple song: 1 track, 2 clips (16 rows each), rpb=4.
+    fn test_controller() -> Controller {
+        let mut ctrl = Controller::new();
+        ctrl.new_song(4);
+        ctrl.add_clip(0, 16); // clip 1 (clip 0 already created by new_song)
+        ctrl
+    }
+
+    #[test]
+    fn set_seq_entry_inserts_sorted() {
+        let mut ctrl = test_controller();
+        // Clip 0 is 64 rows at rpb=4 = 16 beats. Place clip 1 at beat 16 (after clip 0).
+        let result = ctrl.set_seq_entry(0, 16, 1);
+        assert!(result.is_some());
+        let track = &ctrl.song().tracks[0];
+        assert_eq!(track.sequence.len(), 2);
+        assert_eq!(track.sequence[0].start.beat, 0);
+        assert_eq!(track.sequence[1].start.beat, 16);
+        assert_eq!(track.sequence[1].clip_idx, 1);
+    }
+
+    #[test]
+    fn remove_seq_entry_at_beat() {
+        let mut ctrl = test_controller();
+        // Remove the default entry at beat 0
+        let result = ctrl.remove_seq_entry(0, 0);
+        assert!(result.is_some());
+        assert!(ctrl.song().tracks[0].sequence.is_empty());
+    }
+
+    #[test]
+    fn remove_seq_entry_nonexistent_returns_none() {
+        let ctrl = test_controller();
+        // Nothing at beat 99
+        assert!(ctrl.seq_entry_at(0, 99).is_none());
+    }
+
+    #[test]
+    fn overlap_rejection() {
+        let mut ctrl = test_controller();
+        // Clip 0 is 64 rows at beat 0 with rpb=4 = 16 beats.
+        // Placing at beat 4 overlaps.
+        let result = ctrl.set_seq_entry(0, 4, 0);
+        assert!(result.is_none(), "Should reject overlapping placement");
+    }
+
+    #[test]
+    fn overlap_allows_adjacent() {
+        let mut ctrl = test_controller();
+        // Clip 1 is 16 rows = 4 beats. Placing right after clip 0 (beat 16) should work.
+        let result = ctrl.set_seq_entry(0, 16, 1);
+        assert!(result.is_some(), "Adjacent placement should succeed");
+    }
+
+    #[test]
+    fn set_seq_entry_undo_round_trip() {
+        let mut ctrl = test_controller();
+        // Remove entry at beat 0 first to have a clean slate
+        ctrl.remove_seq_entry(0, 0);
+        assert!(ctrl.song().tracks[0].sequence.is_empty());
+
+        // Place clip 0 at beat 0
+        let (fwd, rev) = ctrl.set_seq_entry(0, 0, 0).unwrap();
+        assert_eq!(ctrl.song().tracks[0].sequence.len(), 1);
+
+        // Undo (apply reverse)
+        ctrl.apply_edit(rev);
+        assert!(ctrl.song().tracks[0].sequence.is_empty());
+
+        // Redo (apply forward)
+        ctrl.apply_edit(fwd);
+        assert_eq!(ctrl.song().tracks[0].sequence.len(), 1);
+    }
+
+    #[test]
+    fn seq_entry_at_beat_lookup() {
+        let ctrl = test_controller();
+        let entry = ctrl.seq_entry_at(0, 0);
+        assert!(entry.is_some());
+        assert_eq!(entry.unwrap().clip_idx, 0);
+        assert!(ctrl.seq_entry_at(0, 99).is_none());
+    }
+
+    #[test]
+    fn would_overlap_no_conflict() {
+        let mut track = mb_ir::Track::new(None, 0, 4);
+        track.clips.push(mb_ir::Clip::Pattern(mb_ir::Pattern::new(16, 4)));
+        track.sequence.push(mb_ir::SeqEntry {
+            start: mb_ir::MusicalTime::zero(),
+            clip_idx: 0,
+            length: 16,
+            termination: mb_ir::SeqTermination::Natural,
+        });
+        // Place after the first clip ends (beat 4 with rpb=4)
+        assert!(!would_overlap(&track, 4, 16, 4));
+    }
+
+    #[test]
+    fn would_overlap_detects_conflict() {
+        let mut track = mb_ir::Track::new(None, 0, 4);
+        track.clips.push(mb_ir::Clip::Pattern(mb_ir::Pattern::new(16, 4)));
+        track.sequence.push(mb_ir::SeqEntry {
+            start: mb_ir::MusicalTime::zero(),
+            clip_idx: 0,
+            length: 16,
+            termination: mb_ir::SeqTermination::Natural,
+        });
+        // Place overlapping the first clip
+        assert!(would_overlap(&track, 2, 16, 4));
+    }
 }

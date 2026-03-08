@@ -30,13 +30,14 @@ pub enum EditorAction {
     Undo,
     Redo,
     MuteSelectedTrack,
+    EnterOnCell,
 }
 
 /// Poll imgui key state and return all triggered editor actions.
 ///
 /// Only consumes keys when the center panel is focused and imgui doesn't
 /// want text input (i.e., no text widget is active).
-pub fn poll_editor_actions(ui: &imgui::Ui, state: &EditorState) -> Vec<EditorAction> {
+pub fn poll_editor_actions(ui: &imgui::Ui, state: &EditorState, hex_only: bool) -> Vec<EditorAction> {
     if ui.io().want_text_input {
         return Vec::new();
     }
@@ -54,10 +55,26 @@ pub fn poll_editor_actions(ui: &imgui::Ui, state: &EditorState) -> Vec<EditorAct
 
     // Data entry (only in edit mode)
     if state.edit_mode {
-        poll_data_entry(ui, state, &mut actions);
+        poll_data_entry(ui, state, hex_only, &mut actions);
     }
 
     actions
+}
+
+fn poll_data_entry(ui: &imgui::Ui, state: &EditorState, hex_only: bool, actions: &mut Vec<EditorAction>) {
+    if is_pressed(ui, imgui::Key::Delete) || is_pressed(ui, imgui::Key::Backspace) {
+        actions.push(EditorAction::DeleteCell);
+        return;
+    }
+
+    if hex_only {
+        poll_hex_keys(ui, actions);
+    } else {
+        match state.cursor.column {
+            CellColumn::Note => poll_note_keys(ui, state, actions),
+            _ => poll_hex_keys(ui, actions),
+        }
+    }
 }
 
 fn poll_global_shortcuts(
@@ -167,17 +184,8 @@ fn poll_navigation(ui: &imgui::Ui, shift: bool, actions: &mut Vec<EditorAction>)
     if is_pressed(ui, imgui::Key::PageDown) {
         actions.push(EditorAction::PageDown);
     }
-}
-
-fn poll_data_entry(ui: &imgui::Ui, state: &EditorState, actions: &mut Vec<EditorAction>) {
-    if is_pressed(ui, imgui::Key::Delete) || is_pressed(ui, imgui::Key::Backspace) {
-        actions.push(EditorAction::DeleteCell);
-        return;
-    }
-
-    match state.cursor.column {
-        CellColumn::Note => poll_note_keys(ui, state, actions),
-        _ => poll_hex_keys(ui, actions),
+    if is_pressed(ui, imgui::Key::Enter) || is_pressed(ui, imgui::Key::KeypadEnter) {
+        actions.push(EditorAction::EnterOnCell);
     }
 }
 

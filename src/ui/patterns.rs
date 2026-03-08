@@ -3,12 +3,10 @@
 use super::GuiState;
 use super::track_label;
 
-pub fn patterns_panel(ui: &imgui::Ui, gui: &mut GuiState, pos: Option<mb_ir::TrackPlaybackPosition>) {
+pub fn patterns_panel(ui: &imgui::Ui, gui: &mut GuiState, _pos: Option<mb_ir::TrackPlaybackPosition>) {
     track_selector(ui, gui);
     ui.separator();
     clips_section(ui, gui);
-    ui.separator();
-    sequence_section(ui, gui, pos);
 }
 
 fn track_selector(ui: &imgui::Ui, gui: &mut GuiState) {
@@ -80,55 +78,3 @@ fn clips_section(ui: &imgui::Ui, gui: &mut GuiState) {
     }
 }
 
-fn sequence_section(ui: &imgui::Ui, gui: &mut GuiState, pos: Option<mb_ir::TrackPlaybackPosition>) {
-    ui.text("Sequence");
-    ui.separator();
-
-    let playing_seq = pos.map(|p| p.seq_index);
-
-    let need_rebuild = match &gui.cached_seq_info {
-        Some((track, _)) => *track != gui.selected_track,
-        None => true,
-    };
-    if need_rebuild {
-        let song = gui.controller.song();
-        let Some(track) = song.tracks.get(gui.selected_track) else { return };
-        let info: Vec<(usize, u16)> = track.sequence.iter().enumerate()
-            .map(|(i, entry)| (i, entry.clip_idx))
-            .collect();
-        gui.cached_seq_info = Some((gui.selected_track, info));
-    }
-    let seq_info = &gui.cached_seq_info.as_ref().unwrap().1;
-
-    for (i, clip_idx) in seq_info {
-        let is_playing = playing_seq == Some(*i);
-        let text = format!("{:02}: Clip {:02X}", i, clip_idx);
-        let color = if is_playing {
-            [0.39, 0.78, 0.51, 1.0]
-        } else {
-            [0.70, 0.70, 0.70, 1.0]
-        };
-        let _token = ui.push_style_color(imgui::StyleColor::Text, color);
-        if ui.selectable_config(&text).selected(gui.selected_seq_index == *i).build() {
-            gui.selected_seq_index = *i;
-        }
-    }
-
-    if ui.button("+Seq") {
-        if let Some(clip_idx) = super::selected_clip_idx(gui) {
-            gui.controller.add_seq_entry(gui.selected_track, clip_idx);
-            gui.invalidate_caches();
-        }
-    }
-    ui.same_line();
-    if ui.button("-Seq") {
-        gui.controller.remove_last_seq_entry(gui.selected_track);
-        gui.invalidate_caches();
-        let seq_len = gui.controller.song().tracks.get(gui.selected_track)
-            .map(|t| t.sequence.len())
-            .unwrap_or(0);
-        if gui.selected_seq_index >= seq_len && seq_len > 0 {
-            gui.selected_seq_index = seq_len - 1;
-        }
-    }
-}

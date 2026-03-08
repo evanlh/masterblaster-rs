@@ -188,6 +188,16 @@ impl Track {
         self.clips.get(clip_idx).and_then(|c| c.pattern())
     }
 
+    /// Find the sequence entry that starts at the given beat, if any.
+    pub fn seq_entry_at_beat(&self, beat: u32) -> Option<&SeqEntry> {
+        self.sequence.iter().find(|e| e.start.beat as u32 == beat)
+    }
+
+    /// Find the index of the sequence entry at the given beat, if any.
+    pub fn seq_entry_index_at_beat(&self, beat: u32) -> Option<usize> {
+        self.sequence.iter().position(|e| e.start.beat as u32 == beat)
+    }
+
     pub fn get_pattern_at_sequence(&self, seq_idx: usize) -> (Option<&Pattern>, MusicalTime) {
         if seq_idx > self.sequence.len() {
             return (None, MusicalTime::zero())
@@ -448,5 +458,29 @@ mod tests {
         assert!(machine.is_some());
         let node = song.graph.node(machine.unwrap()).unwrap();
         assert!(matches!(&node.node_type, NodeType::BuzzMachine { is_tracker: true, .. }));
+    }
+
+    #[test]
+    fn seq_entry_at_beat_found() {
+        let song = make_test_song();
+        let track = &song.tracks[0];
+        assert!(track.seq_entry_at_beat(0).is_some());
+        assert_eq!(track.seq_entry_at_beat(0).unwrap().clip_idx, 0);
+    }
+
+    #[test]
+    fn seq_entry_at_beat_not_found() {
+        let song = make_test_song();
+        let track = &song.tracks[0];
+        assert!(track.seq_entry_at_beat(99).is_none());
+    }
+
+    #[test]
+    fn seq_entry_index_at_beat() {
+        let song = make_test_song();
+        let track = &song.tracks[0];
+        assert_eq!(track.seq_entry_index_at_beat(0), Some(0));
+        assert_eq!(track.seq_entry_index_at_beat(1), Some(1)); // second pattern starts at beat 1
+        assert_eq!(track.seq_entry_index_at_beat(99), None);
     }
 }

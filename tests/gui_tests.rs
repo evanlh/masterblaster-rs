@@ -160,6 +160,10 @@ const TESTS: &[(&str, TestFn)] = &[
     ("bmx_track_switching", test_bmx_track_switching),
     ("bmx_sequencer_view", test_bmx_sequencer_view),
     ("bmx_pattern_view", test_bmx_pattern_view),
+    ("sequencer_cursor_navigation", test_sequencer_cursor_navigation),
+    ("sequencer_hex_entry", test_sequencer_hex_entry),
+    ("sequencer_delete_entry", test_sequencer_delete_entry),
+    ("sequencer_enter_jumps_to_pattern", test_sequencer_enter_jumps_to_pattern),
 ];
 
 fn main() {
@@ -357,4 +361,131 @@ fn test_bmx_pattern_view(h: &mut TestHarness) {
         h.render(3);
         h.screenshot("tests/output/bmx_pattern_track1.png");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Sequencer editing tests
+// ---------------------------------------------------------------------------
+
+fn test_sequencer_cursor_navigation(h: &mut TestHarness) {
+    h.load_bmx(BMX_FIXTURE);
+    h.reset_editor();
+    h.inject(&[EditorAction::SwitchToSequencer]);
+    h.render(3);
+
+    assert_eq!(h.app().gui.seq_cursor_row, 0);
+
+    // Move down 3 rows
+    for _ in 0..3 {
+        h.inject(&[EditorAction::MoveCursor { drow: 1, dchannel: 0, dcolumn: 0 }]);
+    }
+    h.render(3);
+    assert_eq!(h.app().gui.seq_cursor_row, 3, "Cursor should be at row 3");
+
+    // Move right to change track
+    let initial_track = h.app().gui.selected_track;
+    h.inject(&[EditorAction::MoveCursor { drow: 0, dchannel: 1, dcolumn: 0 }]);
+    h.render(3);
+    assert_eq!(h.app().gui.selected_track, initial_track + 1, "Track should advance");
+
+    h.screenshot("tests/output/seq_cursor_nav.png");
+}
+
+fn test_sequencer_hex_entry(h: &mut TestHarness) {
+    h.load_bmx(BMX_FIXTURE);
+    h.reset_editor();
+    h.inject(&[EditorAction::SwitchToSequencer]);
+    h.render(3);
+
+    // Enable edit mode
+    h.inject(&[EditorAction::ToggleEditMode]);
+    h.render(1);
+
+    // Navigate to an empty row (far down, past existing entries)
+    for _ in 0..20 {
+        h.inject(&[EditorAction::MoveCursor { drow: 1, dchannel: 0, dcolumn: 0 }]);
+    }
+    h.render(1);
+    let cursor_row = h.app().gui.seq_cursor_row;
+
+    // Enter hex digits 0, 0 to place clip 00
+    h.inject(&[EditorAction::EnterHexDigit(0)]);
+    h.render(1);
+    assert!(h.app().gui.seq_hex_nibble.is_some(), "First nibble stored");
+
+    h.inject(&[EditorAction::EnterHexDigit(0)]);
+    h.render(1);
+    assert!(h.app().gui.seq_hex_nibble.is_none(), "Nibble cleared after placement");
+
+    // Verify entry exists: look up the beat for the original cursor_row
+    let song = h.app().gui.controller.song();
+    let rpb = song.rows_per_beat as u32;
+    let beats_per_row = 16 / rpb.max(1);
+    let beat = cursor_row * beats_per_row;
+    let track_idx = h.app().gui.selected_track;
+    let entry = song.tracks[track_idx].seq_entry_at_beat(beat);
+    assert!(entry.is_some(), "Entry should exist at beat {}", beat);
+    assert_eq!(entry.unwrap().clip_idx, 0);
+
+    // Undo should remove it
+    h.inject(&[EditorAction::Undo]);
+    h.render(1);
+    let entry = h.app().gui.controller.song().tracks[track_idx].seq_entry_at_beat(beat);
+    assert!(entry.is_none(), "Entry should be removed after undo");
+
+    h.screenshot("tests/output/seq_hex_entry.png");
+}
+
+fn test_sequencer_delete_entry(h: &mut TestHarness) {
+    h.load_bmx(BMX_FIXTURE);
+    h.reset_editor();
+    h.inject(&[EditorAction::SwitchToSequencer]);
+    h.render(3);
+
+    // Enable edit mode
+    h.inject(&[EditorAction::ToggleEditMode]);
+    h.render(1);
+
+    // Row 0 should have an entry on the first track
+    let track_idx = h.app().gui.selected_track;
+    let has_entry_before = h.app().gui.controller.song().tracks[track_idx]
+        .seq_entry_at_beat(0).is_some();
+
+    if has_entry_before {
+        // Delete the entry at cursor (row 0)
+        h.inject(&[EditorAction::DeleteCell]);
+        h.render(1);
+
+        let has_entry_after = h.app().gui.controller.song().tracks[track_idx]
+            .seq_entry_at_beat(0).is_some();
+        assert!(!has_entry_after, "Entry should be deleted");
+
+        // Undo should restore it
+        h.inject(&[EditorAction::Undo]);
+        h.render(1);
+        let restored = h.app().gui.controller.song().tracks[track_idx]
+            .seq_entry_at_beat(0).is_some();
+        assert!(restored, "Entry should be restored after undo");
+    }
+
+    h.screenshot("tests/output/seq_delete.png");
+}
+
+fn test_sequencer_enter_jumps_to_pattern(h: &mut TestHarness) {
+    h.load_bmx(BMX_FIXTURE);
+    h.reset_editor();
+    h.inject(&[EditorAction::SwitchToSequencer]);
+    h.render(3);
+
+    // Row 0 should have an entry — press Enter
+    h.inject(&[EditorAction::EnterOnCell]);
+    h.render(3);
+
+    assert_eq!(
+        h.app().gui.center_view,
+        masterblaster::ui::CenterView::Pattern,
+        "Should switch to pattern view"
+    );
+    assert_eq!(h.app().gui.editor.cursor.row, 0, "Cursor should reset to row 0");
+    h.screenshot("tests/output/seq_enter_pattern.png");
 }

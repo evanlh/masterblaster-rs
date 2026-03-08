@@ -410,6 +410,7 @@ impl Engine {
                     *slot = *bypassed;
                 }
             }
+            Edit::SetSeqEntry { .. } => {} // Sequence edits handled by Controller only
         }
     }
 

@@ -4,8 +4,13 @@ use super::colors::*;
 use super::track_label;
 use super::GuiState;
 
+/// Cursor row highlight (full row).
+const SEQ_CURSOR_ROW_BG: [f32; 4] = CURSOR_ROW_BG;
+/// Cursor cell highlight (intersection of cursor row + selected track).
+const SEQ_CURSOR_CELL_BG: [f32; 4] = CURSOR_BG;
+
 /// Number of pattern rows per sequencer grid row.
-const ROWS_PER_SEQ_ROW: u32 = 16;
+pub(crate) const ROWS_PER_SEQ_ROW: u32 = 16;
 
 /// Dimmed text color for muted tracks.
 const MUTED_COLOR: [f32; 4] = [0.35, 0.35, 0.35, 1.0];
@@ -119,10 +124,14 @@ pub fn sequencer_panel(ui: &imgui::Ui, gui: &mut GuiState) {
 
         for row in 0..num_rows {
             let beat = row * beats_per_seq_row;
+            let is_cursor_row = row == gui.seq_cursor_row;
             ui.table_next_row();
 
             // Beat label
             ui.table_next_column();
+            if is_cursor_row {
+                draw_row_bg(ui, ui.calc_text_size("000")[0], SEQ_CURSOR_ROW_BG);
+            }
             let row_color = row_beat_color(beat);
             let _token = ui.push_style_color(imgui::StyleColor::Text, row_color);
             ui.text(format!("{:03}", beat));
@@ -133,8 +142,21 @@ pub fn sequencer_panel(ui: &imgui::Ui, gui: &mut GuiState) {
             for (ti, lookup) in lookups.iter().enumerate() {
                 ui.table_next_column();
 
+                // Scroll sync: keep cursor row vertically centered
+                if is_cursor_row && ti == 0 {
+                    ui.set_scroll_here_y_with_ratio(0.5);
+                }
+                // Scroll sync: keep selected track horizontally visible
+                if ti == gui.selected_track && row == 0 {
+                    ui.set_scroll_here_x();
+                }
+
+                // Background layers (order: column bg, cursor row, playing, cursor cell)
                 if ti == gui.selected_track {
                     draw_selected_col_bg(ui, track_col_width);
+                }
+                if is_cursor_row {
+                    draw_row_bg(ui, track_col_width, SEQ_CURSOR_ROW_BG);
                 }
 
                 let is_playing = playing[ti]
@@ -144,6 +166,10 @@ pub fn sequencer_panel(ui: &imgui::Ui, gui: &mut GuiState) {
 
                 if is_playing {
                     draw_playing_bg(ui, track_col_width);
+                }
+
+                if is_cursor_row && ti == gui.selected_track {
+                    draw_row_bg(ui, track_col_width, SEQ_CURSOR_CELL_BG);
                 }
 
                 let has_data = lookup.contains_key(&beat);
@@ -225,19 +251,19 @@ fn seq_row_for_position(
 }
 
 fn draw_playing_bg(ui: &imgui::Ui, width: f32) {
+    draw_row_bg(ui, width, PLAYING_BG);
+}
+
+fn draw_row_bg(ui: &imgui::Ui, width: f32, color: [f32; 4]) {
     let draw_list = ui.get_window_draw_list();
     let min = ui.cursor_screen_pos();
     let height = ui.text_line_height();
     let max = [min[0] + width, min[1] + height];
-    draw_list.add_rect(min, max, PLAYING_BG).filled(true).build();
+    draw_list.add_rect(min, max, color).filled(true).build();
 }
 
 fn draw_selected_col_bg(ui: &imgui::Ui, width: f32) {
-    let draw_list = ui.get_window_draw_list();
-    let min = ui.cursor_screen_pos();
-    let height = ui.text_line_height();
-    let max = [min[0] + width, min[1] + height];
-    draw_list.add_rect(min, max, SELECTED_BG).filled(true).build();
+    draw_row_bg(ui, width, SELECTED_BG);
 }
 
 fn row_beat_color(beat: u32) -> [f32; 4] {
