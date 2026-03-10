@@ -12,6 +12,7 @@ Updated: 20260302
 - [ ] P5: Event clone in render loop — extract target+payload before dispatch
 - [ ] P6: u64 division every non-tick frame — lazy sub-beat evaluation
 - [ ] P7: Enum match on every sample read — normalize to Mono16 at load
+- [ ] P8: Replace `dyn Machine` with enum dispatch — enable inlining in render loop
 
 ### Minor (Q-Level)
 - [ ] Q1: Double `channel_mut` calls in TrackerMachine::render
@@ -20,8 +21,15 @@ Updated: 20260302
 - [ ] Q4: Per-frame `clear_outputs`
 - [ ] Q5: `has_loop()` re-check in Channel::render
 
+### EventSource Architecture
+- [ ] ES1: EventSource trait definition
+- [ ] ES2: ClipSource implementation
+- [ ] ES3: EventMerger (sorted merge of N sources)
+- [ ] ES4: Engine integration (replace EventQueue + schedule_song)
+- [ ] ES5: Remove apply_set_cell event queue splicing
+
 ### Block-Based Rendering
-- [ ] P1: Block-based graph rendering (SIMD prerequisite)
+- [ ] P1: Block-based graph rendering (depends on ES1-ES4)
 
 ---
 
@@ -328,6 +336,44 @@ This trades memory (8-bit→16-bit doubles size) for simpler/faster reads. For M
 
 ---
 
+## P8: Replace `dyn Machine` with Enum Dispatch
+
+**File:** `crates/mb-engine/src/mixer.rs`, `crates/mb-engine/src/machine.rs`
+
+**Problem:** Machines are stored as `Vec<Option<Box<dyn Machine>>>`. Every `machine.render()`, `machine.tick()`, and `machine.apply_event()` call goes through a vtable — preventing LLVM from inlining the concrete implementation or auto-vectorizing across the call boundary. This matters most for `render()` in the block-based path, where the compiler needs to see through to the inner loop to emit SIMD.
+
+**Current code:**
+```rust
+// mixer.rs
+machines: Vec<Option<Box<dyn Machine>>>,
+
+// render_machine:
+if let Some(Some(machine)) = self.machines.get_mut(node_id as usize) {
+    machine.render(&mut self.graph_state.scratch);  // vtable call
+}
+```
+
+**Proposed fix:** Replace the trait object with a concrete enum:
+
+```rust
+pub enum MachineInstance {
+    Tracker(TrackerMachine),
+    AmigaFilter(AmigaFilter),
+    Passthrough(PassthroughMachine),
+    Faust(FaustMachine),  // future: wraps all Faust-compiled DSP
+}
+```
+
+Each variant delegates to the concrete type. The compiler sees through the match arms and can inline + vectorize the hot `render()` path. The `Machine` trait can remain as a design contract (and for testing), but the engine dispatches via the enum.
+
+The `create_machine` factory in `machines/mod.rs` returns `MachineInstance` instead of `Box<dyn Machine>`. Storage becomes `Vec<Option<MachineInstance>>` — also eliminates the `Box` heap allocation per node.
+
+**Extensibility:** The only planned external machine interface is Faust DSP, which would compile to a single `FaustMachine` variant wrapping generated code. No runtime plugin loading is planned, so a closed enum is sufficient.
+
+**Impact:** Enables LLVM to inline `render()` at every call site in the graph traversal. Combined with block-based rendering (P1), this is the difference between "SIMD in theory" and "SIMD in practice" — the compiler must see the loop body to vectorize it. Also eliminates one heap allocation per machine node.
+
+---
+
 ## Q-Level Issues (Minor)
 
 ### Q1: Double `channel_mut` Calls in TrackerMachine::render
@@ -408,13 +454,165 @@ if sample.has_loop() && pos_samples >= sample.loop_end as u64 {
 | P6 | Medium (removes div from 97% of frames) | Low | Easy win — lazy position |
 | P7 | Low-Medium (branch predictor helps) | Medium-High | Normalize at load time |
 | P5 | Low (events are infrequent) | Low | Quick cleanup |
+| P8 | High (enables inlining + SIMD) | Low | Do before or with P1 — enum swap is mechanical |
 | Q1-Q5 | Negligible | Low | Address opportunistically |
 
 Total estimated reduction in per-frame work: ~30-40% fewer instructions in the sample read path (P2+P7), O(n) → O(1) connection lookup (P3), eliminated unnecessary computation (P4, P6).
 
 ---
 
-## P1: Block-Based Graph Rendering (SIMD prerequisite)
+## ES1: EventSource Architecture — Lazy Event Generation
+
+### Problem
+
+`schedule_song()` materializes ALL events from all pattern cells upfront into a sorted `Vec<Event>`. This means:
+
+1. All events for the entire song exist in memory at once (~3 events/row × rows × channels)
+2. Live edits must splice the event queue: `retain()` to remove + `push()` to re-insert — both O(n) on total events and violate the no-alloc hot path
+3. The scheduler walks the entire song upfront; any change requires re-walking affected regions
+
+### Design: Inverted cursor model
+
+Instead of materializing events into a central queue, each clip becomes an **EventSource** — an object with an internal cursor that lazily emits events as time advances forward.
+
+```rust
+/// A source of time-ordered events, consumed by draining forward.
+pub trait EventSource {
+    /// Emit all events up to and including `time` into `out`.
+    /// Returns the number of events emitted.
+    fn drain_until(&mut self, time: MusicalTime, out: &mut heapless::Vec<Event, 256>) -> usize;
+
+    /// Reset the cursor to a given time (for seeking).
+    fn seek(&mut self, time: MusicalTime);
+
+    /// The time of the next event this source will emit, or None if exhausted.
+    fn peek_time(&self) -> Option<MusicalTime>;
+}
+```
+
+Key properties:
+- `heapless::Vec<Event, 256>` — stack-allocated, no heap allocation in the drain path
+- 256 capacity aligns with max reasonable events in a single block interval (~32 channels × 3 events/row × 2-3 rows/block)
+- `peek_time()` enables efficient sorted merge without draining
+
+### ClipSource
+
+Wraps cursor state + event target. Reads pattern data lazily via passed references at drain time (avoids lifetime entanglement with Song ownership):
+
+```rust
+pub struct ClipSourceState {
+    /// Event target for this track
+    target_node: Option<NodeId>,
+    base_channel: u8,
+    /// Track index into song.tracks
+    track_idx: usize,
+    /// Current sequence entry index
+    entry_idx: usize,
+    /// Current row within current pattern
+    row: u16,
+    /// Accumulated time
+    time: MusicalTime,
+    /// Current speed (updated by SetSpeed events)
+    speed: u32,
+    /// Rows per beat
+    rows_per_beat: u32,
+    /// Max rows budget (loop detection)
+    rows_remaining: u32,
+}
+```
+
+The `drain_until` implementation walks rows forward from the cursor position, calling `schedule_cell` (reused as-is) for each cell in the row. Flow control (PatternBreak, PositionJump, PatternDelay) is handled the same way `schedule_track` does today, but incrementally — advancing state per drain call rather than all at once.
+
+### EventMerger
+
+The engine owns a `Vec<ClipSourceState>` (one per track). Each block drain:
+
+```rust
+fn drain_all_sources(&mut self, time: MusicalTime) {
+    self.event_buf.clear();
+    for source in &mut self.sources {
+        source.drain_until(time, &self.song, &mut self.event_buf);
+    }
+    // For typical <10 events per block, insertion sort is fine
+    self.event_buf.sort_unstable_by(|a, b| a.time.cmp(&b.time));
+}
+```
+
+### Edit simplification
+
+Since ClipSource reads directly from the Pattern data, editing a cell just mutates the pattern:
+
+```rust
+// Old: mutate song data AND splice event queue
+fn apply_set_cell(...) {
+    pat.cell_mut(row, col) = cell;     // mutate
+    event_queue.retain(...);            // O(n) remove
+    schedule_cell(...);                 // re-insert
+}
+
+// New: just mutate song data
+fn apply_set_cell(...) {
+    pat.cell_mut(row, col) = cell;     // done!
+}
+```
+
+Edits ahead of the cursor are picked up naturally on the next pass. Edits behind the cursor take effect on loop/seek.
+
+### Ownership model
+
+ClipSourceState stores track indices, not references. The engine passes `&song.tracks[i]` into drain calls. Draining and editing alternate within the audio thread (edits arrive via ring buffer between blocks), so no concurrent access issues.
+
+### Song end detection
+
+`Song::total_time()` already computes total duration from sequence data — no scheduling needed.
+
+### Global events (SetTempo, SetSpeed)
+
+Emitted by ClipSource into the shared event buffer, processed by the engine before rendering. The engine propagates SetSpeed back to all ClipSourceStates so NoteDelay calculations use the updated speed.
+
+### Relationship to block-based rendering
+
+EventSource integrates naturally with block rendering: at block start, drain all sources up to `block_end_time`, sort events, use event times to compute sub-block split points. The block renderer calls `drain_until(block_end_time)` once per block instead of per-frame `drain_until(current_time)`.
+
+### Future: MidiSource
+
+A `MidiSource` implementing `EventSource` that wraps a ring buffer from a MIDI input thread. Same trait — enables live MIDI to drive tracker channels or replace a clip's output entirely.
+
+---
+
+### Implementation phases
+
+**Phase 1: EventSource trait + ClipSource (additive only)**
+- New files: `event_source.rs`, `clip_source.rs` in `crates/mb-engine/src/`
+- Port row-walking logic from `schedule_track` into incremental cursor model
+- Test by comparing ClipSource output against `schedule_song` output for existing fixtures
+- No existing files modified
+
+**Phase 2: Engine integration + test migration**
+- Replace `EventQueue` + `schedule_song` with `Vec<ClipSourceState>` in Engine
+- `render_frame_inner` drains from ClipSources instead of EventQueue
+- Rewrite `schedule_song` as a thin wrapper: creates ClipSources, drains to completion, collects into `Vec<Event>` — keeps all 30+ scheduler tests passing without changes
+- Migrate `scheduler.rs` tests to drain ClipSources directly (remove `schedule_song` wrapper dependency)
+- Remove `time_for_track_clip_row` and its 4 tests (`time_for_row_single_occurrence`, `time_for_row_repeated_pattern`, `time_for_row_out_of_range_row`, `time_for_row_respects_entry_length`) — function only existed for edit queue splicing
+- Update `lib.rs` public exports: remove `EventQueue`, `time_for_track_clip_row`; add `EventSource`, `ClipSourceState`
+
+**Phase 3: Edit simplification**
+- `apply_set_cell` → just mutate pattern data (remove `event_queue.retain()` / `schedule_cell` re-insertion)
+- Update `mixer.rs` edit tests:
+  - `set_cell_updates_song_data` — keep as-is (still tests song mutation)
+  - `set_cell_inserts_events_in_queue` — rewrite: verify that after mutating a cell ahead of the cursor, the ClipSource emits the updated events on its next drain pass
+  - `set_cell_replaces_old_events` — rewrite: verify that overwriting a cell with empty produces silence (ClipSource reads updated data)
+  - `set_cell_on_invalid_track_is_noop` / `set_cell_on_invalid_row_is_noop` — keep as-is (still tests bounds checking)
+
+**Phase 4: Block-based rendering** (see P1 below)
+- Update `Machine` trait contract: all machines must handle N-frame `AudioBuffer`s
+- Add `ChannelState::render_block`, `TrackerMachine` block render
+- Expand `GraphState` buffers to `BLOCK_SIZE`
+- Verify with criterion benchmarks against saved baselines
+
+---
+
+## P1: Block-Based Graph Rendering (depends on ES1-ES4)
 
 ### Why SIMD doesn't help today
 
@@ -496,13 +694,24 @@ fn render_block(&mut self, output: &mut AudioBuffer) {
     let total_frames = output.frames() as usize;
     let mut offset = 0;
 
+    // Drain events from all ClipSources for this block
+    self.event_buf.clear();
+    let block_end_time = self.time_at_frame_offset(total_frames);
+    for source in &mut self.sources {
+        source.drain_until(block_end_time, &self.song, &mut self.event_buf);
+    }
+    self.event_buf.sort_unstable_by(|a, b| a.time.cmp(&b.time));
+
     while offset < total_frames {
-        // Find next boundary: tick or event, whichever comes first
+        // Find next boundary: tick, event, or block end
         let frames_to_tick = self.samples_per_tick - self.sample_counter;
-        let frames_to_event = self.frames_until_next_event();
+        let frames_to_event = self.frames_to_next_event(&self.event_buf, offset);
         let sub_block = frames_to_tick
             .min(frames_to_event)
             .min(total_frames - offset) as usize;
+
+        // Dispatch events at current time
+        self.dispatch_events_at(self.current_time);
 
         // Render sub-block: parameters constant, SIMD-friendly
         self.render_graph_block(output, offset, sub_block);
@@ -515,7 +724,6 @@ fn render_block(&mut self, output: &mut AudioBuffer) {
             self.advance_tick();
             self.process_tick();
         }
-        self.dispatch_pending_events();
     }
 }
 ```
@@ -526,13 +734,17 @@ The key insight: within a sub-block, all channel parameters (volume, period, pan
 
 | Component | Current (per-frame) | Target (per-block) |
 |-----------|--------------------|--------------------|
+| `EventQueue` | Pre-materialized sorted Vec | `Vec<ClipSourceState>` + `heapless::Vec<Event, 256>` per block (ES1-ES4) |
+| `apply_set_cell` | Mutate song + splice queue | Mutate song only (ES5) |
 | `GraphState` node_outputs | `AudioBuffer::new(2, 1)` | `AudioBuffer::new(2, BLOCK_SIZE)` |
 | `GraphState` scratch | `AudioBuffer::new(2, 1)` | `AudioBuffer::new(2, BLOCK_SIZE)` |
-| `ChannelState::render` | Returns `Frame` (1 sample) | Fills `&mut [f32]` slice (N samples) |
+| `Machine` trait / `AudioStream` | `render(&mut AudioBuffer)` with 1 frame | All machines must handle N-frame buffers. Analogous to Buzz's `Work(samples, numsamples)` — the trait signature stays the same but the contract changes from 1-frame to N-frame blocks. |
+| `ChannelState::render` | Returns `Frame` (1 sample) | `render_block(&mut [f32], &mut [f32])` fills N frames |
 | `TrackerMachine::render` | Loops channels, 1 frame each | Loops channels, N frames each |
-| `Engine::render_frame_inner` | Events → graph → advance | Split block at boundaries, render sub-blocks |
+| `Engine::render_frame_inner` | Events → graph → advance | `render_block`: drain sources → split at boundaries → render sub-blocks |
+| `AmigaFilter` | Already handles N frames | No change needed (already loops over `0..frames`) |
+| `PassthroughMachine` | No-op on 1 frame | No change needed (no-op on N frames) |
 | `run_audio_loop` interleave | Per-sample `batch[i][0/1]` | Could use planar→interleaved bulk copy |
-| `AmigaFilter` | Processes 1 sample | Processes N samples (filter state carries across) |
 
 ### ChannelState block rendering
 
@@ -578,4 +790,14 @@ Volume/panning are hoisted out of the loop (constant within a sub-block). The in
 - **Cache efficiency**: Processing 256 contiguous samples per channel improves spatial locality vs jumping between channels every sample.
 - **Reduced function call overhead**: One `render()` call per machine per block vs 256 calls.
 
-This is the single largest potential optimization — likely 3-5x overall throughput improvement in the graph rendering path. It's also the highest effort, touching the engine's core render loop, every machine, and `ChannelState`. Should be done after the simpler P2-P7 fixes.
+This is the single largest potential optimization — likely 3-5x overall throughput improvement in the graph rendering path. It's also the highest effort, touching the engine's core render loop, every machine, and `ChannelState`. Should be done after the simpler P2-P7 fixes and after ES1-ES4 (EventSource architecture).
+
+### Machine trait impact
+
+The `AudioStream::render(&mut AudioBuffer)` signature doesn't change, but the contract shifts: buffers go from 1 frame to N frames. This mirrors the original Buzz API where `CMachine::Work(float *psamples, int numsamples, int const mode)` always operated on blocks.
+
+Current machine status for block rendering:
+- **AmigaFilter**: Already block-ready — loops over `0..frames` with filter state carrying across.
+- **PassthroughMachine**: Already block-ready — no-op regardless of frame count.
+- **TrackerMachine**: Needs the most work. Currently renders 1 frame per channel per call. Must add `render_block` logic: for each sub-block, loop channels and call `ChannelState::render_block`.
+- **Future machines**: Any new `Machine` impl must handle N-frame buffers from the start.

@@ -252,9 +252,7 @@ impl Engine {
     /// Dispatch an event to its target.
     fn dispatch_event(&mut self, event: &Event) {
         match event.target {
-            EventTarget::Channel(ch) => {
-                self.apply_channel_event(ch, &event.payload);
-            }
+            EventTarget::Channel(_) => {}
             EventTarget::NodeChannel(node_id, ch) => {
                 if let Some(Some(machine)) = self.machines.get_mut(node_id as usize) {
                     machine.apply_event(ch, &event.payload);
@@ -267,12 +265,6 @@ impl Engine {
                 // TODO: Route to graph node
             }
         }
-    }
-
-    /// Apply an event to a legacy Channel target (forwards to TrackerMachine if available).
-    fn apply_channel_event(&mut self, _ch: u8, _payload: &EventPayload) {
-        // Legacy Channel events are no longer used — all tracker events
-        // now route via NodeChannel to TrackerMachine.
     }
 
     /// Apply a global event.
@@ -308,7 +300,7 @@ impl Engine {
                 NodeType::BuzzMachine { .. } => {
                     self.render_machine(node_id);
                 }
-                _ => {
+                NodeType::Master => {
                     // Master and other pass-through nodes: gather wire inputs
                     // Wire-level gain (from gather_inputs) handles all mixing
                     graph_state::gather_inputs(

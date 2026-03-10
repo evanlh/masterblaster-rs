@@ -78,8 +78,6 @@ pub struct Node {
 pub enum NodeType {
     /// Master output node
     Master,
-    /// Sample player
-    Sampler { sample_id: u16 },
     /// Buzz machine (emulated)
     BuzzMachine { machine_name: String, is_tracker: bool },
 }
@@ -89,7 +87,6 @@ impl NodeType {
     pub fn label(&self) -> alloc::string::String {
         match self {
             NodeType::Master => alloc::string::String::from("Master"),
-            NodeType::Sampler { sample_id } => alloc::format!("Smp {}", sample_id),
             NodeType::BuzzMachine { machine_name, .. } => machine_name.clone(),
         }
     }

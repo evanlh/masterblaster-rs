@@ -133,6 +133,10 @@ mod tests {
         index_connections_by_dest(graph, graph.nodes.len())
     }
 
+    fn effect_node(name: &str) -> NodeType {
+        NodeType::BuzzMachine { machine_name: alloc::string::String::from(name), is_tracker: false }
+    }
+
     #[test]
     fn master_only_graph() {
         let graph = AudioGraph::with_master();
@@ -144,7 +148,7 @@ mod tests {
     fn four_channels_to_master() {
         let mut graph = AudioGraph::with_master(); // node 0 = Master
         for i in 0..4u8 {
-            let id = graph.add_node(NodeType::Sampler { sample_id: i as u16 });
+            let id = graph.add_node(effect_node(&alloc::format!("N{}", i)));
             graph.connect(id, 0);
         }
         let order = topological_sort(&graph);
@@ -162,8 +166,8 @@ mod tests {
     fn chain_topology() {
         // A → B → Master
         let mut graph = AudioGraph::with_master(); // 0 = Master
-        let a = graph.add_node(NodeType::Sampler { sample_id: 0 }); // 1
-        let b = graph.add_node(NodeType::Sampler { sample_id: 0 }); // 2
+        let a = graph.add_node(effect_node("A")); // 1
+        let b = graph.add_node(effect_node("A")); // 2
         graph.connect(a, b);
         graph.connect(b, 0);
 
@@ -180,8 +184,8 @@ mod tests {
     #[test]
     fn gather_inputs_sums_sources() {
         let mut graph = AudioGraph::with_master();
-        let a = graph.add_node(NodeType::Sampler { sample_id: 0 });
-        let b = graph.add_node(NodeType::Sampler { sample_id: 1 });
+        let a = graph.add_node(effect_node("A"));
+        let b = graph.add_node(effect_node("B"));
         graph.connect(a, 0);
         graph.connect(b, 0);
 
@@ -210,7 +214,7 @@ mod tests {
     #[test]
     fn gather_inputs_with_gain() {
         let mut graph = AudioGraph::with_master();
-        let a = graph.add_node(NodeType::Sampler { sample_id: 0 });
+        let a = graph.add_node(effect_node("A"));
         // Manually set gain to -50 (half volume)
         graph.connections.clear();
         graph.connections.push(mb_ir::Connection {
@@ -247,7 +251,7 @@ mod tests {
     #[test]
     fn gather_inputs_zero_gain_is_silent() {
         let mut graph = AudioGraph::with_master();
-        let a = graph.add_node(NodeType::Sampler { sample_id: 0 });
+        let a = graph.add_node(effect_node("A"));
         graph.connections.clear();
         graph.connections.push(mb_ir::Connection {
             from: a, to: 0, from_channel: 0, to_channel: 0, gain: -100,
@@ -265,7 +269,7 @@ mod tests {
     fn graph_state_from_graph() {
         let mut graph = AudioGraph::with_master();
         for i in 0..4u8 {
-            let id = graph.add_node(NodeType::Sampler { sample_id: i as u16 });
+            let id = graph.add_node(effect_node(&alloc::format!("N{}", i)));
             graph.connect(id, 0);
         }
         let state = GraphState::from_graph(&graph);
