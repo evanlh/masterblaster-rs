@@ -37,6 +37,24 @@ cargo test --test bmx_fixtures
 
 `cargo ta` is an alias for `cargo test --workspace`.
 
+## Benchmarks
+
+```sh
+# Run engine render loop benchmarks (criterion)
+cargo bench -p mb-engine --bench engine_bench
+
+# Quick mode (fewer iterations, faster feedback)
+cargo bench -p mb-engine --bench engine_bench -- --quick
+
+# Save a baseline for regression comparison
+cargo bench -p mb-engine --bench engine_bench -- --save-baseline main
+
+# Compare against a saved baseline
+cargo bench -p mb-engine --bench engine_bench -- --baseline main
+```
+
+HTML reports are generated in `target/criterion/`.
+
 ### Test suites
 
 | Test file | What it covers |

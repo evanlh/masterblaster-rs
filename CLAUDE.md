@@ -42,6 +42,24 @@ cargo cli path/to/file.mod --wav output.wav
 
 `cargo cli` is a cargo alias for `cargo run --bin mb-cli --` (defined in `.cargo/config.toml`).
 
+## Benchmarks
+
+```sh
+# Run engine benchmarks (criterion)
+cargo bench -p mb-engine --bench engine_bench
+
+# Quick mode (fewer iterations, faster feedback)
+cargo bench -p mb-engine --bench engine_bench -- --quick
+
+# Save a baseline for regression comparison
+cargo bench -p mb-engine --bench engine_bench -- --save-baseline main
+
+# Compare against a saved baseline
+cargo bench -p mb-engine --bench engine_bench -- --baseline main
+```
+
+HTML reports are generated in `target/criterion/`.
+
 ## Dependency Decisions
 
 | Crate | Version | Notes |
