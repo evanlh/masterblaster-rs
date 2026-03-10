@@ -10,8 +10,8 @@ Miscellaneous thoughts & TODOs that we need to address or turn into design/ plan
 - [ ] bug: Looks like we lost the song analysis in the CLI in e01239604ab91f0828054e5cdcb13e743b0e58ef
 - [ ] concern: Bug found in 851ecaaf88c54a644d4d075886f0fd86eada7a99 basically shows we're looping infinitely with PositionJump backwards. Budget is based on # of tracks, but that doesn't make much sense-- should probably establish a max number of backwards jumps to loop for, at least when recording WAV files. Looping infinitely might be desirable for live performances & certainly pattern jamming.
 - [ ] feat: Make all keyboard actions configurable, text version of the imgui keyboard enum and a .json mapping layer. Then input.ts can consume EditorActions directly from this mapping table.
-- [ ] feat: Similarly, make colors and fonts configurable! Overall GUI needs a makeover, a nice 80s monospace font and a Mad Max color scheme.
-- [ ] feat: Add information on the cell contents of the Effects columns to the Modeline, so you can easily change the Effect # & value and see a description of their effect
+- [ ] feat: Similarly, make colors and fonts configurable! Overall GUI needs a makeover, a nice 80s monospace font and a Mad Max color scheme. [Design doc for these two](./021-configurable-ui-theming.md).
+- [x] feat: Add information on the cell contents of the Effects columns to the Modeline, so you can easily change the Effect # & value and see a description of their effect
 - [ ] feat: Add popup help. This should show keyboard shortcuts and an effect command cheatsheet.
 - [ ] feat: Keybindings for pattern channel nav-- instead of Tab, Alt+left/right = Jump to the same field in the neighboring channel, Alt+up/down = jump rows-per-beat steps up down in current track.
 - [ ] feat: Keybindings for nav between pannels-- pause this on deciding whether Clips and Samples columns are how we want to do this, but basically we want a keybinding to navigate between panels (Tab probably) so you can navigate all of the viewports via the keyboard. Also will need arrow/selection of Clips & Samples.
