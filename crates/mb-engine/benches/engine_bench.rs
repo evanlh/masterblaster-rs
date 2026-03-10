@@ -146,10 +146,10 @@ fn bench_render_20_channels(c: &mut Criterion) {
     });
 }
 
-fn bench_render_10_channels_50_passthrough(c: &mut Criterion) {
-    c.bench_function("render_10ch_50pass_64rows_100x100ms", |b| {
+fn bench_render_10_channels_10_passthrough(c: &mut Criterion) {
+    c.bench_function("render_10ch_10pass_64rows_100x100ms", |b| {
         b.iter_batched(
-            || setup_engine(build_bench_song_with_passthrough(10, PATTERN_ROWS, 50)),
+            || setup_engine(build_bench_song_with_passthrough(10, PATTERN_ROWS, 10)),
             |mut engine| {
                 let mut buf = [[0.0f32; 2]; FRAMES_PER_CHUNK];
                 for _ in 0..CHUNKS {
@@ -165,6 +165,6 @@ criterion_group!(
     benches,
     bench_render_10_channels,
     bench_render_20_channels,
-    bench_render_10_channels_50_passthrough,
+    bench_render_10_channels_10_passthrough,
 );
 criterion_main!(benches);
