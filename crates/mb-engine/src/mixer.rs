@@ -59,7 +59,7 @@ fn channels_for_node(song: &Song, node_id: u16) -> &[mb_ir::ChannelSettings] {
 /// Instantiate machines for all BuzzMachine nodes in the graph.
 fn init_machines(song: &Song, sample_rate: u32) -> Vec<Option<Box<dyn Machine>>> {
     song.graph.nodes.iter().map(|node| {
-        if let NodeType::BuzzMachine { is_tracker, machine_name } = &node.node_type {
+        if let NodeType::Machine { is_tracker, machine_name } = &node.node_type {
             if *is_tracker {
                 let ch_settings = channels_for_node(song, node.id);
                 let mix_gain = tracker_mix_gain(ch_settings.len() as u32);
@@ -297,7 +297,7 @@ impl Engine {
             };
 
             match &node.node_type {
-                NodeType::BuzzMachine { .. } => {
+                NodeType::Machine { .. } => {
                     self.render_machine(node_id);
                 }
                 NodeType::Master => {

@@ -79,7 +79,7 @@ pub enum NodeType {
     /// Master output node
     Master,
     /// Buzz machine (emulated)
-    BuzzMachine { machine_name: String, is_tracker: bool },
+    Machine { machine_name: String, is_tracker: bool },
 }
 
 impl NodeType {
@@ -87,7 +87,7 @@ impl NodeType {
     pub fn label(&self) -> alloc::string::String {
         match self {
             NodeType::Master => alloc::string::String::from("Master"),
-            NodeType::BuzzMachine { machine_name, .. } => machine_name.clone(),
+            NodeType::Machine { machine_name, .. } => machine_name.clone(),
         }
     }
 }

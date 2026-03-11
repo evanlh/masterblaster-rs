@@ -513,11 +513,11 @@ fn parse_mach(
             (0, Vec::new())
         } else if is_tracker {
             // Create a single Tracker machine node for all channels
-            let id = graph.add_node(NodeType::BuzzMachine { machine_name: name.clone(), is_tracker: true });
+            let id = graph.add_node(NodeType::Machine { machine_name: name.clone(), is_tracker: true });
             let ids: Vec<NodeId> = (0..num_tracks).map(|_| id).collect();
             (id, ids)
         } else {
-            let id = graph.add_node(NodeType::BuzzMachine { machine_name: name.clone(), is_tracker: false });
+            let id = graph.add_node(NodeType::Machine { machine_name: name.clone(), is_tracker: false });
             // Add IR parameters to non-tracker graph nodes
             if let Some(node) = graph.node_mut(id) {
                 for (j, p) in para.global_params.iter().enumerate() {

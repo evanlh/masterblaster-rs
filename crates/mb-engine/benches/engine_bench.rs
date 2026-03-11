@@ -96,7 +96,7 @@ fn build_bench_song_with_passthrough(
     let mut prev_id = 1u16; // AmigaFilter
     for i in 0..num_passthrough {
         let name = format!("Passthrough {}", i);
-        let node_id = song.graph.add_node(mb_ir::NodeType::BuzzMachine {
+        let node_id = song.graph.add_node(mb_ir::NodeType::Machine {
             machine_name: name,
             is_tracker: false,
         });

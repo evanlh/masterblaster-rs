@@ -134,7 +134,7 @@ mod tests {
     }
 
     fn effect_node(name: &str) -> NodeType {
-        NodeType::BuzzMachine { machine_name: alloc::string::String::from(name), is_tracker: false }
+        NodeType::Machine { machine_name: alloc::string::String::from(name), is_tracker: false }
     }
 
     #[test]

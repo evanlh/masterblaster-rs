@@ -70,7 +70,7 @@ impl Song {
         // Insert Amiga filter between tracker and master
         let filter_id = song
             .graph
-            .add_node(NodeType::BuzzMachine { machine_name: alloc::string::String::from("Amiga Filter"), is_tracker: false });
+            .add_node(NodeType::Machine { machine_name: alloc::string::String::from("Amiga Filter"), is_tracker: false });
         song.graph.node_mut(filter_id).unwrap().parameters.push(
             Parameter::new(0, "Cutoff", 1000, 22050, 4410),
         );
@@ -79,7 +79,7 @@ impl Song {
         // Single Tracker machine node for all channels
         let tracker_id = song
             .graph
-            .add_node(NodeType::BuzzMachine { machine_name: alloc::string::String::from("Tracker"), is_tracker: true });
+            .add_node(NodeType::Machine { machine_name: alloc::string::String::from("Tracker"), is_tracker: true });
         song.graph.connect(tracker_id, filter_id); // tracker → filter
 
         for i in 0..num_channels {
@@ -106,7 +106,7 @@ impl Song {
         return track.machine_node
             .and_then(|id| self.graph.node(id))
             .map(|n| match n.node_type {
-                NodeType::BuzzMachine { is_tracker, .. } => {
+                NodeType::Machine { is_tracker, .. } => {
                     is_tracker
                 }
                 _ => {
@@ -257,14 +257,14 @@ pub struct SeqEntry {
 /// Find the Tracker machine node in the graph.
 pub fn find_tracker_node(graph: &AudioGraph) -> Option<NodeId> {
     graph.nodes.iter().enumerate()
-        .find(|(_, n)| matches!(&n.node_type, NodeType::BuzzMachine { is_tracker: true, .. }))
+        .find(|(_, n)| matches!(&n.node_type, NodeType::Machine { is_tracker: true, .. }))
         .map(|(i, _)| i as NodeId)
 }
 
 /// Find the first BuzzMachine node in the graph (e.g. AmigaFilter for MOD).
 pub fn find_machine_node(graph: &AudioGraph) -> Option<NodeId> {
     graph.nodes.iter().enumerate()
-        .find(|(_, n)| matches!(&n.node_type, NodeType::BuzzMachine { .. }))
+        .find(|(_, n)| matches!(&n.node_type, NodeType::Machine { .. }))
         .map(|(i, _)| i as NodeId)
 }
 
@@ -457,7 +457,7 @@ mod tests {
         let machine = song.tracks[0].machine_node;
         assert!(machine.is_some());
         let node = song.graph.node(machine.unwrap()).unwrap();
-        assert!(matches!(&node.node_type, NodeType::BuzzMachine { is_tracker: true, .. }));
+        assert!(matches!(&node.node_type, NodeType::Machine { is_tracker: true, .. }));
     }
 
     #[test]
