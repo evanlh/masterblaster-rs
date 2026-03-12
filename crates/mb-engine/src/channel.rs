@@ -9,13 +9,6 @@ use mb_ir::{
 use crate::envelope_state::EnvelopeState;
 use crate::frequency::{clamp_period, note_to_period, period_to_increment, PERIOD_MAX, PERIOD_MIN};
 
-/// A stereo audio frame (16-bit integer, internal to channel rendering).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Frame {
-    pub left: i16,
-    pub right: i16,
-}
-
 /// An active envelope-based modulator on a channel parameter.
 #[derive(Clone, Debug)]
 pub struct ActiveMod {
@@ -326,36 +319,35 @@ impl ChannelState {
         }
     }
 
-    pub(crate) fn render(&mut self, sample: &Sample) -> Frame {
-        // Read sample values with linear interpolation (stereo-aware)
-        let (sample_l, sample_r) = sample.data.get_stereo_interpolated(self.position);
-
-        // Apply volume (with tremolo offset) and panning
-        // pan: -64 (full left) to +64 (full right)
-        // Convert to 0..128 range for linear crossfade
+    /// Render a block of frames, accumulating into left/right slices.
+    /// Volume and panning are hoisted outside the loop (constant within sub-block).
+    pub(crate) fn render_block(
+        &mut self,
+        sample: &Sample,
+        left: &mut [f32],
+        right: &mut [f32],
+        gain: f32,
+    ) {
         let vol = (self.volume as i32 + self.volume_offset as i32).clamp(0, 64);
-        let pan_right = self.panning as i32 + 64; // 0..128
-        let left_vol = ((128 - pan_right) * vol) >> 7;
-        let right_vol = (pan_right * vol) >> 7;
+        let pan_right = self.panning as i32 + 64;
+        let left_gain = ((128 - pan_right) as f32 / 128.0) * (vol as f32 / 64.0) * gain / 32768.0;
+        let right_gain = (pan_right as f32 / 128.0) * (vol as f32 / 64.0) * gain / 32768.0;
 
-        let left = (sample_l as i32 * left_vol) >> 6;
-        let right = (sample_r as i32 * right_vol) >> 6;
+        for i in 0..left.len() {
+            if !self.playing { break; }
 
-        // Advance position
-        self.position += self.increment;
+            let (sample_l, sample_r) = sample.data.get_stereo_interpolated(self.position);
+            left[i] += sample_l as f32 * left_gain;
+            right[i] += sample_r as f32 * right_gain;
 
-        // Handle looping
-        let pos_samples = self.position >> 16;
-        if sample.has_loop() && pos_samples >= sample.loop_end as u64 {
-            let loop_len = (sample.loop_end - sample.loop_start) as u64;
-            self.position -= loop_len << 16;
-        } else if pos_samples >= sample.len() as u64 {
-            self.playing = false;
-        }
-
-        Frame {
-            left: left.clamp(-32768, 32767) as i16,
-            right: right.clamp(-32768, 32767) as i16,
+            self.position += self.increment;
+            let pos_samples = self.position >> 16;
+            if sample.has_loop() && pos_samples >= sample.loop_end as u64 {
+                let loop_len = (sample.loop_end - sample.loop_start) as u64;
+                self.position -= loop_len << 16;
+            } else if pos_samples >= sample.len() as u64 {
+                self.playing = false;
+            }
         }
     }
 

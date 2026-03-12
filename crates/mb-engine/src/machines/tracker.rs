@@ -198,20 +198,15 @@ impl AudioStream for TrackerMachine {
     }
 
     fn render(&mut self, output: &mut AudioBuffer) {
-        // Render all channels and sum into output with mix_gain
+        let frames = output.frames() as usize;
         for channel in &mut self.channels {
-            if !channel.playing {
-                continue;
-            }
+            if !channel.playing { continue; }
             let sample = match self.samples.get(channel.sample_index as usize) {
                 Some(s) => s,
                 None => continue,
             };
-            let frame = channel.render(sample);
-            let left = frame.left as f32 / 32768.0;
-            let right = frame.right as f32 / 32768.0;
-            output.channel_mut(0)[0] += left * self.mix_gain;
-            output.channel_mut(1)[0] += right * self.mix_gain;
+            let (left, right) = output.channels_mut_2(0, 1);
+            channel.render_block(sample, &mut left[..frames], &mut right[..frames], self.mix_gain);
         }
     }
 }

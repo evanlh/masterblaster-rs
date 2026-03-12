@@ -123,7 +123,7 @@ fn bench_render_10_channels(c: &mut Criterion) {
             |mut engine| {
                 let mut buf = [[0.0f32; 2]; FRAMES_PER_CHUNK];
                 for _ in 0..CHUNKS {
-                    engine.render_frames_into(&mut buf);
+                    engine.render_block(&mut buf);
                 }
             },
             criterion::BatchSize::SmallInput,
@@ -138,7 +138,7 @@ fn bench_render_20_channels(c: &mut Criterion) {
             |mut engine| {
                 let mut buf = [[0.0f32; 2]; FRAMES_PER_CHUNK];
                 for _ in 0..CHUNKS {
-                    engine.render_frames_into(&mut buf);
+                    engine.render_block(&mut buf);
                 }
             },
             criterion::BatchSize::SmallInput,
@@ -153,7 +153,7 @@ fn bench_render_10_channels_10_passthrough(c: &mut Criterion) {
             |mut engine| {
                 let mut buf = [[0.0f32; 2]; FRAMES_PER_CHUNK];
                 for _ in 0..CHUNKS {
-                    engine.render_frames_into(&mut buf);
+                    engine.render_block(&mut buf);
                 }
             },
             criterion::BatchSize::SmallInput,

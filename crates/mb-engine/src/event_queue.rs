@@ -7,6 +7,7 @@ use mb_ir::{Event, MusicalTime};
 ///
 /// During playback, events are consumed via a cursor that advances forward
 /// without removing elements — making the realtime drain path allocation-free.
+#[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct EventQueue {
     events: Vec<Event>,
@@ -14,6 +15,7 @@ pub struct EventQueue {
     cursor: usize,
 }
 
+#[allow(dead_code)]
 impl EventQueue {
     /// Create a new empty event queue.
     pub fn new() -> Self {
