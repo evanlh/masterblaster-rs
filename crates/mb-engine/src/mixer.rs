@@ -4,11 +4,11 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use mb_ir::{Edit, Event, EventPayload, EventTarget, MusicalTime, NodeType, Song, SUB_BEAT_UNIT};
 
-use crate::event_queue::EventQueue;
+use crate::clip_source::ClipSourceState;
+use crate::event_source::EventSource;
 use crate::graph_state::{self, GraphState};
 use crate::machine::Machine;
 use crate::machines;
-use crate::scheduler;
 
 /// The main playback engine.
 pub struct Engine {
@@ -16,8 +16,12 @@ pub struct Engine {
     song: Song,
     /// Runtime graph state (node outputs + topological order)
     graph_state: GraphState,
-    /// Event queue
-    event_queue: EventQueue,
+    /// Lazy event sources (one per tracker track)
+    sources: Vec<ClipSourceState>,
+    /// Scratch buffer for drained events (reused each frame)
+    event_buf: Vec<Event>,
+    /// Manually scheduled events (via `schedule()`)
+    pending_events: Vec<Event>,
     /// Current playback position in musical time
     current_time: MusicalTime,
     /// Audio sample rate (e.g., 44100)
@@ -107,6 +111,15 @@ fn tracker_mix_gain(num_channels: u32) -> f32 {
     1.0 / (1u32 << shift) as f32
 }
 
+/// Copy N frames from scratch buffer to node output buffer.
+fn copy_scratch_to_output(scratch: &mb_ir::AudioBuffer, output: &mut mb_ir::AudioBuffer, frames: usize) {
+    let src_l = scratch.channel(0);
+    let src_r = scratch.channel(1);
+    let (dst_l, dst_r) = output.channels_mut_2(0, 1);
+    dst_l[..frames].copy_from_slice(&src_l[..frames]);
+    dst_r[..frames].copy_from_slice(&src_r[..frames]);
+}
+
 impl Engine {
     /// Create a new engine for the given song.
     pub fn new(song: Song, sample_rate: u32) -> Self {
@@ -123,7 +136,9 @@ impl Engine {
         let mut engine = Self {
             song,
             graph_state,
-            event_queue: EventQueue::new(),
+            sources: Vec::new(),
+            event_buf: Vec::new(),
+            pending_events: Vec::new(),
             current_time: MusicalTime::zero(),
             sample_rate,
             samples_per_tick: 0,
@@ -159,54 +174,45 @@ impl Engine {
 
     /// Generate one frame of audio as [f32; 2].
     pub fn render_frame(&mut self) -> [f32; 2] {
-        #[cfg(feature = "alloc_check")]
-        {
-            assert_no_alloc::assert_no_alloc(|| self.render_frame_inner())
-        }
-        #[cfg(not(feature = "alloc_check"))]
-        {
-            self.render_frame_inner()
-        }
+        let mut buf = [[0.0f32; 2]];
+        self.render_block(&mut buf);
+        buf[0]
     }
 
     /// Render multiple frames, returning a new Vec (offline rendering).
     pub fn render_frames(&mut self, count: usize) -> Vec<[f32; 2]> {
-        (0..count).map(|_| self.render_frame()).collect()
+        let mut buf = vec![[0.0f32; 2]; count];
+        self.render_block(&mut buf);
+        buf
     }
 
-    /// Render frames into a caller-provided buffer (allocation-free).
-    pub fn render_frames_into(&mut self, buf: &mut [[f32; 2]]) {
-        for frame in buf.iter_mut() {
-            *frame = self.render_frame();
+    /// Drain events from all sources + pending into `event_buf`.
+    fn drain_all_sources(&mut self, time: MusicalTime) {
+        self.event_buf.clear();
+        // Include manually scheduled events at or before current time
+        let mut i = 0;
+        while i < self.pending_events.len() {
+            if self.pending_events[i].time <= time {
+                self.event_buf.push(self.pending_events.swap_remove(i));
+            } else {
+                i += 1;
+            }
         }
-    }
-
-    fn render_frame_inner(&mut self) -> [f32; 2] {
-        if !self.playing {
-            return [0.0, 0.0];
+        for source in &mut self.sources {
+            source.drain_until(time, &self.song, &mut self.event_buf);
         }
+        self.event_buf.sort_unstable_by(|a, b| a.time.cmp(&b.time));
 
-        // 1. Process events at current time (cursor-based, zero allocation)
-        let event_range = self.event_queue.drain_until(self.current_time);
-        for i in event_range {
-            let event = self.event_queue.get(i).unwrap().clone();
-            self.dispatch_event(&event);
+        // Once all sources are exhausted, lock in the end time so is_finished()
+        // triggers on the same frame (no 1-frame lag).
+        if self.song_end_time.is_none()
+            && !self.sources.is_empty()
+            && self.sources.iter().all(|s| s.end_time().is_some())
+        {
+            self.song_end_time = self.sources.iter()
+                .filter_map(|s| s.end_time())
+                .max();
         }
-
-        // 2. Render audio graph
-        let output = self.render_graph();
-
-        // 3. Advance time
-        self.sample_counter += 1;
-        if self.sample_counter >= self.samples_per_tick {
-            self.sample_counter = 0;
-            self.advance_tick();
-            self.process_tick();
-        } else {
-            self.interpolate_sub_beat();
-        }
-
-        output
     }
 
     /// Advance by one tick in beat-space.
@@ -221,20 +227,6 @@ impl Engine {
             self.current_time.sub_beat =
                 self.tick_in_beat * SUB_BEAT_UNIT / tpb;
         }
-    }
-
-    /// Interpolate sub_beat for sub-tick precision (between ticks).
-    fn interpolate_sub_beat(&mut self) {
-        let tpb = self.ticks_per_beat();
-        if tpb == 0 {
-            return;
-        }
-        let sub_per_tick = SUB_BEAT_UNIT / tpb;
-        let base_sub = self.tick_in_beat * sub_per_tick;
-        let frac = (self.sample_counter as u64 * sub_per_tick as u64)
-            / self.samples_per_tick as u64;
-        let total = base_sub as u64 + frac;
-        self.current_time.sub_beat = (total as u32).min(SUB_BEAT_UNIT - 1);
     }
 
     /// Ticks per beat = speed * rows_per_beat.
@@ -279,16 +271,25 @@ impl Engine {
                 for machine in self.machines.iter_mut().flatten() {
                     machine.set_speed(*speed);
                 }
+                for source in &mut self.sources {
+                    source.set_speed(*speed);
+                }
             }
             _ => {}
         }
     }
 
-    /// Render the audio graph by traversing nodes in topological order.
-    fn render_graph(&mut self) -> [f32; 2] {
+    /// Render the audio graph for `frames` frames.
+    fn render_graph_block(&mut self, frames: usize) {
+        // Set active frame count on all buffers
+        let f = frames as u16;
+        for buf in &mut self.graph_state.node_outputs {
+            buf.set_frames(f);
+        }
+        self.graph_state.scratch.set_frames(f);
+
         self.graph_state.clear_outputs();
 
-        // Index loop avoids cloning topo_order (allocation-free).
         for i in 0..self.graph_state.topo_order.len() {
             let node_id = self.graph_state.topo_order[i];
             let node = match self.song.graph.node(node_id) {
@@ -298,36 +299,25 @@ impl Engine {
 
             match &node.node_type {
                 NodeType::Machine { .. } => {
-                    self.render_machine(node_id);
+                    self.render_machine_block(node_id, frames);
                 }
                 NodeType::Master => {
-                    // Master and other pass-through nodes: gather wire inputs
-                    // Wire-level gain (from gather_inputs) handles all mixing
                     graph_state::gather_inputs(
                         &self.graph_state.conn_by_dest,
                         &self.graph_state.node_outputs,
                         node_id,
                         &mut self.graph_state.scratch,
                     );
-                    let left = self.graph_state.scratch.channel(0)[0];
-                    let right = self.graph_state.scratch.channel(1)[0];
-                    let buf = &mut self.graph_state.node_outputs[node_id as usize];
-                    buf.channel_mut(0)[0] = left;
-                    buf.channel_mut(1)[0] = right;
+                    copy_scratch_to_output(&self.graph_state.scratch, &mut self.graph_state.node_outputs[node_id as usize], frames);
                 }
             }
         }
-
-        // Master is always node 0
-        let master = &self.graph_state.node_outputs[0];
-        [master.channel(0)[0], master.channel(1)[0]]
     }
 
-    /// Render a BuzzMachine node: gather inputs → machine.render() → output.
-    /// Wire-level gain handles mixing; no per-node attenuation needed.
-    fn render_machine(&mut self, node_id: u16) {
+    /// Render a BuzzMachine node for N frames.
+    fn render_machine_block(&mut self, node_id: u16, frames: usize) {
         if self.node_bypass.get(node_id as usize).copied().unwrap_or(false) {
-            return; // Bypassed: node_outputs already zeroed by clear_outputs
+            return;
         }
 
         graph_state::gather_inputs(
@@ -341,12 +331,67 @@ impl Engine {
             machine.render(&mut self.graph_state.scratch);
         }
 
-        // Copy scratch to node output
-        let left = self.graph_state.scratch.channel(0)[0];
-        let right = self.graph_state.scratch.channel(1)[0];
-        let buf = &mut self.graph_state.node_outputs[node_id as usize];
-        buf.channel_mut(0)[0] = left;
-        buf.channel_mut(1)[0] = right;
+        copy_scratch_to_output(&self.graph_state.scratch, &mut self.graph_state.node_outputs[node_id as usize], frames);
+    }
+
+    /// Render a block of audio into the output buffer.
+    ///
+    /// Sub-block splitting: drains events, finds tick boundaries, renders
+    /// sub-blocks between boundaries, dispatches events and advances time.
+    pub fn render_block(&mut self, output: &mut [[f32; 2]]) {
+        #[cfg(feature = "alloc_check")]
+        {
+            assert_no_alloc::assert_no_alloc(|| self.render_block_inner(output));
+        }
+        #[cfg(not(feature = "alloc_check"))]
+        {
+            self.render_block_inner(output);
+        }
+    }
+
+    fn render_block_inner(&mut self, output: &mut [[f32; 2]]) {
+        if !self.playing {
+            for frame in output.iter_mut() { *frame = [0.0, 0.0]; }
+            return;
+        }
+
+        let total_frames = output.len();
+        let mut offset = 0;
+
+        while offset < total_frames {
+            // Drain events at current time
+            self.drain_all_sources(self.current_time);
+            for i in 0..self.event_buf.len() {
+                let event = self.event_buf[i].clone();
+                self.dispatch_event(&event);
+            }
+
+            // Find sub-block size: frames until next tick boundary, capped by buffer capacity
+            let remaining = total_frames - offset;
+            let frames_to_tick = (self.samples_per_tick - self.sample_counter) as usize;
+            let sub_block = remaining.min(frames_to_tick).min(mb_ir::BLOCK_SIZE);
+
+            // Render graph for sub-block
+            self.render_graph_block(sub_block);
+
+            // Copy master output to caller's buffer
+            let master = &self.graph_state.node_outputs[0];
+            let left = master.channel(0);
+            let right = master.channel(1);
+            for i in 0..sub_block {
+                output[offset + i] = [left[i], right[i]];
+            }
+
+            // Advance time by sub_block samples
+            self.sample_counter += sub_block as u32;
+            offset += sub_block;
+
+            if self.sample_counter >= self.samples_per_tick {
+                self.sample_counter = 0;
+                self.advance_tick();
+                self.process_tick();
+            }
+        }
     }
 
     /// Get the current playback position.
@@ -355,24 +400,40 @@ impl Engine {
     }
 
     /// Returns true when playback has reached the song's end time.
+    ///
+    /// End time is determined from source exhaustion (accounts for PatternBreak/
+    /// PositionJump shortening a pattern) or from an explicit `song_end_time`.
     pub fn is_finished(&self) -> bool {
-        self.song_end_time
-            .is_some_and(|end| self.current_time >= end)
-    }
-
-    /// Schedule an event.
-    pub fn schedule(&mut self, event: Event) {
-        self.event_queue.push(event);
-    }
-
-    /// Schedule all events from the song's track clips + sequences.
-    pub fn schedule_song(&mut self) {
-        let result = scheduler::schedule_song(&self.song);
-        self.song_end_time = Some(result.total_time);
-        for event in result.events {
-            self.event_queue.push(event);
+        if let Some(end) = self.song_end_time {
+            return self.current_time >= end;
         }
-        self.event_queue.reset_cursor();
+        // All sources must be exhausted and we must be past all their end times
+        if self.sources.is_empty() {
+            return false;
+        }
+        self.sources.iter().all(|s| {
+            s.end_time()
+                .is_some_and(|end| self.current_time >= end)
+        })
+    }
+
+    /// Schedule an event for dispatch on the next render call.
+    pub fn schedule(&mut self, event: Event) {
+        self.pending_events.push(event);
+    }
+
+    /// Build lazy event sources from the song's tracks.
+    pub fn schedule_song(&mut self) {
+        self.song_end_time = None; // Determined lazily from source exhaustion
+        self.sources = (0..self.song.tracks.len())
+            .map(|i| ClipSourceState::new(&self.song, i))
+            .collect();
+        // Pre-allocate event buffer to avoid allocations in the hot path.
+        // Worst case: every column on every track produces ~3 events per row.
+        let total_columns: usize = self.song.tracks.iter()
+            .map(|t| t.num_channels as usize)
+            .sum();
+        self.event_buf.reserve(total_columns * 3 + 16);
     }
 
     /// Get a reference to a machine by node ID (for testing).
@@ -414,36 +475,13 @@ impl Engine {
         column: u8,
         cell: mb_ir::Cell,
     ) {
-        // 1. Mutate track clip data
+        // Mutate track clip data. ClipSources read lazily, so edits
+        // ahead of the cursor are picked up automatically.
         let Some(track) = self.song.tracks.get_mut(track_idx as usize) else { return };
         let Some(c) = track.clips.get_mut(clip_idx as usize) else { return };
         let Some(pat) = c.pattern_mut() else { return };
         if row >= pat.rows || column >= pat.channels { return; }
         *pat.cell_mut(row, column) = cell;
-
-        // 2. Resolve event target for this track + column
-        let track = &self.song.tracks[track_idx as usize];
-        let target = scheduler::target_for_track_column(track, column);
-
-        // 3. Find times and update events
-        let track = &self.song.tracks[track_idx as usize];
-        let times = scheduler::time_for_track_clip_row(track, clip_idx, row, self.song.rows_per_beat);
-        let rpb = self.song.rows_per_beat as u32;
-        let speed = self.speed as u32;
-        let pat_rpb = track.clips.get(clip_idx as usize)
-            .and_then(|c| c.pattern())
-            .and_then(|p| p.rows_per_beat)
-            .map_or(rpb, |r| r as u32);
-
-        for time in &times {
-            let t = *time;
-            self.event_queue.retain(|e| !(e.time == t && e.target == target));
-            let mut new_events = Vec::new();
-            scheduler::schedule_cell(&cell, t, target, speed, pat_rpb, &mut new_events);
-            for event in new_events {
-                self.event_queue.push(event);
-            }
-        }
     }
 }
 

@@ -11,12 +11,16 @@ pub const BLOCK_SIZE: usize = 256;
 
 /// A multichannel f32 audio buffer in planar layout.
 ///
-/// Data is stored as `channels` contiguous planes of `frames` samples each.
-/// `data[ch * frames + frame]` gives the sample for channel `ch` at `frame`.
+/// Data is stored as `channels` contiguous planes of `capacity` samples each.
+/// `data[ch * capacity + frame]` gives the sample for channel `ch` at `frame`.
+/// `frames` represents the active sub-range (≤ capacity) for rendering.
 #[derive(Clone, Debug)]
 pub struct AudioBuffer {
     data: Vec<f32>,
     channels: u16,
+    /// Allocated frames per channel (determines memory layout / channel stride).
+    capacity: u16,
+    /// Active frame count for rendering (≤ capacity).
     frames: u16,
 }
 
@@ -26,13 +30,28 @@ impl AudioBuffer {
         Self {
             data: vec![0.0; channels as usize * frames as usize],
             channels,
+            capacity: frames,
             frames,
         }
     }
 
-    /// Fill all samples with zero.
+    /// Fill all active frames with zero.
     pub fn silence(&mut self) {
-        self.data.fill(0.0);
+        for ch in 0..self.channels {
+            let start = ch as usize * self.capacity as usize;
+            self.data[start..start + self.frames as usize].fill(0.0);
+        }
+    }
+
+    /// Set the active frame count (must not exceed allocated capacity).
+    /// This allows rendering sub-blocks without reallocating.
+    pub fn set_frames(&mut self, frames: u16) {
+        debug_assert!(
+            frames <= self.capacity,
+            "set_frames({}) exceeds capacity ({})",
+            frames, self.capacity,
+        );
+        self.frames = frames;
     }
 
     /// Number of channels.
@@ -45,31 +64,50 @@ impl AudioBuffer {
         self.frames
     }
 
-    /// Read-only access to one channel's sample data.
+    /// Read-only access to one channel's active sample data.
     #[inline(always)]
     pub fn channel(&self, ch: u16) -> &[f32] {
-        let start = ch as usize * self.frames as usize;
+        let start = ch as usize * self.capacity as usize;
         &self.data[start..start + self.frames as usize]
     }
 
-    /// Mutable access to one channel's sample data.
+    /// Mutable access to one channel's active sample data.
     #[inline(always)]
     pub fn channel_mut(&mut self, ch: u16) -> &mut [f32] {
-        let start = ch as usize * self.frames as usize;
+        let start = ch as usize * self.capacity as usize;
         let len = self.frames as usize;
         &mut self.data[start..start + len]
+    }
+
+    /// Get mutable access to two different channels simultaneously.
+    /// Panics if `ch_a == ch_b` or either is out of range.
+    #[inline(always)]
+    pub fn channels_mut_2(&mut self, ch_a: u16, ch_b: u16) -> (&mut [f32], &mut [f32]) {
+        assert_ne!(ch_a, ch_b, "channels must differ");
+        let stride = self.capacity as usize;
+        let len = self.frames as usize;
+        let a_start = ch_a as usize * stride;
+        let b_start = ch_b as usize * stride;
+        if a_start < b_start {
+            let (first, rest) = self.data.split_at_mut(b_start);
+            (&mut first[a_start..a_start + len], &mut rest[..len])
+        } else {
+            let (first, rest) = self.data.split_at_mut(a_start);
+            (&mut rest[..len], &mut first[b_start..b_start + len])
+        }
     }
 
     /// Sum overlapping channels from `source` into this buffer.
     #[inline(always)]
     pub fn mix_from(&mut self, source: &AudioBuffer) {
         let chs = self.channels.min(source.channels);
-        let frs = self.frames.min(source.frames) as usize;
+        // channel() already returns active-frames-sized slices
         for ch in 0..chs {
-            let dst = self.channel_mut(ch);
-            let src = source.channel(ch);
+            let frs = self.channel(ch).len().min(source.channel(ch).len());
+            let src_start = ch as usize * source.capacity as usize;
+            let dst_start = ch as usize * self.capacity as usize;
             for i in 0..frs {
-                dst[i] += src[i];
+                self.data[dst_start + i] += source.data[src_start + i];
             }
         }
     }
@@ -78,12 +116,12 @@ impl AudioBuffer {
     #[inline(always)]
     pub fn mix_from_scaled(&mut self, source: &AudioBuffer, gain: f32) {
         let chs = self.channels.min(source.channels);
-        let frs = self.frames.min(source.frames) as usize;
         for ch in 0..chs {
-            let dst = self.channel_mut(ch);
-            let src = source.channel(ch);
+            let frs = self.channel(ch).len().min(source.channel(ch).len());
+            let src_start = ch as usize * source.capacity as usize;
+            let dst_start = ch as usize * self.capacity as usize;
             for i in 0..frs {
-                dst[i] += src[i] * gain;
+                self.data[dst_start + i] += source.data[src_start + i] * gain;
             }
         }
     }

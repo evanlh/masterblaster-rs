@@ -321,26 +321,6 @@ fn scan_row_flow_control(pattern: &mb_ir::Pattern, row: u16) -> FlowControl {
     fc
 }
 
-/// Find all MusicalTimes at which a given track clip + row appears in the sequence.
-pub fn time_for_track_clip_row(
-    track: &Track,
-    clip_idx: u16,
-    row: u16,
-    song_rpb: u8,
-) -> Vec<MusicalTime> {
-    let rpb = song_rpb as u32;
-    track.sequence.iter()
-        .filter(|e| e.clip_idx == clip_idx && e.length > 0)
-        .filter_map(|e| {
-            let clip = track.clips.get(e.clip_idx as usize)?.pattern()?;
-            let effective_rows = e.length.min(clip.rows);
-            if row >= effective_rows { return None; }
-            let pat_rpb = clip.rows_per_beat.map_or(rpb, |r| r as u32);
-            Some(e.start.add_rows(row as u32, pat_rpb))
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -880,33 +860,6 @@ mod tests {
         assert!(events.is_empty());
     }
 
-    // --- time_for_track_clip_row tests ---
-
-    #[test]
-    fn time_for_row_single_occurrence() {
-        let song = one_channel_song(Pattern::new(8, 1));
-        let times = time_for_track_clip_row(&song.tracks[0], 0, 3, song.rows_per_beat);
-        assert_eq!(times, vec![time_at_row(3)]);
-    }
-
-    #[test]
-    fn time_for_row_repeated_pattern() {
-        let song = song_from(1, vec![Pattern::new(4, 1)],
-            vec![OrderEntry::Pattern(0), OrderEntry::Pattern(0)]);
-
-        let times = time_for_track_clip_row(&song.tracks[0], 0, 0, song.rows_per_beat);
-        assert_eq!(times.len(), 2);
-        assert_eq!(times[0], time_at_row(0));
-        assert_eq!(times[1], time_at_row(4));
-    }
-
-    #[test]
-    fn time_for_row_out_of_range_row() {
-        let song = one_channel_song(Pattern::new(4, 1));
-        let times = time_for_track_clip_row(&song.tracks[0], 0, 100, song.rows_per_beat);
-        assert!(times.is_empty());
-    }
-
     // --- SeqEntry.length tests ---
 
     #[test]
@@ -988,25 +941,4 @@ mod tests {
         assert_eq!(notes.len(), 2, "break-truncated entry should only play rows 0-2");
     }
 
-    #[test]
-    fn time_for_row_respects_entry_length() {
-        let mut song = Song::with_channels("test", 1);
-        let machine_node = mb_ir::find_tracker_node(&song.graph);
-        let mut track = mb_ir::Track::new(machine_node, 0, 1);
-        track.clips.push(mb_ir::Clip::Pattern(Pattern::new(8, 1)));
-        // length=4: only rows 0-3 are valid
-        track.sequence.push(mb_ir::SeqEntry {
-            start: MusicalTime::zero(), clip_idx: 0, length: 4,
-            termination: mb_ir::SeqTermination::Natural,
-        });
-        song.tracks = alloc::vec![track];
-
-        // Row 3 is within length — should return a time
-        let times = time_for_track_clip_row(&song.tracks[0], 0, 3, song.rows_per_beat);
-        assert_eq!(times.len(), 1);
-
-        // Row 4 is beyond length — should return empty
-        let times = time_for_track_clip_row(&song.tracks[0], 0, 4, song.rows_per_beat);
-        assert!(times.is_empty(), "row beyond entry.length should not be accessible");
-    }
 }

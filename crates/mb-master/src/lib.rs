@@ -456,7 +456,7 @@ fn run_audio_loop(
         }
 
         let n = frames_until_report(frame_count, report_interval, BLOCK_SIZE);
-        engine.render_frames_into(&mut batch[..n]);
+        engine.render_block(&mut batch[..n]);
 
         // Interleave for output
         for i in 0..n {

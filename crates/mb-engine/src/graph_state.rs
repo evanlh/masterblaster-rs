@@ -3,7 +3,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use mb_ir::{AudioBuffer, AudioGraph, NodeId};
+use mb_ir::{AudioBuffer, AudioGraph, BLOCK_SIZE, NodeId};
 
 /// Runtime state for the audio graph during playback.
 pub struct GraphState {
@@ -25,12 +25,13 @@ impl GraphState {
         let topo_order = topological_sort(graph);
         let n = graph.nodes.len();
         let conn_by_dest = index_connections_by_dest(graph, n);
+        let frames = BLOCK_SIZE as u16;
         Self {
             node_outputs: (0..n)
-                .map(|_| AudioBuffer::new(2, 1))
+                .map(|_| AudioBuffer::new(2, frames))
                 .collect(),
             topo_order,
-            scratch: AudioBuffer::new(2, 1),
+            scratch: AudioBuffer::new(2, frames),
             conn_by_dest,
         }
     }
