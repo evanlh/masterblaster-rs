@@ -247,7 +247,6 @@ fn schedule_track(
         if row >= num_rows {
             seq_idx += 1;
             row = 0;
-            time = advance_to_seq_entry(track, seq_idx, time);
             continue;
         }
 
@@ -274,7 +273,6 @@ fn schedule_track(
                 if row >= num_rows {
                     seq_idx += 1;
                     row = 0;
-                    time = advance_to_seq_entry(track, seq_idx, time);
                 }
             }
         }

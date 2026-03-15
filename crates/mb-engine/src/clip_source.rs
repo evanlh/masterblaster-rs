@@ -170,7 +170,6 @@ impl EventSource for ClipSourceState {
             if self.row >= num_rows {
                 self.seq_idx += 1;
                 self.row = 0;
-                self.time = advance_to_seq_entry(track, self.seq_idx, self.time);
                 continue;
             }
 
@@ -202,7 +201,6 @@ impl EventSource for ClipSourceState {
                     if self.row >= num_rows {
                         self.seq_idx += 1;
                         self.row = 0;
-                        self.time = advance_to_seq_entry(track, self.seq_idx, self.time);
                     }
                 }
             }
