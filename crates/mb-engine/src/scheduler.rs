@@ -115,7 +115,16 @@ pub fn schedule_cell(
                 EventPayload::NoteOff { note: 0 },
             ));
         }
-        Note::None => {}
+        Note::None => {
+            // ProTracker: instrument without note resets volume to sample default
+            if cell.instrument > 0 {
+                events.push(Event::new(
+                    note_time,
+                    target,
+                    EventPayload::InstrumentChange { instrument: cell.instrument },
+                ));
+            }
+        }
     }
 
     // Volume command is delayed with the note
@@ -260,7 +269,6 @@ fn schedule_track(
             (Some(pos), Some(r)) => { seq_idx = pos as usize; row = r as u16; }
             (Some(pos), None) => { seq_idx = pos as usize; row = 0; }
             (None, Some(r)) => { seq_idx += 1; row = r as u16; }
-            // Normal advancement: use absolute SeqEntry.start
             (None, None) => {
                 row += 1;
                 if row >= num_rows {

@@ -134,7 +134,9 @@ impl TrackerMachine {
 
                 if let Some(channel) = self.channels.get_mut(ch as usize) {
                     channel.target_period = target_period;
-                    if *instrument > 0 && inst_idx != channel.instrument {
+                    // ProTracker: instrument on a tone porta row always resets
+                    // volume to sample default (even if same instrument)
+                    if *instrument > 0 {
                         channel.instrument = inst_idx;
                         channel.sample_index = sample_idx;
                         channel.c4_speed = c4_speed;
@@ -142,6 +144,24 @@ impl TrackerMachine {
                             channel.volume = vol;
                         }
                     }
+                }
+            }
+            EventPayload::InstrumentChange { instrument } => {
+                let (inst_idx, sample_idx) = self.resolve_sample(*instrument, 0);
+                let default_vol = self.samples.get(sample_idx as usize).map(|s| s.default_volume);
+                if let Some(channel) = self.channels.get_mut(ch as usize) {
+                    channel.instrument = inst_idx;
+                    channel.sample_index = sample_idx;
+                    if let Some(vol) = default_vol {
+                        channel.volume = vol;
+                    }
+                    // Clear stale modulators so they don't override the volume reset.
+                    // If this row also has an effect, its event fires after and
+                    // creates fresh modulators.
+                    channel.volume_mod = None;
+                    channel.period_mod = None;
+                    channel.trigger_mod = None;
+                    channel.vibrato_active = false;
                 }
             }
             EventPayload::NoteOff { note: _ } => {
@@ -619,9 +639,10 @@ mod tests {
         note_on(&mut m, 48, 1);
         effect(&mut m, Effect::Vibrato { speed: 8, depth: 4 });
         for _ in 0..5 { m.tick(); }
-        assert!(m.channel(0).unwrap().period_mod.is_some());
+        assert!(m.channel(0).unwrap().vibrato_active);
         note_on(&mut m, 60, 1);
-        assert!(m.channel(0).unwrap().period_mod.is_none());
+        assert!(!m.channel(0).unwrap().vibrato_active);
+        assert_eq!(m.channel(0).unwrap().vibrato_phase, 0);
     }
 
     #[test]
@@ -631,9 +652,12 @@ mod tests {
         effect(&mut m, Effect::SetVibratoWaveform(4));
         effect(&mut m, Effect::Vibrato { speed: 8, depth: 4 });
         for _ in 0..5 { m.tick(); }
-        assert!(m.channel(0).unwrap().period_mod.is_some());
+        assert!(m.channel(0).unwrap().vibrato_active);
+        let phase_before = m.channel(0).unwrap().vibrato_phase;
         note_on(&mut m, 60, 1);
-        assert!(m.channel(0).unwrap().period_mod.is_some());
+        // With no-retrig flag, vibrato stays active and phase persists
+        assert!(m.channel(0).unwrap().vibrato_active);
+        assert_eq!(m.channel(0).unwrap().vibrato_phase, phase_before);
     }
 
     #[test]

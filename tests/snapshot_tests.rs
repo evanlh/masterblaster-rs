@@ -89,11 +89,11 @@ fn snapshot_test(fixture_name: &str) {
     assert_snapshot(&snapshot_stem(fixture_name), &wav);
 }
 
-fn snapshot_pattern_test(fixture_name: &str, pattern: usize) {
+fn snapshot_pattern_test(fixture_name: &str, pattern: usize, max_seconds: u32) {
     let mut ctrl = Controller::new();
     ctrl.load_mod(&fs::read(fixtures_dir().join(fixture_name)).unwrap())
         .unwrap();
-    let wav = ctrl.render_pattern_to_wav(0, pattern, SAMPLE_RATE, MAX_SECONDS);
+    let wav = ctrl.render_pattern_to_wav(0, pattern, SAMPLE_RATE, max_seconds);
     let name = format!("{}_pat{:02}", snapshot_stem(fixture_name), pattern);
     assert_snapshot(&name, &wav);
 }
@@ -115,5 +115,10 @@ fn snapshot_musiklinjen() {
 
 #[test]
 fn snapshot_musiklinjen_pat20_ritardando() {
-    snapshot_pattern_test("musiklinjen.mod", 20);
+    snapshot_pattern_test("musiklinjen.mod", 20, 10);
+}
+
+#[test]
+fn snapshot_musiklinjen_pat15() {
+    snapshot_pattern_test("musiklinjen.mod", 15, 20);
 }

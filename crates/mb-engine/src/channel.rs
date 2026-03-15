@@ -2,12 +2,21 @@
 
 use mb_ir::{
     Effect, ModEnvelope, ModMode, Sample,
-    add_mode_sine_envelope, arpeggio_envelope, note_cut_envelope, porta_envelope,
+    arpeggio_envelope, note_cut_envelope, porta_envelope,
     retrigger_envelope, tone_porta_envelope, volume_slide_envelope,
 };
 
 use crate::envelope_state::EnvelopeState;
 use crate::frequency::{clamp_period, note_to_period, period_to_increment, PERIOD_MAX, PERIOD_MIN};
+
+/// ProTracker sine table (32 entries, quarter-wave, values 0-255).
+/// Full 64-position cycle: entries 0-31 are positive, 32-63 are negative (mirror).
+const VIBRATO_SINE_TABLE: [u8; 32] = [
+    0, 24, 49, 74, 97, 120, 141, 161,
+    180, 197, 212, 224, 235, 244, 250, 253,
+    255, 253, 250, 244, 235, 224, 212, 197,
+    180, 161, 141, 120, 97, 74, 49, 24,
+];
 
 /// An active envelope-based modulator on a channel parameter.
 #[derive(Clone, Debug)]
@@ -73,6 +82,10 @@ pub struct ChannelState {
     pub tremolo_depth: u8,
     /// Tremolo waveform (0=sine, 1=ramp, 2=square; bit 2=no retrig)
     pub tremolo_waveform: u8,
+    /// Vibrato phase (0-63, ProTracker style, persists across rows)
+    pub vibrato_phase: u8,
+    /// Whether vibrato is actively running
+    pub vibrato_active: bool,
 
     // Envelope-based modulators (Add/Trigger mode)
     /// Period modulator (vibrato, arpeggio)
@@ -112,6 +125,8 @@ impl ChannelState {
         self.volume_offset = 0;
         // Clear modulators (respect no-retrig waveform flag)
         if self.vibrato_waveform & 4 == 0 {
+            self.vibrato_phase = 0;
+            self.vibrato_active = false;
             self.period_mod = None;
         }
         if self.tremolo_waveform & 4 == 0 {
@@ -184,6 +199,20 @@ impl ChannelState {
                 _ => {}
             }
         }
+        self.advance_vibrato();
+    }
+
+    /// Advance vibrato phase and compute period_offset directly (ProTracker style).
+    /// Phase is 0-255 (matching ProTracker's n_vibpos); persists across rows,
+    /// resets only on note trigger.
+    fn advance_vibrato(&mut self) {
+        if !self.vibrato_active { return; }
+        // ProTracker order: compute offset from CURRENT phase, THEN advance
+        let table_idx = ((self.vibrato_phase >> 2) & 31) as usize;
+        let val = VIBRATO_SINE_TABLE[table_idx] as i16;
+        let offset = (val * self.vibrato_depth as i16) / 128;
+        self.period_offset = if self.vibrato_phase >= 128 { -offset } else { offset };
+        self.vibrato_phase = self.vibrato_phase.wrapping_add(self.vibrato_speed);
     }
 
     /// Advance the volume modulator and apply based on mode.
@@ -222,6 +251,7 @@ impl ChannelState {
             Effect::VolumeSlide(delta) => {
                 let env = volume_slide_envelope(self.volume as f32, *delta as f32, spt);
                 self.volume_mod = Some(ActiveMod::new(env, ModMode::Set));
+                self.vibrato_active = false;
                 self.period_mod = None;
                 self.trigger_mod = None;
             }
@@ -232,6 +262,7 @@ impl ChannelState {
                     PERIOD_MIN as f32, PERIOD_MAX as f32, spt,
                 );
                 self.period_mod = Some(ActiveMod::new(env, ModMode::Set));
+                self.vibrato_active = false;
                 self.volume_mod = None;
                 self.trigger_mod = None;
             }
@@ -242,6 +273,7 @@ impl ChannelState {
                     PERIOD_MIN as f32, PERIOD_MAX as f32, spt,
                 );
                 self.period_mod = Some(ActiveMod::new(env, ModMode::Set));
+                self.vibrato_active = false;
                 self.volume_mod = None;
                 self.trigger_mod = None;
             }
@@ -251,6 +283,7 @@ impl ChannelState {
                     self.porta_speed as f32, spt,
                 );
                 self.period_mod = Some(ActiveMod::new(env, ModMode::Set));
+                self.vibrato_active = false;
                 self.volume_mod = None;
                 self.trigger_mod = None;
             }
@@ -260,26 +293,24 @@ impl ChannelState {
                     self.porta_speed as f32, spt,
                 );
                 self.period_mod = Some(ActiveMod::new(period_env, ModMode::Set));
+                self.vibrato_active = false;
                 let vol_env = volume_slide_envelope(self.volume as f32, *delta as f32, spt);
                 self.volume_mod = Some(ActiveMod::new(vol_env, ModMode::Set));
                 self.trigger_mod = None;
             }
             Effect::Vibrato { speed, depth } => {
-                let s = if *speed > 0 { *speed } else { self.vibrato_speed };
-                let d = if *depth > 0 { *depth } else { self.vibrato_depth };
-                if *speed > 0 { self.vibrato_speed = s; }
-                if *depth > 0 { self.vibrato_depth = d; }
-                self.period_mod = build_add_mode_sine_mod(s, d, spt);
+                if *speed > 0 { self.vibrato_speed = *speed; }
+                if *depth > 0 { self.vibrato_depth = *depth; }
+                self.vibrato_active = true;
+                // Vibrato uses direct phase computation, not period_mod
+                self.period_mod = None;
                 self.volume_mod = None;
                 self.trigger_mod = None;
             }
             Effect::VibratoVolSlide(delta) => {
-                // Keep existing period_mod (vibrato continues from previous row)
-                // If no vibrato mod exists, create one from stored params
-                if self.period_mod.is_none() && self.vibrato_speed > 0 {
-                    self.period_mod =
-                        build_add_mode_sine_mod(self.vibrato_speed, self.vibrato_depth, spt);
-                }
+                // Continue vibrato from previous row (phase persists)
+                self.vibrato_active = true;
+                self.period_mod = None;
                 let vol_env = volume_slide_envelope(self.volume as f32, *delta as f32, spt);
                 self.volume_mod = Some(ActiveMod::new(vol_env, ModMode::Set));
                 self.trigger_mod = None;
@@ -289,32 +320,34 @@ impl ChannelState {
                 let d = if *depth > 0 { *depth } else { self.tremolo_depth };
                 if *speed > 0 { self.tremolo_speed = s; }
                 if *depth > 0 { self.tremolo_depth = d; }
-                self.volume_mod = build_add_mode_sine_mod(s, d, spt);
+                self.volume_mod = build_tremolo_mod(s, d, spt);
+                self.vibrato_active = false;
                 self.period_mod = None;
                 self.trigger_mod = None;
             }
             Effect::Arpeggio { x, y } => {
                 self.period_mod = build_arpeggio_mod(self.note, self.period, *x, *y, spt);
+                self.vibrato_active = false;
                 self.volume_mod = None;
                 self.trigger_mod = None;
             }
             Effect::NoteCut(tick) if *tick > 0 => {
                 let env = note_cut_envelope(self.volume as f32, *tick, spt);
                 self.volume_mod = Some(ActiveMod::new(env, ModMode::Set));
+                self.vibrato_active = false;
                 self.period_mod = None;
                 self.trigger_mod = None;
             }
             Effect::RetriggerNote(interval) if *interval > 0 => {
                 let env = retrigger_envelope(*interval, spt);
                 self.trigger_mod = Some(ActiveMod::new(env, ModMode::Trigger));
+                self.vibrato_active = false;
                 self.period_mod = None;
                 self.volume_mod = None;
             }
             _ => {
-                // Non-modulator effects: clear all mods
-                self.period_mod = None;
-                self.volume_mod = None;
-                self.trigger_mod = None;
+                // Unhandled effects (PatternLoop, SetFinetune, etc.) — no-op.
+                // Don't clear active mods; these are not modulator effects.
             }
         }
     }
@@ -366,7 +399,8 @@ fn clamp_toward(value: u16, prev: u16, target: u16) -> u16 {
     }
 }
 
-fn build_add_mode_sine_mod(speed: u8, depth: u8, spt: u32) -> Option<ActiveMod> {
+fn build_tremolo_mod(speed: u8, depth: u8, spt: u32) -> Option<ActiveMod> {
+    use mb_ir::add_mode_sine_envelope;
     if speed == 0 && depth == 0 {
         return None;
     }

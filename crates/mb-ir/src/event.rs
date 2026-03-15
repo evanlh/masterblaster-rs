@@ -53,6 +53,8 @@ pub enum EventPayload {
     NoteOff { note: u8 },
     /// Set portamento target (TonePorta + note: don't trigger, just set target)
     PortaTarget { note: u8, instrument: u8 },
+    /// Instrument number without a note (ProTracker: resets volume to sample default)
+    InstrumentChange { instrument: u8 },
 
     // === Parameter changes ===
     /// Instantly set a parameter value

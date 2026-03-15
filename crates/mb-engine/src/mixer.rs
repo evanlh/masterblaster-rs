@@ -201,7 +201,10 @@ impl Engine {
         for source in &mut self.sources {
             source.drain_until(time, &self.song, &mut self.event_buf);
         }
-        self.event_buf.sort_unstable_by(|a, b| a.time.cmp(&b.time));
+        // Stable sort preserves insertion order for same-time events.
+        // This ensures InstrumentChange is processed before Effect events
+        // on the same row (matching ProTracker's note→effect order).
+        self.event_buf.sort_by(|a, b| a.time.cmp(&b.time));
 
         // Once all sources are exhausted, lock in the end time so is_finished()
         // triggers on the same frame (no 1-frame lag).
