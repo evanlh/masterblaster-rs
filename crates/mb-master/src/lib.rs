@@ -44,6 +44,8 @@ fn alloc_permit<R>(f: impl FnOnce() -> R) -> R { f() }
 /// Headless tracker controller — owns a song and manages playback.
 pub struct Controller {
     song: Song,
+    /// The song actually being played (may differ from `song` during pattern playback).
+    active_song: Option<Song>,
     playback: Option<PlaybackHandle>,
 }
 
@@ -60,6 +62,7 @@ impl Controller {
     pub fn new() -> Self {
         Self {
             song: Song::with_channels("Untitled", 4),
+            active_song: None,
             playback: None,
         }
     }
@@ -223,8 +226,10 @@ impl Controller {
         self.play_song(self.single_clip_song(track_idx, clip_idx as u16));
     }
 
-    fn play_song(&mut self, song: Song) {
+    fn play_song(&mut self, active_song: Song) {
         self.stop();
+        let song = active_song.clone();
+        self.active_song = Some(active_song);
 
         // Collect initial mute state before song is moved to audio thread
         let initial_bypasses: Vec<_> = song.tracks.iter()
@@ -270,6 +275,7 @@ impl Controller {
                 let _ = handle.join();
             }
         }
+        self.active_song = None;
     }
 
     pub fn is_playing(&self) -> bool {
@@ -292,7 +298,8 @@ impl Controller {
         }
         let packed = pb.current_time.load(Ordering::Relaxed);
         let time = unpack_time(packed);
-        time_to_track_position(&self.song, time, track_idx)
+        let song = self.active_song.as_ref().unwrap_or(&self.song);
+        time_to_track_position(song, time, track_idx)
     }
 
     // --- Offline rendering ---

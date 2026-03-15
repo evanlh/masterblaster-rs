@@ -109,7 +109,7 @@ fn play_audio(ctrl: &mut Controller) {
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-
+    let _ = std::io::stdout().flush();
     println!("\rDone.          ");
 }
 
@@ -128,7 +128,7 @@ fn play_pattern(ctrl: &mut Controller, pattern: usize) {
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-
+    let _ = std::io::stdout().flush();
     println!("\rDone.          ");
 }
 
