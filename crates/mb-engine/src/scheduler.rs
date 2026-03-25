@@ -201,6 +201,18 @@ pub fn track_column_to_channel(track: &Track, column: u8) -> u8 {
     track.base_channel + column
 }
 
+/// Get the starting row for a sequence entry (from its clip_offset).
+fn entry_start_row(track: &Track, seq_idx: usize, song_rpb: u32) -> u16 {
+    track.sequence.get(seq_idx)
+        .map(|e| {
+            let rpb = track.get_pattern_at(e.clip_idx as usize)
+                .and_then(|p| p.rows_per_beat)
+                .map_or(song_rpb, |r| r as u32);
+            e.clip_offset.to_rows(rpb) as u16
+        })
+        .unwrap_or(0)
+}
+
 /// Schedule events for a single track (walks sequence, iterates multi-channel patterns).
 fn schedule_track(
     track: &Track,
@@ -214,23 +226,29 @@ fn schedule_track(
     let song_rpb = song.rows_per_beat as u32;
     let mut speed: u32 = song.initial_speed as u32;
     let mut seq_idx: usize = 0;
-    let mut row: u16 = 0;
+    let mut row: u16 = entry_start_row(track, 0, song_rpb);
     let mut time = track.sequence[seq_idx].start;
 
-    let max_rows = compute_max_rows(track);
+    let max_rows = compute_max_rows(track, song_rpb);
     let mut rows_processed: u64 = 0;
 
     loop {
         if seq_idx >= track.sequence.len() { break; }
-        let entry_length = track.sequence[seq_idx].length;
+        let entry = &track.sequence[seq_idx];
 
-        let clip_idx = track.sequence[seq_idx].clip_idx as usize;
+        let clip_idx = entry.clip_idx as usize;
         let clip = match track.get_pattern_at(clip_idx) {
             Some(p) => p,
-            None => { seq_idx += 1; row = 0; time = advance_to_seq_entry(track, seq_idx, time); continue; }
+            None => {
+                seq_idx += 1;
+                row = entry_start_row(track, seq_idx, song_rpb);
+                time = advance_to_seq_entry(track, seq_idx, time);
+                continue;
+            }
         };
-        let num_rows = entry_length.min(clip.rows);
         let rpb = clip.rows_per_beat.map_or(song_rpb, |r| r as u32);
+        let offset_rows = entry.clip_offset.to_rows(rpb) as u16;
+        let num_rows = (offset_rows + entry.duration.to_rows(rpb) as u16).min(clip.rows);
         let eff_speed = effective_speed(clip, speed);
 
         // Truncate: if current time has reached the next entry's start, advance
@@ -238,7 +256,7 @@ fn schedule_track(
         if let Some(ns) = next_start {
             if time >= ns {
                 seq_idx += 1;
-                row = 0;
+                row = entry_start_row(track, seq_idx, song_rpb);
                 time = ns;
                 continue;
             }
@@ -246,7 +264,8 @@ fn schedule_track(
 
         if row >= num_rows {
             seq_idx += 1;
-            row = 0;
+            row = entry_start_row(track, seq_idx, song_rpb);
+            time = advance_to_seq_entry(track, seq_idx, time);
             continue;
         }
 
@@ -259,22 +278,16 @@ fn schedule_track(
         let fc = scan_row_flow_control(clip, row);
         if let Some(s) = fc.new_speed { speed = s; }
 
+        // Duration is authoritative — ignore flow control, advance linearly
         time = time.add_rows(1 + fc.pattern_delay as u32, rpb);
         rows_processed += 1;
         if rows_processed >= max_rows { break; }
 
-        match (fc.jump_order, fc.break_row) {
-            // Flow control: keep linear time (SeqEntry.start assumes no breaks)
-            (Some(pos), Some(r)) => { seq_idx = pos as usize; row = r as u16; }
-            (Some(pos), None) => { seq_idx = pos as usize; row = 0; }
-            (None, Some(r)) => { seq_idx += 1; row = r as u16; }
-            (None, None) => {
-                row += 1;
-                if row >= num_rows {
-                    seq_idx += 1;
-                    row = 0;
-                }
-            }
+        row += 1;
+        if row >= num_rows {
+            seq_idx += 1;
+            row = entry_start_row(track, seq_idx, song_rpb);
+            time = advance_to_seq_entry(track, seq_idx, time);
         }
     }
 
@@ -295,13 +308,13 @@ fn advance_to_seq_entry(track: &Track, seq_idx: usize, current: MusicalTime) -> 
 ///
 /// Scales by num_channels to match pre-coalescing behavior where each channel
 /// was a separate track contributing to the group's row budget.
-fn compute_max_rows(track: &Track) -> u64 {
+fn compute_max_rows(track: &Track, song_rpb: u32) -> u64 {
     let channels = (track.num_channels as u64).max(1);
     let from_clips: u64 = track.clips.iter()
         .filter_map(|c| c.pattern().map(|p| p.rows as u64))
         .sum();
     let from_seq: u64 = track.sequence.iter()
-        .map(|e| e.length as u64)
+        .map(|e| e.duration.to_rows(song_rpb) as u64)
         .sum();
     from_clips.max(from_seq) * channels * 2 + 256
 }
@@ -866,7 +879,18 @@ mod tests {
         assert!(events.is_empty());
     }
 
-    // --- SeqEntry.length tests ---
+    // --- SeqEntry.duration tests ---
+
+    /// Helper: create a SeqEntry with duration from rows (rpb=4).
+    fn seq_entry_rows(start: MusicalTime, clip_idx: u16, rows: u16, termination: mb_ir::SeqTermination) -> mb_ir::SeqEntry {
+        mb_ir::SeqEntry {
+            start,
+            clip_idx,
+            duration: MusicalTime::from_rows(rows as u32, 4),
+            clip_offset: MusicalTime::zero(),
+            termination,
+        }
+    }
 
     #[test]
     fn mute_truncated_entry_plays_shortened() {
@@ -880,25 +904,19 @@ mod tests {
         let machine_node = mb_ir::find_tracker_node(&song.graph);
         let mut track = mb_ir::Track::new(machine_node, 0, 1);
         track.clips.push(mb_ir::Clip::Pattern(pat));
-        // Mute truncates the 8-row pattern to 4 rows
-        track.sequence.push(mb_ir::SeqEntry {
-            start: MusicalTime::zero(), clip_idx: 0, length: 4,
-            termination: mb_ir::SeqTermination::Mute,
-        });
+        track.sequence.push(seq_entry_rows(MusicalTime::zero(), 0, 4, mb_ir::SeqTermination::Mute));
         song.tracks = alloc::vec![track];
 
         let notes: Vec<_> = schedule_events(&song).into_iter()
             .filter(|e| matches!(e.payload, EventPayload::NoteOn { .. }))
             .collect();
-        // Only the note at row 0 should play; row 4 is beyond truncated length
         assert_eq!(notes.len(), 1, "mute-truncated entry should only play rows 0-3");
         assert_eq!(notes[0].time, MusicalTime::zero());
     }
 
     #[test]
-    fn length_truncates_pattern() {
+    fn duration_truncates_pattern() {
         let mut pat = Pattern::new(8, 1);
-        // Notes at rows 0, 2, 4, 6
         for r in [0, 2, 4, 6] {
             pat.cell_mut(r, 0).note = Note::On(60);
             pat.cell_mut(r, 0).instrument = 1;
@@ -908,17 +926,13 @@ mod tests {
         let machine_node = mb_ir::find_tracker_node(&song.graph);
         let mut track = mb_ir::Track::new(machine_node, 0, 1);
         track.clips.push(mb_ir::Clip::Pattern(pat));
-        // length=4 means only rows 0-3 should play (notes at 0 and 2)
-        track.sequence.push(mb_ir::SeqEntry {
-            start: MusicalTime::zero(), clip_idx: 0, length: 4,
-            termination: mb_ir::SeqTermination::Natural,
-        });
+        track.sequence.push(seq_entry_rows(MusicalTime::zero(), 0, 4, mb_ir::SeqTermination::Natural));
         song.tracks = alloc::vec![track];
 
         let notes: Vec<_> = schedule_events(&song).into_iter()
             .filter(|e| matches!(e.payload, EventPayload::NoteOn { .. }))
             .collect();
-        assert_eq!(notes.len(), 2, "length=4 should only play rows 0-3 (2 notes)");
+        assert_eq!(notes.len(), 2, "duration=4 rows should only play rows 0-3 (2 notes)");
     }
 
     #[test]
@@ -933,11 +947,7 @@ mod tests {
         let machine_node = mb_ir::find_tracker_node(&song.graph);
         let mut track = mb_ir::Track::new(machine_node, 0, 1);
         track.clips.push(mb_ir::Clip::Pattern(pat));
-        // Break truncates the 8-row pattern to 3 rows
-        track.sequence.push(mb_ir::SeqEntry {
-            start: MusicalTime::zero(), clip_idx: 0, length: 3,
-            termination: mb_ir::SeqTermination::Break,
-        });
+        track.sequence.push(seq_entry_rows(MusicalTime::zero(), 0, 3, mb_ir::SeqTermination::Break));
         song.tracks = alloc::vec![track];
 
         let notes: Vec<_> = schedule_events(&song).into_iter()

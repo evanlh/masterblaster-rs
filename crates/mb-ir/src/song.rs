@@ -246,8 +246,10 @@ pub struct SeqEntry {
     pub start: MusicalTime,
     /// Index into the track's `clips` pool
     pub clip_idx: u16,
-    /// Playback length in rows (may be truncated by Mute/Break).
-    pub length: u16,
+    /// Playback duration (effective rows converted to MusicalTime).
+    pub duration: MusicalTime,
+    /// Where in the clip to start playing (e.g. from PatternBreak target row).
+    pub clip_offset: MusicalTime,
     /// How this entry's playback ends.
     pub termination: SeqTermination,
 }
@@ -294,6 +296,11 @@ pub fn build_tracks(
 }
 
 /// Build a sequence from a legacy order list, computing start times.
+///
+/// Uses `flow_control_info()` to compute correct durations that account
+/// for PatternBreak/PositionJump effects. The break target row from one
+/// pattern becomes the `clip_offset` of the next entry. PositionJumps
+/// are followed to build the correct linear sequence.
 fn build_sequence_from_order(
     order: &[OrderEntry],
     patterns: &[Pattern],
@@ -302,18 +309,48 @@ fn build_sequence_from_order(
     let rpb = song_rpb as u32;
     let mut sequence = Vec::new();
     let mut time = MusicalTime::zero();
+    let mut prev_break_target: u16 = 0;
+    let mut order_idx: usize = 0;
+    // Guard against infinite loops from backward PositionJumps
+    let max_entries = order.len() * 2 + 256;
 
-    for entry in order {
-        match entry {
+    while order_idx < order.len() && sequence.len() < max_entries {
+        match &order[order_idx] {
             OrderEntry::Pattern(idx) => {
-                let length = patterns.get(*idx as usize).map_or(0, |p| p.rows);
-                sequence.push(SeqEntry { start: time, clip_idx: *idx as u16, length, termination: SeqTermination::Natural });
                 if let Some(pattern) = patterns.get(*idx as usize) {
                     let pat_rpb = pattern.rows_per_beat.map_or(rpb, |r| r as u32);
-                    time = time.add_rows(pattern.rows as u32, pat_rpb);
+                    let info = pattern.flow_control_info();
+                    let offset_rows = prev_break_target.min(info.effective_rows);
+                    let duration_rows = info.effective_rows.saturating_sub(offset_rows);
+                    let clip_offset = MusicalTime::from_rows(offset_rows as u32, pat_rpb);
+                    let duration = MusicalTime::from_rows(duration_rows as u32, pat_rpb);
+                    sequence.push(SeqEntry {
+                        start: time,
+                        clip_idx: *idx as u16,
+                        duration,
+                        clip_offset,
+                        termination: SeqTermination::Natural,
+                    });
+                    time = time + duration;
+                    prev_break_target = info.break_target_row;
+                    if let Some(jump) = info.jump_target {
+                        order_idx = jump as usize;
+                    } else {
+                        order_idx += 1;
+                    }
+                } else {
+                    sequence.push(SeqEntry {
+                        start: time,
+                        clip_idx: *idx as u16,
+                        duration: MusicalTime::zero(),
+                        clip_offset: MusicalTime::zero(),
+                        termination: SeqTermination::Natural,
+                    });
+                    prev_break_target = 0;
+                    order_idx += 1;
                 }
             }
-            OrderEntry::Skip => {}
+            OrderEntry::Skip => { order_idx += 1; }
             OrderEntry::End => break,
         }
     }
@@ -322,13 +359,9 @@ fn build_sequence_from_order(
 }
 
 /// Compute the end time for a track (time after its last clip finishes).
-fn track_end_time(track: &Track, song_rpb: u8) -> Option<MusicalTime> {
+fn track_end_time(track: &Track, _song_rpb: u8) -> Option<MusicalTime> {
     let last = track.sequence.last()?;
-    let rpb = track.clips.get(last.clip_idx as usize)
-        .and_then(|c| c.pattern())
-        .and_then(|p| p.rows_per_beat)
-        .map_or(song_rpb as u32, |r| r as u32);
-    Some(last.start.add_rows(last.length as u32, rpb))
+    Some(last.start + last.duration)
 }
 
 #[cfg(test)]
@@ -482,5 +515,36 @@ mod tests {
         assert_eq!(track.seq_entry_index_at_beat(0), Some(0));
         assert_eq!(track.seq_entry_index_at_beat(1), Some(1)); // second pattern starts at beat 1
         assert_eq!(track.seq_entry_index_at_beat(99), None);
+    }
+
+    #[test]
+    fn pattern_break_shortens_duration() {
+        let mut song = Song::with_channels("test", 1);
+        let mut pat0 = Pattern::new(64, 1);
+        pat0.cell_mut(2, 0).effect = crate::effects::Effect::PatternBreak(0);
+        let pat1 = Pattern::new(64, 1);
+        build_tracks(&mut song, &[pat0, pat1], &[OrderEntry::Pattern(0), OrderEntry::Pattern(1)]);
+
+        let seq = &song.tracks[0].sequence;
+        // pat0 has break at row 2, so effective_rows=3, duration = 3 rows
+        assert_eq!(seq[0].duration, MusicalTime::from_rows(3, 4));
+        // pat1 starts right after pat0's shortened duration
+        assert_eq!(seq[1].start, MusicalTime::from_rows(3, 4));
+    }
+
+    #[test]
+    fn pattern_break_target_sets_clip_offset() {
+        let mut song = Song::with_channels("test", 1);
+        let mut pat0 = Pattern::new(64, 1);
+        pat0.cell_mut(1, 0).effect = crate::effects::Effect::PatternBreak(4);
+        let pat1 = Pattern::new(64, 1);
+        build_tracks(&mut song, &[pat0, pat1], &[OrderEntry::Pattern(0), OrderEntry::Pattern(1)]);
+
+        let seq = &song.tracks[0].sequence;
+        // pat0: effective_rows=2, break_target=4
+        assert_eq!(seq[0].clip_offset, MusicalTime::zero()); // first entry always 0
+        // pat1: clip_offset = 4 rows, effective_rows=64, duration = 64-4 = 60 rows
+        assert_eq!(seq[1].clip_offset, MusicalTime::from_rows(4, 4));
+        assert_eq!(seq[1].duration, MusicalTime::from_rows(60, 4));
     }
 }

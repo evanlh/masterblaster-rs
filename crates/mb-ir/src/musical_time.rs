@@ -59,6 +59,36 @@ impl MusicalTime {
     }
 }
 
+impl MusicalTime {
+    /// Create a time representing a duration of `rows` rows at the given rows_per_beat.
+    pub fn from_rows(rows: u32, rpb: u32) -> Self {
+        Self::zero().add_rows(rows, rpb)
+    }
+
+    /// Convert this time to a row count at the given rows_per_beat.
+    /// Truncates any fractional row.
+    pub fn to_rows(&self, rpb: u32) -> u32 {
+        if rpb == 0 { return 0; }
+        let sub_per_row = SUB_BEAT_UNIT / rpb;
+        let total_sub = self.beat * SUB_BEAT_UNIT as u64 + self.sub_beat as u64;
+        (total_sub / sub_per_row as u64) as u32
+    }
+}
+
+impl core::ops::Add for MusicalTime {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        let total_sub = self.sub_beat as u64 + rhs.sub_beat as u64;
+        let extra_beats = total_sub / SUB_BEAT_UNIT as u64;
+        let remaining = (total_sub % SUB_BEAT_UNIT as u64) as u32;
+        Self {
+            beat: self.beat + rhs.beat + extra_beats,
+            sub_beat: remaining,
+        }
+    }
+}
+
 impl PartialOrd for MusicalTime {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
@@ -152,6 +182,39 @@ mod tests {
     fn add_ticks_zero_tpb_is_noop() {
         let t = MusicalTime::from_beats(5);
         assert_eq!(t.add_ticks(10, 0), t);
+    }
+
+    #[test]
+    fn from_rows_matches_add_rows() {
+        assert_eq!(MusicalTime::from_rows(6, 4), MusicalTime::zero().add_rows(6, 4));
+    }
+
+    #[test]
+    fn to_rows_round_trip() {
+        let t = MusicalTime::from_rows(10, 4);
+        assert_eq!(t.to_rows(4), 10);
+    }
+
+    #[test]
+    fn to_rows_zero_rpb_returns_zero() {
+        let t = MusicalTime::from_beats(5);
+        assert_eq!(t.to_rows(0), 0);
+    }
+
+    #[test]
+    fn add_two_times() {
+        let a = MusicalTime::from_rows(3, 4);
+        let b = MusicalTime::from_rows(5, 4);
+        assert_eq!(a + b, MusicalTime::from_rows(8, 4));
+    }
+
+    #[test]
+    fn add_with_sub_beat_overflow() {
+        let a = MusicalTime { beat: 0, sub_beat: SUB_BEAT_UNIT - 1 };
+        let b = MusicalTime { beat: 0, sub_beat: 2 };
+        let result = a + b;
+        assert_eq!(result.beat, 1);
+        assert_eq!(result.sub_beat, 1);
     }
 
     #[test]

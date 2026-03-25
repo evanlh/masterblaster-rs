@@ -757,8 +757,11 @@ fn parse_sequ(
             if event_id == 0 || event_id == 1 {
                 // Mute / Break — shorten the preceding entry
                 if let Some(prev) = seq_entries.last_mut() {
-                    let truncated_length = position.saturating_sub(prev_position) as u16;
-                    prev.length = prev.length.min(truncated_length);
+                    let truncated_rows = position.saturating_sub(prev_position);
+                    let truncated_dur = MusicalTime::from_rows(truncated_rows, rpb);
+                    if truncated_dur < prev.duration {
+                        prev.duration = truncated_dur;
+                    }
                     prev.termination = if event_id == 0 {
                         mb_ir::SeqTermination::Mute
                     } else {
@@ -771,7 +774,13 @@ fn parse_sequ(
                 let pat_length = all_patterns.get(machine_idx)
                     .and_then(|pats| pats.get(pat_idx as usize))
                     .map_or(0, |bp| bp.ticks);
-                seq_entries.push(SeqEntry { start, clip_idx: pat_idx, length: pat_length, termination: mb_ir::SeqTermination::Natural });
+                seq_entries.push(SeqEntry {
+                    start,
+                    clip_idx: pat_idx,
+                    duration: MusicalTime::from_rows(pat_length as u32, rpb),
+                    clip_offset: MusicalTime::zero(),
+                    termination: mb_ir::SeqTermination::Natural,
+                });
                 prev_position = position;
             }
             // event_id 2 (Thru) and 3-15: ignored

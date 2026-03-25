@@ -7,7 +7,8 @@ use crate::song::SeqTermination;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeqEntryData {
     pub clip_idx: u16,
-    pub length: u16,
+    pub duration: crate::musical_time::MusicalTime,
+    pub clip_offset: crate::musical_time::MusicalTime,
     pub termination: SeqTermination,
 }
 

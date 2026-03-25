@@ -210,7 +210,13 @@ fn musiklinjen_pattern7_diagnostics() {
 
     // Render clip 7 in isolation — rebuild sequences to play only clip 7
     let mut isolated = song.clone();
-    let entry = mb_ir::SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx: 7, length: 64, termination: mb_ir::SeqTermination::Natural };
+    let entry = mb_ir::SeqEntry {
+        start: mb_ir::MusicalTime::zero(),
+        clip_idx: 7,
+        duration: mb_ir::MusicalTime::from_rows(64, song.rows_per_beat as u32),
+        clip_offset: mb_ir::MusicalTime::zero(),
+        termination: mb_ir::SeqTermination::Natural,
+    };
     for track in &mut isolated.tracks {
         track.sequence = if track.clips.len() > 7 {
             vec![entry]
@@ -284,9 +290,17 @@ fn setspeed_produces_ritardando() {
     let data = fs::read(fixtures_dir().join("musiklinjen.mod")).unwrap();
     let song = load_mod(&data).unwrap();
 
-    // Render clip 20 in isolation
+    // Render clip 20 in isolation — use effective_rows (PatternBreak at row 15 → 16 rows)
     let mut isolated = song.clone();
-    let entry = mb_ir::SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx: 20, length: 64, termination: mb_ir::SeqTermination::Natural };
+    let effective_rows = song.tracks[0].clips[20].pattern().unwrap()
+        .flow_control_info().effective_rows as u32;
+    let entry = mb_ir::SeqEntry {
+        start: mb_ir::MusicalTime::zero(),
+        clip_idx: 20,
+        duration: mb_ir::MusicalTime::from_rows(effective_rows, song.rows_per_beat as u32),
+        clip_offset: mb_ir::MusicalTime::zero(),
+        termination: mb_ir::SeqTermination::Natural,
+    };
     for track in &mut isolated.tracks {
         track.sequence = if track.clips.len() > 20 {
             vec![entry]
@@ -305,7 +319,7 @@ fn setspeed_produces_ritardando() {
         frame_count += 1;
     }
 
-    let constant_speed_frames = 16 * 6 * 882;
+    let constant_speed_frames = effective_rows as usize * 6 * 882;
     assert!(
         frame_count > constant_speed_frames * 2,
         "SetSpeed ritardando should produce >2x frames vs constant speed: got {}, baseline {}",

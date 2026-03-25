@@ -45,14 +45,16 @@ impl ClipSourceState {
         let exhausted = track.sequence.is_empty()
             || track.muted
             || !song.is_tracker(track);
+        let song_rpb = song.rows_per_beat as u32;
+        let initial_row = entry_start_row(track, 0, song_rpb);
         Self {
             track_idx,
             seq_idx: 0,
-            row: 0,
+            row: initial_row,
             time,
             speed: song.initial_speed as u32,
-            song_rpb: song.rows_per_beat as u32,
-            max_rows: compute_max_rows(track),
+            song_rpb,
+            max_rows: compute_max_rows(track, song_rpb),
             rows_processed: 0,
             exhausted,
             end_time: if exhausted { Some(MusicalTime::zero()) } else { None },
@@ -71,15 +73,27 @@ impl ClipSourceState {
 }
 
 /// Compute max rows for loop detection (same as scheduler.rs).
-fn compute_max_rows(track: &Track) -> u64 {
+fn compute_max_rows(track: &Track, song_rpb: u32) -> u64 {
     let channels = (track.num_channels as u64).max(1);
     let from_clips: u64 = track.clips.iter()
         .filter_map(|c| c.pattern().map(|p| p.rows as u64))
         .sum();
     let from_seq: u64 = track.sequence.iter()
-        .map(|e| e.length as u64)
+        .map(|e| e.duration.to_rows(song_rpb) as u64)
         .sum();
     from_clips.max(from_seq) * channels * 2 + 256
+}
+
+/// Get the starting row for a sequence entry (from its clip_offset).
+fn entry_start_row(track: &Track, seq_idx: usize, song_rpb: u32) -> u16 {
+    track.sequence.get(seq_idx)
+        .map(|e| {
+            let rpb = track.get_pattern_at(e.clip_idx as usize)
+                .and_then(|p| p.rows_per_beat)
+                .map_or(song_rpb, |r| r as u32);
+            e.clip_offset.to_rows(rpb) as u16
+        })
+        .unwrap_or(0)
 }
 
 /// Resolve effective speed for a pattern.
@@ -139,21 +153,21 @@ impl EventSource for ClipSourceState {
             }
 
             let entry = &track.sequence[self.seq_idx];
-            let entry_length = entry.length;
             let clip_idx = entry.clip_idx as usize;
 
             let clip = match track.get_pattern_at(clip_idx) {
                 Some(p) => p,
                 None => {
                     self.seq_idx += 1;
-                    self.row = 0;
+                    self.row = entry_start_row(track, self.seq_idx, self.song_rpb);
                     self.time = advance_to_seq_entry(track, self.seq_idx, self.time);
                     continue;
                 }
             };
 
-            let num_rows = entry_length.min(clip.rows);
             let rpb = clip.rows_per_beat.map_or(self.song_rpb, |r| r as u32);
+            let offset_rows = entry.clip_offset.to_rows(rpb) as u16;
+            let num_rows = (offset_rows + entry.duration.to_rows(rpb) as u16).min(clip.rows);
             let eff_speed = effective_speed(clip, self.speed);
 
             // Check if we've passed the next entry's start
@@ -161,7 +175,7 @@ impl EventSource for ClipSourceState {
             if let Some(ns) = next_start {
                 if self.time >= ns {
                     self.seq_idx += 1;
-                    self.row = 0;
+                    self.row = entry_start_row(track, self.seq_idx, self.song_rpb);
                     self.time = ns;
                     continue;
                 }
@@ -169,7 +183,8 @@ impl EventSource for ClipSourceState {
 
             if self.row >= num_rows {
                 self.seq_idx += 1;
-                self.row = 0;
+                self.row = entry_start_row(track, self.seq_idx, self.song_rpb);
+                self.time = advance_to_seq_entry(track, self.seq_idx, self.time);
                 continue;
             }
 
@@ -184,6 +199,7 @@ impl EventSource for ClipSourceState {
                 self.speed = s;
             }
 
+            // Duration is authoritative — ignore flow control, advance linearly
             self.time = self.time.add_rows(1 + fc.pattern_delay as u32, rpb);
             self.rows_processed += 1;
             if self.rows_processed >= self.max_rows {
@@ -192,17 +208,11 @@ impl EventSource for ClipSourceState {
                 break;
             }
 
-            match (fc.jump_order, fc.break_row) {
-                (Some(pos), Some(r)) => { self.seq_idx = pos as usize; self.row = r as u16; }
-                (Some(pos), None) => { self.seq_idx = pos as usize; self.row = 0; }
-                (None, Some(r)) => { self.seq_idx += 1; self.row = r as u16; }
-                (None, None) => {
-                    self.row += 1;
-                    if self.row >= num_rows {
-                        self.seq_idx += 1;
-                        self.row = 0;
-                    }
-                }
+            self.row += 1;
+            if self.row >= num_rows {
+                self.seq_idx += 1;
+                self.row = entry_start_row(track, self.seq_idx, self.song_rpb);
+                self.time = advance_to_seq_entry(track, self.seq_idx, self.time);
             }
         }
 

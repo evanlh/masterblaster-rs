@@ -208,7 +208,7 @@ pub(crate) enum SeqCellContent {
 }
 
 /// Build a map from beat offset → cell content for a track's sequence.
-pub(crate) fn seq_beat_lookup(track: &mb_ir::Track, beats_per_row: u32, rpb: u32) -> std::collections::HashMap<u32, SeqCellContent> {
+pub(crate) fn seq_beat_lookup(track: &mb_ir::Track, beats_per_row: u32, _rpb: u32) -> std::collections::HashMap<u32, SeqCellContent> {
     let mut map = std::collections::HashMap::new();
     for entry in &track.sequence {
         let beat = entry.start.beat as u32;
@@ -219,7 +219,7 @@ pub(crate) fn seq_beat_lookup(track: &mb_ir::Track, beats_per_row: u32, rpb: u32
 
         // Insert termination marker at the truncation point
         if entry.termination != mb_ir::SeqTermination::Natural {
-            let end_time = entry.start.add_rows(entry.length as u32, rpb);
+            let end_time = entry.start + entry.duration;
             let end_beat = end_time.beat as u32;
             let grid_end = (end_beat / beats_per_row.max(1)) * beats_per_row.max(1);
             if grid_end == end_beat {

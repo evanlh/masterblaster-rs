@@ -73,6 +73,17 @@ impl Cell {
     }
 }
 
+/// Flow control information extracted from pattern scanning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FlowControlInfo {
+    /// Number of rows actually played before flow control takes effect.
+    pub effective_rows: u16,
+    /// Target row in the next pattern (from PatternBreak param).
+    pub break_target_row: u16,
+    /// PositionJump destination order index, if any.
+    pub jump_target: Option<u8>,
+}
+
 /// A pattern containing rows of cells across channels.
 #[derive(Clone, Debug)]
 pub struct Pattern {
@@ -119,6 +130,38 @@ impl Pattern {
         if self.ticks_per_row > 0 { self.ticks_per_row } else { 6 }
     }
 
+    /// Flow control info from scanning pattern cells.
+    ///
+    /// Scans for the earliest PatternBreak or PositionJump.
+    /// - `effective_rows` = break_row + 1 (rows actually played).
+    /// - `break_target_row` = the target row in the next pattern (from PatternBreak param).
+    /// - `jump_target` = PositionJump destination order index, if any.
+    pub fn flow_control_info(&self) -> FlowControlInfo {
+        for row in 0..self.rows {
+            for col in 0..self.channels {
+                match self.cell(row, col).effect {
+                    Effect::PatternBreak(target) => return FlowControlInfo {
+                        effective_rows: row + 1,
+                        break_target_row: target as u16,
+                        jump_target: None,
+                    },
+                    Effect::PositionJump(pos) => return FlowControlInfo {
+                        effective_rows: row + 1,
+                        break_target_row: 0,
+                        jump_target: Some(pos),
+                    },
+                    _ => {}
+                }
+            }
+        }
+        FlowControlInfo { effective_rows: self.rows, break_target_row: 0, jump_target: None }
+    }
+
+    /// Returns (effective_rows, break_target_row). Convenience wrapper.
+    pub fn effective_rows_and_break_target(&self) -> (u16, u16) {
+        let info = self.flow_control_info();
+        (info.effective_rows, info.break_target_row)
+    }
 }
 
 #[cfg(test)]
@@ -134,6 +177,34 @@ mod tests {
 
         let a4 = Note::from_octave_semitone(4, 9);
         assert_eq!(a4, Note::On(57));
+    }
+
+    #[test]
+    fn effective_rows_no_break() {
+        let pat = Pattern::new(64, 4);
+        assert_eq!(pat.effective_rows_and_break_target(), (64, 0));
+    }
+
+    #[test]
+    fn effective_rows_pattern_break() {
+        let mut pat = Pattern::new(64, 4);
+        pat.cell_mut(10, 2).effect = Effect::PatternBreak(5);
+        assert_eq!(pat.effective_rows_and_break_target(), (11, 5));
+    }
+
+    #[test]
+    fn effective_rows_position_jump() {
+        let mut pat = Pattern::new(64, 1);
+        pat.cell_mut(3, 0).effect = Effect::PositionJump(0);
+        assert_eq!(pat.effective_rows_and_break_target(), (4, 0));
+    }
+
+    #[test]
+    fn effective_rows_earliest_wins() {
+        let mut pat = Pattern::new(64, 2);
+        pat.cell_mut(5, 0).effect = Effect::PatternBreak(0);
+        pat.cell_mut(10, 1).effect = Effect::PatternBreak(0);
+        assert_eq!(pat.effective_rows_and_break_target().0, 6);
     }
 
     #[test]

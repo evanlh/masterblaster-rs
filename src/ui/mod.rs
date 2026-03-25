@@ -378,14 +378,10 @@ fn sync_selected_seq_index(gui: &mut GuiState) {
     let beat = seq_row_to_beat(gui, gui.seq_cursor_row);
     let song = gui.controller.song();
     let Some(track) = song.tracks.get(gui.selected_track) else { return };
-    let rpb = song.rows_per_beat as u32;
     // Find the sequence entry whose time range covers this beat
     if let Some(idx) = track.sequence.iter().position(|e| {
         let start_beat = e.start.beat as u32;
-        let pat_rpb = track.get_pattern_at(e.clip_idx as usize)
-            .and_then(|p| p.rows_per_beat)
-            .map_or(rpb, |r| r as u32);
-        let end = e.start.add_rows(e.length as u32, pat_rpb);
+        let end = e.start + e.duration;
         let end_beat = end.beat as u32;
         beat >= start_beat && beat < end_beat
     }) {

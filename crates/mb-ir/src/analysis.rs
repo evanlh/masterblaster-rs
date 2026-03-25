@@ -124,10 +124,11 @@ pub fn time_to_track_position(song: &Song, time: MusicalTime, track_idx: usize) 
         let clip = track.clips.get(entry.clip_idx as usize)?;
         let pattern = clip.pattern()?;
         let pat_rpb = pattern.rows_per_beat.map_or(rpb, |r| r as u32);
-        let clip_end = entry.start.add_rows(pattern.rows as u32, pat_rpb);
+        let clip_end = entry.start + entry.duration;
 
         if time < clip_end {
-            let row = find_row_at(entry.start, time, pat_rpb, pattern.rows);
+            let offset_rows = entry.clip_offset.to_rows(pat_rpb) as u16;
+            let row = offset_rows + find_row_at(entry.start, time, pat_rpb, pattern.rows - offset_rows);
             return Some(TrackPlaybackPosition {
                 track_idx,
                 seq_index,

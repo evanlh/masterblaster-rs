@@ -127,10 +127,17 @@ impl Controller {
     /// Add a sequence entry to the given track.
     pub fn add_seq_entry(&mut self, track_idx: usize, clip_idx: u16) {
         let start = track_end_time(&self.song, track_idx);
-        let length = self.song.tracks.get(track_idx)
+        let rpb = self.song.rows_per_beat as u32;
+        let rows = self.song.tracks.get(track_idx)
             .and_then(|t| t.get_pattern_at(clip_idx as usize))
             .map_or(0, |p| p.rows);
-        let entry = mb_ir::SeqEntry { start, clip_idx, length, termination: mb_ir::SeqTermination::Natural };
+        let entry = mb_ir::SeqEntry {
+            start,
+            clip_idx,
+            duration: mb_ir::MusicalTime::from_rows(rows as u32, rpb),
+            clip_offset: mb_ir::MusicalTime::zero(),
+            termination: mb_ir::SeqTermination::Natural,
+        };
         if let Some(track) = self.song.tracks.get_mut(track_idx) {
             track.sequence.push(entry);
         }
@@ -147,20 +154,22 @@ impl Controller {
     /// Returns the forward and reverse edits, or None if overlap detected.
     pub fn set_seq_entry(&mut self, track_idx: usize, beat: u32, clip_idx: u16) -> Option<(Edit, Edit)> {
         let track = self.song.tracks.get(track_idx)?;
-        let length = track.get_pattern_at(clip_idx as usize).map_or(16, |p| p.rows);
         let rpb = self.song.rows_per_beat;
-        if would_overlap(track, beat, length, rpb) {
+        let rows = track.get_pattern_at(clip_idx as usize).map_or(16, |p| p.rows);
+        let duration = mb_ir::MusicalTime::from_rows(rows as u32, rpb as u32);
+        if would_overlap(track, beat, &duration) {
             return None;
         }
         let data = mb_ir::SeqEntryData {
             clip_idx,
-            length,
+            duration,
+            clip_offset: mb_ir::MusicalTime::zero(),
             termination: mb_ir::SeqTermination::Natural,
         };
-        // Build reverse: restore whatever was at this beat before
         let old_entry = track.seq_entry_at_beat(beat).map(|e| mb_ir::SeqEntryData {
             clip_idx: e.clip_idx,
-            length: e.length,
+            duration: e.duration,
+            clip_offset: e.clip_offset,
             termination: e.termination,
         });
         let forward = Edit::SetSeqEntry { track: track_idx as u16, beat, entry: Some(data) };
@@ -176,7 +185,8 @@ impl Controller {
         let old = track.seq_entry_at_beat(beat)?;
         let old_data = mb_ir::SeqEntryData {
             clip_idx: old.clip_idx,
-            length: old.length,
+            duration: old.duration,
+            clip_offset: old.clip_offset,
             termination: old.termination,
         };
         let forward = Edit::SetSeqEntry { track: track_idx as u16, beat, entry: None };
@@ -360,7 +370,8 @@ fn apply_set_seq_entry(song: &mut Song, track_idx: u16, beat: u32, entry: &Optio
         let new_entry = mb_ir::SeqEntry {
             start: mb_ir::MusicalTime::from_beats(beat as u64),
             clip_idx: data.clip_idx,
-            length: data.length,
+            duration: data.duration,
+            clip_offset: data.clip_offset,
             termination: data.termination,
         };
         // Insert sorted by start time
@@ -374,10 +385,17 @@ fn apply_set_seq_entry(song: &mut Song, track_idx: u16, beat: u32, entry: &Optio
 /// Rebuild track sequences to play only a single clip on a single track.
 fn rebuild_track_sequences(song: &mut Song, track_idx: usize, clip_idx: u16) {
     use mb_ir::SeqEntry;
-    let length = song.tracks.get(track_idx)
+    let rpb = song.rows_per_beat as u32;
+    let rows = song.tracks.get(track_idx)
         .and_then(|t| t.get_pattern_at(clip_idx as usize))
-        .map_or(0, |p| p.rows);
-    let entry = SeqEntry { start: mb_ir::MusicalTime::zero(), clip_idx, length, termination: mb_ir::SeqTermination::Natural };
+        .map_or(0, |p| p.flow_control_info().effective_rows);
+    let entry = SeqEntry {
+        start: mb_ir::MusicalTime::zero(),
+        clip_idx,
+        duration: mb_ir::MusicalTime::from_rows(rows as u32, rpb),
+        clip_offset: mb_ir::MusicalTime::zero(),
+        termination: mb_ir::SeqTermination::Natural,
+    };
     for (i, track) in song.tracks.iter_mut().enumerate() {
         track.sequence = if i == track_idx && (clip_idx as usize) < track.clips.len() {
             vec![entry]
@@ -501,34 +519,25 @@ fn frames_until_report(frame_count: u64, interval: u64, batch_size: usize) -> us
     (remaining as usize).min(batch_size)
 }
 
-/// Check if placing a clip of the given length at the given beat would overlap
+/// Check if placing a clip with the given duration at the given beat would overlap
 /// any existing sequence entry (excluding an entry already at that beat).
-fn would_overlap(track: &mb_ir::Track, beat: u32, length: u16, rpb: u8) -> bool {
+fn would_overlap(track: &mb_ir::Track, beat: u32, duration: &mb_ir::MusicalTime) -> bool {
     let new_start = mb_ir::MusicalTime::from_beats(beat as u64);
-    let new_end = new_start.add_rows(length as u32, rpb as u32);
+    let new_end = new_start + *duration;
     track.sequence.iter()
         .filter(|e| e.start.beat as u32 != beat) // skip entry we'd replace
         .any(|e| {
-            let pat_rpb = track.get_pattern_at(e.clip_idx as usize)
-                .and_then(|p| p.rows_per_beat)
-                .map_or(rpb as u32, |r| r as u32);
-            let e_end = e.start.add_rows(e.length as u32, pat_rpb);
-            // Overlap if ranges intersect
+            let e_end = e.start + e.duration;
             new_start < e_end && e.start < new_end
         })
 }
 
 /// End time of a track's sequence (after the last clip finishes).
 fn track_end_time(song: &Song, track_idx: usize) -> mb_ir::MusicalTime {
-    let rpb = song.rows_per_beat as u32;
     song.tracks.get(track_idx)
         .and_then(|t| {
             let last = t.sequence.last()?;
-            let pat_rpb = t.clips.get(last.clip_idx as usize)
-                .and_then(|c| c.pattern())
-                .and_then(|p| p.rows_per_beat)
-                .map_or(rpb, |r| r as u32);
-            Some(last.start.add_rows(last.length as u32, pat_rpb))
+            Some(last.start + last.duration)
         })
         .unwrap_or(mb_ir::MusicalTime::zero())
 }
@@ -627,11 +636,13 @@ mod tests {
         track.sequence.push(mb_ir::SeqEntry {
             start: mb_ir::MusicalTime::zero(),
             clip_idx: 0,
-            length: 16,
+            duration: mb_ir::MusicalTime::from_rows(16, 4),
+            clip_offset: mb_ir::MusicalTime::zero(),
             termination: mb_ir::SeqTermination::Natural,
         });
         // Place after the first clip ends (beat 4 with rpb=4)
-        assert!(!would_overlap(&track, 4, 16, 4));
+        let dur = mb_ir::MusicalTime::from_rows(16, 4);
+        assert!(!would_overlap(&track, 4, &dur));
     }
 
     #[test]
@@ -641,10 +652,12 @@ mod tests {
         track.sequence.push(mb_ir::SeqEntry {
             start: mb_ir::MusicalTime::zero(),
             clip_idx: 0,
-            length: 16,
+            duration: mb_ir::MusicalTime::from_rows(16, 4),
+            clip_offset: mb_ir::MusicalTime::zero(),
             termination: mb_ir::SeqTermination::Natural,
         });
         // Place overlapping the first clip
-        assert!(would_overlap(&track, 2, 16, 4));
+        let dur = mb_ir::MusicalTime::from_rows(16, 4);
+        assert!(would_overlap(&track, 2, &dur));
     }
 }
