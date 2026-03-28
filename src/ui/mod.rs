@@ -73,6 +73,19 @@ impl Default for GuiState {
 }
 
 impl GuiState {
+    /// Reset all UI state to defaults, preserving the loaded song.
+    pub fn reset(&mut self) {
+        self.selected_track = 0;
+        self.selected_seq_index = 0;
+        self.seq_cursor_row = 0;
+        self.seq_hex_nibble = None;
+        self.center_view = CenterView::Pattern;
+        self.status.clear();
+        self.editor = EditorState::default();
+        self.undo_stack = UndoStack::new();
+        self.invalidate_caches();
+    }
+
     /// Invalidate all per-frame caches. Call after song load, edits, track mute, etc.
     pub(crate) fn invalidate_caches(&mut self) {
         self.seq_lookups = None;

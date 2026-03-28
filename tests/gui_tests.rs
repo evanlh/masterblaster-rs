@@ -81,7 +81,7 @@ impl TestHarness {
     }
 
     fn reset_editor(&mut self) {
-        self.app_mut().gui.editor = Default::default();
+        self.app_mut().gui.reset();
     }
 
     fn inject(&mut self, actions: &[EditorAction]) {
@@ -401,8 +401,16 @@ fn test_sequencer_hex_entry(h: &mut TestHarness) {
     h.inject(&[EditorAction::ToggleEditMode]);
     h.render(1);
 
-    // Navigate to an empty row (far down, past existing entries)
-    for _ in 0..20 {
+    // Find an empty row past all existing entries
+    let song = h.app().gui.controller.song();
+    let rpb = song.rows_per_beat as u32;
+    let beats_per_row = 16 / rpb.max(1);
+    let total_beats = song.total_time().beat as u32;
+    let target_row = (total_beats / beats_per_row) + 2; // well past song end
+    let track_idx = h.app().gui.selected_track;
+
+    // Navigate to the target row
+    for _ in 0..target_row {
         h.inject(&[EditorAction::MoveCursor { drow: 1, dchannel: 0, dcolumn: 0 }]);
     }
     h.render(1);
@@ -417,13 +425,9 @@ fn test_sequencer_hex_entry(h: &mut TestHarness) {
     h.render(1);
     assert!(h.app().gui.seq_hex_nibble.is_none(), "Nibble cleared after placement");
 
-    // Verify entry exists: look up the beat for the original cursor_row
-    let song = h.app().gui.controller.song();
-    let rpb = song.rows_per_beat as u32;
-    let beats_per_row = 16 / rpb.max(1);
+    // Verify entry exists
     let beat = cursor_row * beats_per_row;
-    let track_idx = h.app().gui.selected_track;
-    let entry = song.tracks[track_idx].seq_entry_at_beat(beat);
+    let entry = h.app().gui.controller.song().tracks[track_idx].seq_entry_at_beat(beat);
     assert!(entry.is_some(), "Entry should exist at beat {}", beat);
     assert_eq!(entry.unwrap().clip_idx, 0);
 
@@ -477,7 +481,23 @@ fn test_sequencer_enter_jumps_to_pattern(h: &mut TestHarness) {
     h.inject(&[EditorAction::SwitchToSequencer]);
     h.render(3);
 
-    // Row 0 should have an entry — press Enter
+    // Find the first grid-aligned entry on track 0
+    let track_idx = 0;
+    let song = h.app().gui.controller.song();
+    let rpb = song.rows_per_beat as u32;
+    let beats_per_row = 16 / rpb.max(1);
+    let first_grid_entry = song.tracks[track_idx].sequence.iter()
+        .find(|e| e.start.beat as u32 % beats_per_row == 0)
+        .expect("Track should have at least one grid-aligned seq entry");
+    let target_row = first_grid_entry.start.beat as u32 / beats_per_row;
+
+    // Navigate cursor to that row
+    for _ in 0..target_row {
+        h.inject(&[EditorAction::MoveCursor { drow: 1, dchannel: 0, dcolumn: 0 }]);
+    }
+    h.render(3);
+
+    // Press Enter on a row with an entry
     h.inject(&[EditorAction::EnterOnCell]);
     h.render(3);
 

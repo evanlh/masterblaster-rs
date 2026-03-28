@@ -42,6 +42,10 @@ cargo cli path/to/file.mod --wav output.wav
 
 `cargo cli` is a cargo alias for `cargo run --bin mb-cli --` (defined in `.cargo/config.toml`).
 
+## Pre-commit
+
+Run `make ci` before each commit. This runs all workspace tests, GUI tests, and benchmarks in one command.
+
 ## Benchmarks
 
 ```sh
