@@ -6,6 +6,7 @@ members = [
     "crates/mb-audio",
     "crates/mb-formats",
     "crates/mb-master",
+    "crates/mb-faust",
 ]
 
 [workspace.package]
@@ -21,6 +22,7 @@ mb-engine = { path = "crates/mb-engine" }
 mb-audio = { path = "crates/mb-audio" }
 mb-formats = { path = "crates/mb-formats" }
 mb-master = { path = "crates/mb-master" }
+mb-faust = { path = "crates/mb-faust" }
 
 # Core (no_std compatible)
 arrayvec = "0.7"
@@ -70,6 +72,7 @@ path = "src/bin/cli.rs"
 [features]
 test-harness = ["png"]
 alloc_check = ["mb-master/alloc_check"]
+faust = ["mb-master/faust"]
 
 [[test]]
 name = "gui_tests"

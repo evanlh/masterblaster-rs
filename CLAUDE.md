@@ -10,7 +10,8 @@ Full design in [SPECIFICATION.md](SPECIFICATION.md).
 - **mb-formats**: MOD parser complete (header, samples, patterns, period-to-note, all effect types). Other formats not started.
 - **mb-engine**: Working. Frame mixing with linear interpolation, EventQueue with sorted insertion, ChannelState with per-tick effects (volume slide), beat-based scheduling, song end detection via MusicalTime.
 - **mb-audio**: Working. AudioOutput trait, CpalOutput with ring buffer, stereo stream with spin-wait writes. Forces 2-channel output for macOS compatibility.
-- **mb-master**: Headless Controller. Unified API for song loading, real-time playback (audio thread), and offline rendering (render_frames, render_to_wav). WAV encoding lives here.
+- **mb-master**: Headless Controller. Unified API for song loading, real-time playback (audio thread), and offline rendering (render_frames, render_to_wav). WAV encoding lives here. Optional `faust` feature for Faust JIT.
+- **mb-faust**: Faust JIT integration via libfaust C API. Compiles Faust DSP strings/files at runtime, wraps as Machine. Includes reverb.dsp validation DSP.
 - **GUI (src/main.rs)**: imgui-rs shell. 3-panel layout, file dialog, playback controls. UI state in `GuiState`, delegates to `Controller`.
 - **mb-cli (src/bin/cli.rs)**: CLI binary for headless playback and WAV export via Controller.
 
@@ -44,7 +45,9 @@ cargo cli path/to/file.mod --wav output.wav
 
 ## Pre-commit
 
-Run `make ci` before each commit. This runs all workspace tests, GUI tests, and benchmarks in one command.
+Run `make ci` before each commit. This runs all workspace tests (excluding mb-faust), GUI tests, and benchmarks in one command.
+
+For Faust JIT tests (requires libfaust installed): `make test-faust`
 
 ## Benchmarks
 
@@ -109,6 +112,7 @@ HTML reports are generated in `target/criterion/`.
 - Immutable by default
 - DRY — factor shared logic, including in tests
 - TDD when designing new interfaces
+- When modifying a design doc in `designs/`, always update the `Updated:` field to today's date (YYYYMMDD). Set `Created:` when creating a new doc.
 - See global CLAUDE.md for full coding guidelines
 
 ## File Layout
@@ -147,9 +151,14 @@ masterblaster-rs/
     │   └── machines/        # Built-in machines (amiga_filter.rs)
     ├── mb-audio/src/        # Audio output backends (cpal)
     ├── mb-formats/src/      # Format parsers (MOD)
-    └── mb-master/src/
-        ├── lib.rs           # Controller: load, play, stop, render
-        └── wav.rs           # WAV encoding (16-bit stereo PCM)
+    ├── mb-master/src/
+    │   ├── lib.rs           # Controller: load, play, stop, render
+    │   └── wav.rs           # WAV encoding (16-bit stereo PCM)
+    └── mb-faust/src/        # Faust JIT integration (optional, requires libfaust)
+        ├── ffi.rs           # Raw extern "C" bindings to libfaust C API
+        ├── compiler.rs      # Safe FaustCompiler → CompiledDsp wrapper
+        ├── ui_visitor.rs    # UIGlue callbacks → FaustParam discovery
+        └── faust_machine.rs # FaustMachine: impl Machine + AudioStream
 ```
 
 ## Next Steps (Phase 1 completion)

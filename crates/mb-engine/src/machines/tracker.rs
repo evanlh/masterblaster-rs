@@ -15,16 +15,13 @@ use crate::channel::ChannelState;
 use crate::frequency::note_to_period;
 use crate::machine::{Machine, MachineInfo, MachineType};
 
-static INFO: MachineInfo = MachineInfo {
-    name: "Tracker",
-    short_name: "Tracker",
-    author: "masterblaster",
-    machine_type: MachineType::Generator,
-    params: &[],
-};
+fn make_info() -> MachineInfo {
+    MachineInfo::new("Tracker", "Tracker", "masterblaster", MachineType::Generator, alloc::vec![])
+}
 
 /// A Machine that drives N tracker channels, rendering and mixing them.
 pub struct TrackerMachine {
+    info: MachineInfo,
     channels: Vec<ChannelState>,
     samples: Vec<Sample>,
     instruments: Vec<Instrument>,
@@ -55,6 +52,7 @@ impl TrackerMachine {
             .collect();
 
         Self {
+            info: make_info(),
             channels,
             samples,
             instruments,
@@ -232,7 +230,7 @@ impl AudioStream for TrackerMachine {
 }
 
 impl Machine for TrackerMachine {
-    fn info(&self) -> &MachineInfo { &INFO }
+    fn info(&self) -> &MachineInfo { &self.info }
 
     fn init(&mut self, sample_rate: u32) {
         self.sample_rate = sample_rate;

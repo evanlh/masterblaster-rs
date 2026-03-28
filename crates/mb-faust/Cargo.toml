@@ -1,0 +1,9 @@
+[package]
+name = "mb-faust"
+version.workspace = true
+edition.workspace = true
+description = "Faust JIT integration for masterblaster"
+
+[dependencies]
+mb-ir = { workspace = true, features = ["std"] }
+mb-engine = { workspace = true }

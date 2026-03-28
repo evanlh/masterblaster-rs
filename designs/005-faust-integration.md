@@ -1,28 +1,28 @@
 # Faust DSP Integration Design
 
 Created: 20260213
-Updated: 20260222
+Updated: 20260328
 
 
 ## Status
 
-- [ ] Shared infrastructure
-  - [ ] `FaustMachine` adapter (Machine trait wrapper for both AOT and JIT DSPs)
-  - [ ] Parameter discovery via `build_user_interface` collector
-  - [ ] i16/f32 boundary conversion
+- [x] Shared infrastructure
+  - [x] `FaustMachine` adapter (Machine trait wrapper for both AOT and JIT DSPs)
+  - [x] Parameter discovery via `build_user_interface` collector
+  - [x] i16/f32 boundary conversion (moot — engine uses f32 throughout graph)
 - [ ] Approach A — AOT Rust codegen (embedded targets)
   - [ ] `build.rs` Faust compiler integration
   - [ ] Selective `.dsp` manifest (`faust/embedded.txt`)
   - [ ] `no_std` codegen flags (`-rnlm`, `-rnt`, `-mem2`)
-- [ ] Approach C — JIT via libfaust (desktop live coding)
-  - [ ] libfaust FFI bindings (`libfaust-sys` or hand-rolled)
+- [x] Approach C — JIT via libfaust (desktop live coding)
+  - [x] libfaust FFI bindings (hand-rolled in `mb-faust/src/ffi.rs`)
   - [ ] Folder watcher (`notify` crate) for `faust/` directory
-  - [ ] Hot-swap: compile → instantiate → replace node in audio graph
+  - [x] Hot-swap: compile → instantiate → replace node in audio graph (`Engine::replace_machine`)
   - [ ] Error reporting to GUI (compile errors, channel mismatch)
 - [ ] Starter effects
   - [ ] 1. Distortion (pipeline validation)
   - [ ] 2. Delay
-  - [ ] 3. Freeverb
+  - [x] 3. Freeverb (`faust/reverb.dsp`)
   - [ ] 4. Multimode filter (Philta equivalent)
 - [ ] Approach B — AOT C codegen via cc crate (fallback for Rust backend issues)
 

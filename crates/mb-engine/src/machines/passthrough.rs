@@ -3,18 +3,20 @@
 //! Passes input audio to output unchanged. Used so the graph shape matches
 //! the original Buzz song exactly, with every node having a machine instance.
 
+use alloc::vec;
+
 use mb_ir::{AudioBuffer, AudioStream, ChannelConfig};
 use crate::machine::{Machine, MachineInfo, MachineType};
 
-static INFO: MachineInfo = MachineInfo {
-    name: "Passthrough",
-    short_name: "Pass",
-    author: "masterblaster",
-    machine_type: MachineType::Effect,
-    params: &[],
-};
+pub struct PassthroughMachine {
+    info: MachineInfo,
+}
 
-pub struct PassthroughMachine;
+impl PassthroughMachine {
+    pub fn new() -> Self {
+        Self { info: MachineInfo::new("Passthrough", "Pass", "masterblaster", MachineType::Effect, vec![]) }
+    }
+}
 
 impl AudioStream for PassthroughMachine {
     fn channel_config(&self) -> ChannelConfig {
@@ -27,7 +29,7 @@ impl AudioStream for PassthroughMachine {
 }
 
 impl Machine for PassthroughMachine {
-    fn info(&self) -> &MachineInfo { &INFO }
+    fn info(&self) -> &MachineInfo { &self.info }
     fn init(&mut self, _sample_rate: u32) {}
     fn tick(&mut self) {}
     fn stop(&mut self) {}
@@ -40,7 +42,7 @@ mod tests {
 
     #[test]
     fn passthrough_leaves_buffer_unchanged() {
-        let mut m = PassthroughMachine;
+        let mut m = PassthroughMachine::new();
         m.init(44100);
         let mut buf = AudioBuffer::new(2, 2);
         buf.channel_mut(0)[0] = 0.5;

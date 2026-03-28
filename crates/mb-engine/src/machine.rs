@@ -1,5 +1,8 @@
 //! Machine trait for audio generators and effects.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use mb_ir::{AudioStream, EventPayload};
 
 /// Whether a machine generates or processes audio.
@@ -12,20 +15,38 @@ pub enum MachineType {
 /// Metadata describing a machine's parameters.
 pub struct ParamInfo {
     pub id: u16,
-    pub name: &'static str,
+    pub name: String,
     pub min: i32,
     pub max: i32,
     pub default: i32,
     pub no_value: i32,
 }
 
-/// Static metadata about a machine.
+impl ParamInfo {
+    pub fn new(id: u16, name: &str, min: i32, max: i32, default: i32) -> Self {
+        Self { id, name: String::from(name), min, max, default, no_value: 0 }
+    }
+}
+
+/// Metadata about a machine.
 pub struct MachineInfo {
-    pub name: &'static str,
-    pub short_name: &'static str,
-    pub author: &'static str,
+    pub name: String,
+    pub short_name: String,
+    pub author: String,
     pub machine_type: MachineType,
-    pub params: &'static [ParamInfo],
+    pub params: Vec<ParamInfo>,
+}
+
+impl MachineInfo {
+    pub fn new(name: &str, short_name: &str, author: &str, machine_type: MachineType, params: Vec<ParamInfo>) -> Self {
+        Self {
+            name: String::from(name),
+            short_name: String::from(short_name),
+            author: String::from(author),
+            machine_type,
+            params,
+        }
+    }
 }
 
 /// Core trait for audio generators and effects.

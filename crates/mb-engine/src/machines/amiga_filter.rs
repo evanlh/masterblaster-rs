@@ -10,25 +10,17 @@ use crate::machine::{Machine, MachineInfo, MachineType, ParamInfo};
 
 const DEFAULT_CUTOFF: i32 = 4410;
 
-static PARAMS: &[ParamInfo] = &[ParamInfo {
-    id: 0,
-    name: "Cutoff",
-    min: 1000,
-    max: 22050,
-    default: DEFAULT_CUTOFF,
-    no_value: 0,
-}];
-
-static INFO: MachineInfo = MachineInfo {
-    name: "Amiga Filter",
-    short_name: "AFilter",
-    author: "masterblaster",
-    machine_type: MachineType::Effect,
-    params: PARAMS,
-};
+fn make_info() -> MachineInfo {
+    MachineInfo::new(
+        "Amiga Filter", "AFilter", "masterblaster",
+        MachineType::Effect,
+        alloc::vec![ParamInfo::new(0, "Cutoff", 1000, 22050, DEFAULT_CUTOFF)],
+    )
+}
 
 /// One-pole RC low-pass filter: `y = y_prev + alpha * (x - y_prev)`.
 pub struct AmigaFilter {
+    info: MachineInfo,
     prev_left: f32,
     prev_right: f32,
     alpha: f32,
@@ -39,6 +31,7 @@ pub struct AmigaFilter {
 impl AmigaFilter {
     pub fn new() -> Self {
         Self {
+            info: make_info(),
             prev_left: 0.0,
             prev_right: 0.0,
             alpha: 0.0,
@@ -85,7 +78,7 @@ impl AudioStream for AmigaFilter {
 
 impl Machine for AmigaFilter {
     fn info(&self) -> &MachineInfo {
-        &INFO
+        &self.info
     }
 
     fn init(&mut self, sample_rate: u32) {

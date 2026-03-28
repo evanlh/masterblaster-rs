@@ -1547,6 +1547,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mb-faust"
+version = "0.1.0"
+dependencies = [
+ "mb-engine",
+ "mb-ir",
+]
+
+[[package]]
 name = "mb-formats"
 version = "0.1.0"
 dependencies = [
@@ -1569,6 +1577,7 @@ dependencies = [
  "assert_no_alloc",
  "mb-audio",
  "mb-engine",
+ "mb-faust",
  "mb-formats",
  "mb-ir",
  "ringbuf",

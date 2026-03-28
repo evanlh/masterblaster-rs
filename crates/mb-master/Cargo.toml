@@ -6,6 +6,7 @@ description = "Headless controller for masterblaster tracker"
 
 [features]
 alloc_check = ["mb-engine/alloc_check", "dep:assert_no_alloc"]
+faust = ["dep:mb-faust"]
 
 [dependencies]
 mb-ir = { workspace = true }
@@ -14,3 +15,4 @@ mb-audio = { workspace = true }
 mb-formats = { workspace = true }
 ringbuf = { workspace = true }
 assert_no_alloc = { version = "1.1", optional = true }
+mb-faust = { workspace = true, optional = true }

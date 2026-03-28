@@ -439,6 +439,14 @@ impl Engine {
         self.event_buf.reserve(total_columns * 3 + 16);
     }
 
+    /// Replace a machine at the given node ID, initializing with current sample rate.
+    pub fn replace_machine(&mut self, node_id: u16, mut machine: Box<dyn Machine>) {
+        machine.init(self.sample_rate);
+        if let Some(slot) = self.machines.get_mut(node_id as usize) {
+            *slot = Some(machine);
+        }
+    }
+
     /// Get a reference to a machine by node ID (for testing).
     pub fn machine(&self, node_id: u16) -> Option<&dyn Machine> {
         self.machines.get(node_id as usize)?.as_deref()

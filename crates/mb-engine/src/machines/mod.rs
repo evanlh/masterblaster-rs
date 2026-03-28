@@ -15,6 +15,6 @@ use crate::machine::Machine;
 pub fn create_machine(name: &str) -> Option<Box<dyn Machine>> {
     Some(match name {
         "Amiga Filter" => Box::new(amiga_filter::AmigaFilter::new()),
-        _ => Box::new(passthrough::PassthroughMachine),
+        _ => Box::new(passthrough::PassthroughMachine::new()),
     })
 }
