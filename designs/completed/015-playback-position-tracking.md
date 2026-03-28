@@ -3,20 +3,19 @@
 Created: 20260301
 Updated: 20260301
 
-## Status
+## Status: Superseded by Design Doc 023
 
-### Short-Term Fix: Precomputed Playback Map
-- [ ] Add `PlaybackMapEntry` and `build_playback_map()` to scheduler.rs
-- [ ] Re-export new symbols in mb-engine lib.rs
-- [ ] Store playback map on Controller
-- [ ] Add `track_position_from_map()` with binary search
-- [ ] Update `Controller::track_position()` to use map when available
+Design Doc 023 (Flow Control as Clip Properties) resolved the core problem this
+doc was created to solve. `build_sequence_from_order` now follows PositionJumps
+at import time, creating additional sequence entries for looped sections with
+monotonically increasing start times. This means `time_to_track_position()` can
+find the correct position even after backward jumps, since the sequence reflects
+actual playback order rather than the static order list.
 
-*Note: Current implementation uses atomic time packing + `time_to_track_position()` instead of a precomputed map. The short-term fix has not been implemented.*
-
-### Long-Term Vision
-- [ ] Engine-side position tracking via atomics (Option A stepping stone)
-- [ ] Reactive/incremental scheduling (Option B end-state)
+The short-term fix (precomputed playback map) was never implemented and is no
+longer needed. The long-term vision items (engine-side position tracking,
+reactive scheduling) may still have value for live performance scenarios but are
+independent design concerns, not tied to the original bug.
 
 ## Problem
 
