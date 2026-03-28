@@ -10,26 +10,26 @@ Updated: 20260302
 - [x] P3: gather_inputs linear scan — pre-indexed `conn_by_dest` at init
 - [x] P4: gain_linear recomputed per frame — precomputed in `conn_by_dest`
 - [ ] P5: Event clone in render loop — extract target+payload before dispatch
-- [ ] P6: u64 division every non-tick frame — lazy sub-beat evaluation
+- [x] P6: u64 division every non-tick frame — lazy sub-beat evaluation (interpolate_sub_beat removed)
 - [ ] P7: Enum match on every sample read — normalize to Mono16 at load
 - [ ] P8: Replace `dyn Machine` with enum dispatch — enable inlining in render loop
 
 ### Minor (Q-Level)
-- [ ] Q1: Double `channel_mut` calls in TrackerMachine::render
+- [x] Q1: Double `channel_mut` calls in TrackerMachine::render — uses `channels_mut_2(0, 1)`
 - [ ] Q2: scratch→output copy in render_machine
 - [ ] Q3: Uncached `spt()` in TrackerMachine
 - [ ] Q4: Per-frame `clear_outputs`
 - [ ] Q5: `has_loop()` re-check in Channel::render
 
 ### EventSource Architecture
-- [ ] ES1: EventSource trait definition
-- [ ] ES2: ClipSource implementation
-- [ ] ES3: EventMerger (sorted merge of N sources)
-- [ ] ES4: Engine integration (replace EventQueue + schedule_song)
-- [ ] ES5: Remove apply_set_cell event queue splicing
+- [x] ES1: EventSource trait definition
+- [x] ES2: ClipSource implementation
+- [x] ES3: EventMerger (sorted merge of N sources)
+- [x] ES4: Engine integration (replace EventQueue + schedule_song)
+- [x] ES5: Remove apply_set_cell event queue splicing
 
 ### Block-Based Rendering
-- [ ] P1: Block-based graph rendering (depends on ES1-ES4)
+- [x] P1: Block-based graph rendering (sub-block splitting at tick boundaries)
 
 ---
 
