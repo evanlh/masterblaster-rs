@@ -1,4 +1,4 @@
-//! Snapshot tests: render MOD fixtures to WAV, compare against stored golden files.
+//! Snapshot tests: render MOD/BMX fixtures to WAV, compare against stored golden files.
 //!
 //! To update snapshots:
 //!   UPDATE_SNAPSHOTS=1 cargo test --test snapshot_tests
@@ -14,8 +14,12 @@ use std::{env, fs};
 const SAMPLE_RATE: u32 = 44100;
 const MAX_SECONDS: u32 = 10;
 
-fn fixtures_dir() -> PathBuf {
+fn mod_fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mod")
+}
+
+fn bmx_fixtures_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bmx")
 }
 
 fn snapshots_dir() -> PathBuf {
@@ -83,7 +87,7 @@ fn assert_snapshot(name: &str, wav_bytes: &[u8]) {
 
 fn snapshot_test(fixture_name: &str) {
     let mut ctrl = Controller::new();
-    ctrl.load_mod(&fs::read(fixtures_dir().join(fixture_name)).unwrap())
+    ctrl.load_mod(&fs::read(mod_fixtures_dir().join(fixture_name)).unwrap())
         .unwrap();
     let wav = ctrl.render_to_wav(SAMPLE_RATE, MAX_SECONDS);
     assert_snapshot(&snapshot_stem(fixture_name), &wav);
@@ -91,11 +95,20 @@ fn snapshot_test(fixture_name: &str) {
 
 fn snapshot_pattern_test(fixture_name: &str, pattern: usize, max_seconds: u32) {
     let mut ctrl = Controller::new();
-    ctrl.load_mod(&fs::read(fixtures_dir().join(fixture_name)).unwrap())
+    ctrl.load_mod(&fs::read(mod_fixtures_dir().join(fixture_name)).unwrap())
         .unwrap();
     let wav = ctrl.render_pattern_to_wav(0, pattern, SAMPLE_RATE, max_seconds);
     let name = format!("{}_pat{:02}", snapshot_stem(fixture_name), pattern);
     assert_snapshot(&name, &wav);
+}
+
+fn bmx_snapshot_test(fixture_name: &str, max_seconds: u32) {
+    let mut ctrl = Controller::new();
+    ctrl.load_bmx(&fs::read(bmx_fixtures_dir().join(fixture_name)).unwrap())
+        .unwrap();
+    let wav = ctrl.render_to_wav(SAMPLE_RATE, max_seconds);
+    let stem = fixture_name.strip_suffix(".bmx").unwrap_or(fixture_name);
+    assert_snapshot(stem, &wav);
 }
 
 #[test]
@@ -121,4 +134,9 @@ fn snapshot_musiklinjen_pat20_ritardando() {
 #[test]
 fn snapshot_musiklinjen_pat15() {
     snapshot_pattern_test("musiklinjen.mod", 15, 20);
+}
+
+#[test]
+fn snapshot_insomnium_skooled_rmx() {
+    bmx_snapshot_test("Insomnium - Skooled RMX.bmx", 20);
 }
