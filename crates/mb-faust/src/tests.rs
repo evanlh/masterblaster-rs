@@ -124,4 +124,119 @@ mod tests {
         machine.stop();
         // Should not panic, just clears internal delay lines
     }
+
+    // --- Filter 2 tests ---
+
+    fn load_dsp(name: &str, path: &str) -> crate::compiler::CompiledDsp {
+        let source = std::fs::read_to_string(
+            format!("{}/../../faust/{path}", env!("CARGO_MANIFEST_DIR"))
+        ).unwrap();
+        compiler::compile(name, &source, None).unwrap()
+    }
+
+    #[test]
+    fn filter2_compiles() {
+        let dsp = load_dsp("filter2", "filter2.dsp");
+        assert_eq!(dsp.num_inputs, 2, "filter2 should be stereo in");
+        assert_eq!(dsp.num_outputs, 2, "filter2 should be stereo out");
+        assert_eq!(dsp.params.len(), 3, "filter2 should have 3 params (Type, Cutoff, Resonance)");
+    }
+
+    #[test]
+    fn filter2_lowpass_attenuates_high_freq() {
+        let mut machine = FaustMachine::from_source("filter2",
+            &std::fs::read_to_string(
+                format!("{}/../../faust/filter2.dsp", env!("CARGO_MANIFEST_DIR"))
+            ).unwrap()
+        ).unwrap();
+        machine.init(44100);
+
+        // Set Type=0 (LP), Cutoff=20 (low cutoff ~50Hz), Resonance=0
+        machine.set_param(0, 0);      // Type = LP
+        machine.set_param(1, 10240);  // Cutoff low (~20/127 * 65535)
+        machine.set_param(2, 0);      // Resonance = 0
+
+        // Generate high-frequency sine (10kHz) as input
+        let frames = 1024_u16;
+        let mut buf = AudioBuffer::new(2, frames);
+        for i in 0..frames as usize {
+            let sample = (2.0 * std::f32::consts::PI * 10000.0 * i as f32 / 44100.0).sin();
+            buf.channel_mut(0)[i] = sample;
+            buf.channel_mut(1)[i] = sample;
+        }
+
+        machine.render(&mut buf);
+
+        // High frequency should be significantly attenuated by low-pass
+        let energy: f32 = buf.channel(0)[512..].iter().map(|s| s * s).sum();
+        let rms = (energy / 512.0).sqrt();
+        assert!(rms < 0.3, "LP filter should attenuate 10kHz, RMS={rms}");
+    }
+
+    // --- Reverb 2 tests ---
+
+    #[test]
+    fn reverb2_compiles() {
+        let dsp = load_dsp("reverb2", "reverb2.dsp");
+        assert_eq!(dsp.num_inputs, 2, "reverb2 should be stereo in");
+        assert_eq!(dsp.num_outputs, 2, "reverb2 should be stereo out");
+        assert_eq!(dsp.params.len(), 5, "reverb2 should have 5 params");
+        let labels: Vec<&str> = dsp.params.iter().map(|p| p.label.as_str()).collect();
+        assert!(labels.contains(&"Dry Out"));
+        assert!(labels.contains(&"Rev Out"));
+        assert!(labels.contains(&"ER Out"));
+        assert!(labels.contains(&"Rev Time"));
+        assert!(labels.contains(&"Pre-Delay"));
+    }
+
+    #[test]
+    fn reverb2_produces_tail() {
+        let mut machine = FaustMachine::from_source("reverb2",
+            &std::fs::read_to_string(
+                format!("{}/../../faust/reverb2.dsp", env!("CARGO_MANIFEST_DIR"))
+            ).unwrap()
+        ).unwrap();
+        machine.init(44100);
+
+        // Render an impulse
+        let block = 256_u16;
+        let mut buf = AudioBuffer::new(2, block);
+        buf.channel_mut(0)[0] = 1.0;
+        buf.channel_mut(1)[0] = 1.0;
+        machine.render(&mut buf);
+
+        // Dry signal should pass through
+        assert!(buf.channel(0)[0].abs() > 0.1, "dry signal should pass, got {}", buf.channel(0)[0]);
+
+        // Render more blocks to verify reverb tail
+        let mut tail_energy: f32 = 0.0;
+        for _ in 0..100 {
+            let mut tail = AudioBuffer::new(2, block);
+            machine.render(&mut tail);
+            tail_energy += tail.channel(0).iter().map(|s| s * s).sum::<f32>();
+        }
+        assert!(tail_energy > 0.0001, "reverb2 should produce a tail, energy={tail_energy}");
+    }
+
+    // --- Registry tests ---
+
+    #[test]
+    fn registry_resolves_filter2() {
+        assert!(crate::create_faust_machine("Jeskola Filter 2").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_reverb2() {
+        assert!(crate::create_faust_machine("Jeskola Reverb 2").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_freeverb() {
+        assert!(crate::create_faust_machine("Jeskola Freeverb").is_some());
+    }
+
+    #[test]
+    fn registry_returns_none_for_unknown() {
+        assert!(crate::create_faust_machine("Unknown Machine XYZ").is_none());
+    }
 }

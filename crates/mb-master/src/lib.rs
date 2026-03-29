@@ -405,8 +405,33 @@ fn rebuild_track_sequences(song: &mut Song, track_idx: usize, clip_idx: u16) {
     }
 }
 
+/// Build machines for a song, replacing passthrough with Faust implementations when available.
+/// Build machines for a song, replacing passthrough with Faust implementations when available.
+#[cfg(not(feature = "faust"))]
+fn build_machines(song: &Song, sample_rate: u32) -> Vec<Option<Box<dyn mb_engine::machine::Machine>>> {
+    mb_engine::init_machines(song, sample_rate)
+}
+
+#[cfg(feature = "faust")]
+fn build_machines(song: &Song, sample_rate: u32) -> Vec<Option<Box<dyn mb_engine::machine::Machine>>> {
+    let mut machines = mb_engine::init_machines(song, sample_rate);
+    for (i, node) in song.graph.nodes.iter().enumerate() {
+        if let mb_ir::NodeType::Machine { machine_name, .. } = &node.node_type {
+            if let Some(mut m) = mb_faust::create_faust_machine(machine_name) {
+                m.init(sample_rate);
+                for param in &node.parameters {
+                    m.set_param(param.id, param.value);
+                }
+                machines[i] = Some(m);
+            }
+        }
+    }
+    machines
+}
+
 fn render_song_frames(song: Song, sample_rate: u32, max_frames: usize) -> Vec<[f32; 2]> {
-    let mut engine = Engine::new(song, sample_rate);
+    let machines = build_machines(&song, sample_rate);
+    let mut engine = Engine::with_machines(song, sample_rate, machines);
     engine.schedule_song();
     engine.play();
 
@@ -436,7 +461,8 @@ fn audio_thread(
     };
 
     let sample_rate = output.sample_rate();
-    let mut engine = Engine::new(song, sample_rate);
+    let machines = build_machines(&song, sample_rate);
+    let mut engine = Engine::with_machines(song, sample_rate, machines);
     engine.schedule_song();
 
     alloc_guard(|| {

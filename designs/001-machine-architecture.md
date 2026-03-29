@@ -1,7 +1,7 @@
 # Machine Architecture Design
 
 Created: 20260212
-Updated: 20260216
+Updated: 20260329
 
 
 ## Status
@@ -21,13 +21,15 @@ Updated: 20260216
   - [ ] 3. Jeskola Noise
   - [ ] 4. Jeskola Delay
   - [ ] 5. Arguru Compressor
+  - [x] 6. Jeskola Filter 2 (via Faust: `faust/filter2.dsp`)
+  - [x] 7. Jeskola Reverb 2 (via Faust: `faust/reverb2.dsp`)
 - [ ] Phase 2 — Intermediate machines
   - [ ] 6. Jeskola CrossDelay
   - [ ] 7. FSM Kick
   - [ ] 8. FSM WahMan
   - [ ] 9. FSM Philta
-- [ ] Phase 3 — Advanced machines
-  - [ ] 10. Jeskola Freeverb
+- [ ] Phase 3 — Advanced machines (Faust JIT implementations available)
+  - [x] 10. Jeskola Freeverb (via Faust: `faust/reverb.dsp`)
   - [ ] 11. FSM KickXP
 - [ ] Phase 4 — Research
   - [ ] 12. FSM Infector

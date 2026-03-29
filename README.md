@@ -73,10 +73,23 @@ cargo test --test gui_tests --features test-harness
 
 ## Feature flags
 
-| Feature | What it does |
-|---------|-------------|
-| `alloc_check` | Enables `assert_no_alloc` wrapping in the engine and audio thread. When active, any heap allocation inside the realtime render path aborts the process. Useful for manual testing with real audio output: `cargo mb --features alloc_check`. In normal builds and `cargo test`, this is off — the alloc-free tests use their own global allocator approach instead. |
-| `test-harness` | Enables the `gui_tests` integration test binary (adds `png` dependency for screenshot capture). |
+| Feature | Default | What it does |
+|---------|---------|-------------|
+| `faust` | **yes** | Enables Faust JIT DSP integration. Buzz machines with Faust implementations (Jeskola Filter 2, Jeskola Reverb 2, Jeskola Freeverb) use real DSP instead of passthrough. Requires `libfaust` installed (`brew install faust` on macOS). |
+| `alloc_check` | no | Enables `assert_no_alloc` wrapping in the engine and audio thread. When active, any heap allocation inside the realtime render path aborts the process. Useful for manual testing with real audio output: `cargo mb --features alloc_check`. In normal builds and `cargo test`, this is off — the alloc-free tests use their own global allocator approach instead. |
+| `test-harness` | no | Enables the `gui_tests` integration test binary (adds `png` dependency for screenshot capture). |
+
+### Building without Faust
+
+If you don't have `libfaust` installed, disable the default `faust` feature:
+
+```sh
+cargo run --no-default-features
+cargo cli --no-default-features path/to/file.bmx
+cargo test --workspace --no-default-features --exclude mb-faust
+```
+
+BMX files will still load and play — unimplemented Buzz machines fall back to passthrough (audio passes through unprocessed).
 
 ## Project structure
 

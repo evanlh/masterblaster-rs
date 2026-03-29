@@ -1,7 +1,7 @@
 # Faust DSP Integration Design
 
 Created: 20260213
-Updated: 20260328
+Updated: 20260329
 
 
 ## Status
@@ -19,11 +19,16 @@ Updated: 20260328
   - [ ] Folder watcher (`notify` crate) for `faust/` directory
   - [x] Hot-swap: compile → instantiate → replace node in audio graph (`Engine::replace_machine`)
   - [ ] Error reporting to GUI (compile errors, channel mismatch)
+- [x] Machine wiring: `mb-master::build_machines()` replaces passthrough with Faust machines
+  - [x] `Engine::with_machines()` accepts pre-built machine vec
+  - [x] `mb-faust::create_faust_machine()` registry maps Buzz names to Faust DSPs
+  - [x] `include_str!` embeds DSP source at compile time
 - [ ] Starter effects
   - [ ] 1. Distortion (pipeline validation)
   - [ ] 2. Delay
   - [x] 3. Freeverb (`faust/reverb.dsp`)
-  - [ ] 4. Multimode filter (Philta equivalent)
+  - [x] 4. Jeskola Filter 2 (`faust/filter2.dsp`) — multimode SVF (LP/HP/BP/Notch)
+  - [x] 5. Jeskola Reverb 2 (`faust/reverb2.dsp`) — Schroeder reverb with ER + pre-delay
 - [ ] Approach B — AOT C codegen via cc crate (fallback for Rust backend issues)
 
 ## Motivation

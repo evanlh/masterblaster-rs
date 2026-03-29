@@ -23,5 +23,5 @@ pub use clip_source::ClipSourceState;
 pub use envelope_state::EnvelopeState;
 pub use event_source::EventSource;
 pub use frequency::{note_to_increment, note_to_period, period_to_increment, clamp_period, PERIOD_MIN, PERIOD_MAX};
-pub use mixer::Engine;
+pub use mixer::{Engine, init_machines};
 pub use scheduler::{schedule_cell, schedule_song, target_for_track_column, ScheduleResult};

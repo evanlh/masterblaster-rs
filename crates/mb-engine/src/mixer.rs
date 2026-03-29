@@ -61,7 +61,10 @@ fn channels_for_node(song: &Song, node_id: u16) -> &[mb_ir::ChannelSettings] {
 }
 
 /// Instantiate machines for all BuzzMachine nodes in the graph.
-fn init_machines(song: &Song, sample_rate: u32) -> Vec<Option<Box<dyn Machine>>> {
+///
+/// Creates TrackerMachine for tracker nodes and built-in machines for others.
+/// Callers can override individual slots before passing to `Engine::with_machines`.
+pub fn init_machines(song: &Song, sample_rate: u32) -> Vec<Option<Box<dyn Machine>>> {
     song.graph.nodes.iter().map(|node| {
         if let NodeType::Machine { is_tracker, machine_name } = &node.node_type {
             if *is_tracker {
@@ -121,16 +124,18 @@ fn copy_scratch_to_output(scratch: &mb_ir::AudioBuffer, output: &mut mb_ir::Audi
 }
 
 impl Engine {
-    /// Create a new engine for the given song.
+    /// Create a new engine for the given song, using built-in machines only.
     pub fn new(song: Song, sample_rate: u32) -> Self {
+        let machines = init_machines(&song, sample_rate);
+        Self::with_machines(song, sample_rate, machines)
+    }
+
+    /// Create an engine with pre-built machines (allows external machine injection).
+    pub fn with_machines(song: Song, sample_rate: u32, machines: Vec<Option<Box<dyn Machine>>>) -> Self {
         let tempo = song.initial_tempo;
         let speed = song.initial_speed;
         let rows_per_beat = song.rows_per_beat as u32;
-
         let graph_state = GraphState::from_graph(&song.graph);
-
-        // Instantiate machines for BuzzMachine nodes
-        let machines_vec = init_machines(&song, sample_rate);
         let node_bypass = vec![false; song.graph.nodes.len()];
 
         let mut engine = Self {
@@ -149,7 +154,7 @@ impl Engine {
             tick_in_beat: 0,
             playing: false,
             song_end_time: None,
-            machines: machines_vec,
+            machines,
             node_bypass,
         };
 
