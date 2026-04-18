@@ -6,7 +6,7 @@ use arrayvec::ArrayString;
 use crate::graph::{AudioGraph, NodeId, NodeType};
 use crate::instrument::Instrument;
 use crate::musical_time::MusicalTime;
-use crate::pattern::Pattern;
+use crate::pattern::{ParamPattern, Pattern};
 use crate::sample::Sample;
 
 /// A complete song.
@@ -211,7 +211,8 @@ impl Track {
 pub enum Clip {
     /// A single-column pattern (one channel of note data).
     Pattern(Pattern),
-    // Automation variant deferred
+    /// Per-tick parameter automation for effect/generator machines.
+    ParamPattern(ParamPattern),
 }
 
 impl Clip {
@@ -219,6 +220,7 @@ impl Clip {
     pub fn pattern(&self) -> Option<&Pattern> {
         match self {
             Clip::Pattern(p) => Some(p),
+            _ => None,
         }
     }
 
@@ -226,6 +228,23 @@ impl Clip {
     pub fn pattern_mut(&mut self) -> Option<&mut Pattern> {
         match self {
             Clip::Pattern(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Get the param pattern if this is a ParamPattern clip.
+    pub fn param_pattern(&self) -> Option<&ParamPattern> {
+        match self {
+            Clip::ParamPattern(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Get the row count for any clip type.
+    pub fn rows(&self) -> u16 {
+        match self {
+            Clip::Pattern(p) => p.rows,
+            Clip::ParamPattern(p) => p.rows,
         }
     }
 }

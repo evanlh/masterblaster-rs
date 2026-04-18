@@ -7,8 +7,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use mb_ir::{
     AudioGraph, Cell, ChannelSettings, Clip, Connection, Instrument, LoopType,
-    MusicalTime, NodeId, NodeType, Note, Parameter, Pattern, Sample, SampleData, SeqEntry, Song,
-    Track, VolumeCommand,
+    MusicalTime, NodeId, NodeType, Note, ParamPattern, Parameter, Pattern,
+    Sample, SampleData, SeqEntry, Song, Track, VolumeCommand,
 };
 
 use crate::FormatError;
@@ -197,6 +197,7 @@ struct BmxPattern {
     name: String,
     ticks: u16,
     pattern: Option<Pattern>,
+    param_pattern: Option<ParamPattern>,
 }
 
 /// Returns true for DLL names that are tracker machines (cell-based).
@@ -288,6 +289,8 @@ fn known_machine_byte_sizes(dll_name: &str) -> Option<(usize, usize)> {
         "Jeskola Mixer" => Some((1, 0)),
         "Jeskola Noise" => Some((2, 0)),
         "Jeskola Kick XP" => Some((9, 0)),
+        "FSM WahPro" => Some((8, 0)),
+        "FSM WahPro2" => Some((8, 0)),
         _ => None,
     }
 }
@@ -481,8 +484,9 @@ fn parse_mach(
             let _attr_val = r.read_u32_le()?;
         }
 
-        // Resolve param defs and read/skip global param state
+        // Resolve param defs and read global param state
         let para = resolve_para_def(machine_type, &dll_name, para_from_section, i);
+        let mut global_init_values: Vec<i32> = Vec::new();
         if machine_type == 0 {
             // Master: read volume(u16) + bpm(u16) + tpb(u8)
             let remaining = para.global_byte_size();
@@ -498,12 +502,26 @@ fn parse_mach(
                 r.skip(remaining)?;
             }
         } else {
-            r.skip(para.global_byte_size())?;
+            // Read global param initial values
+            for p in &para.global_params {
+                global_init_values.push(read_param_value(r, p.param_type)?);
+            }
         }
 
-        // Skip track param state
+        // Read track param state (initial values for the machine)
         let num_tracks = r.read_u16_le()? as usize;
-        r.skip(num_tracks * para.track_byte_size())?;
+        let mut track_init_values: Vec<i32> = Vec::new();
+        if num_tracks > 0 && !para.track_params.is_empty() {
+            for p in &para.track_params {
+                track_init_values.push(read_param_value(r, p.param_type)?);
+            }
+            // Skip remaining tracks (only use first track's state)
+            for _ in 1..num_tracks {
+                r.skip(para.track_byte_size())?;
+            }
+        } else {
+            r.skip(num_tracks * para.track_byte_size())?;
+        }
 
         // Detect tracker machines
         let is_tracker = dll_name.as_deref().is_some_and(is_tracker_dll);
@@ -513,17 +531,38 @@ fn parse_mach(
             (0, Vec::new())
         } else if is_tracker {
             // Create a single Tracker machine node for all channels
-            let id = graph.add_node(NodeType::Machine { machine_name: name.clone(), is_tracker: true });
+            let mname = dll_name.clone().unwrap_or_else(|| name.clone());
+            let id = graph.add_node(NodeType::Machine { machine_name: mname, is_tracker: true });
             let ids: Vec<NodeId> = (0..num_tracks).map(|_| id).collect();
             (id, ids)
         } else {
-            let id = graph.add_node(NodeType::Machine { machine_name: name.clone(), is_tracker: false });
-            // Add IR parameters to non-tracker graph nodes
+            let mname = dll_name.clone().unwrap_or_else(|| name.clone());
+            let id = graph.add_node(NodeType::Machine { machine_name: mname, is_tracker: false });
+            // Add IR parameters to non-tracker graph nodes (global + track)
+            // All values are pre-scaled to 0..65535 for Machine::set_param
             if let Some(node) = graph.node_mut(id) {
                 for (j, p) in para.global_params.iter().enumerate() {
-                    node.parameters.push(Parameter::new(
-                        j as u16, &p.name, p.min, p.max, p.default,
-                    ));
+                    let initial = global_init_values.get(j)
+                        .map(|&raw| scale_param_value(raw, p))
+                        .filter(|&v| v >= 0)
+                        .unwrap_or_else(|| scale_param_value(p.default, p));
+                    let mut param = Parameter::new(
+                        j as u16, &p.name, 0, 65535, scale_param_value(p.default, p),
+                    );
+                    param.value = initial;
+                    node.parameters.push(param);
+                }
+                let global_count = para.global_params.len();
+                for (j, p) in para.track_params.iter().enumerate() {
+                    let initial = track_init_values.get(j)
+                        .map(|&raw| scale_param_value(raw, p))
+                        .filter(|&v| v >= 0)
+                        .unwrap_or_else(|| scale_param_value(p.default, p));
+                    let mut param = Parameter::new(
+                        (global_count + j) as u16, &p.name, 0, 65535, scale_param_value(p.default, p),
+                    );
+                    param.value = initial;
+                    node.parameters.push(param);
                 }
             }
             (id, Vec::new())
@@ -635,26 +674,39 @@ fn parse_patt(
                 r.skip(num_ticks as usize * 4)?;
             }
 
-            // Skip global parameters: num_ticks × global_byte_size
-            r.skip(num_ticks as usize * para.global_byte_size())?;
-
-            let pattern = if mach.is_tracker && track_bytes >= 5 {
-                Some(read_tracker_pattern(r, num_ticks, num_tracks, track_bytes, wave_lookup)?)
+            // Read parameters into ParamPattern for non-tracker machines
+            let has_effect_params = !mach.is_tracker
+                && (!para.global_params.is_empty() || !para.track_params.is_empty());
+            let param_pattern = if has_effect_params {
+                // read_effect_params reads both global + track param data
+                Some(read_effect_params(r, num_ticks, num_tracks, &para.global_params, &para.track_params)?)
             } else {
-                // Skip track parameters for non-tracker machines
-                r.skip(num_tracks * num_ticks as usize * track_bytes)?;
+                // Skip global params (tracker or paramless machine)
+                r.skip(num_ticks as usize * para.global_byte_size())?;
                 None
             };
 
-            patterns.push(BmxPattern { name, ticks: num_ticks, pattern });
+            let pattern = if mach.is_tracker && track_bytes >= 5 {
+                // Tracker machines: read track params as cell data
+                Some(read_tracker_pattern(r, num_ticks, num_tracks, track_bytes, wave_lookup)?)
+            } else if !has_effect_params {
+                // Non-tracker without effect params: skip track data
+                r.skip(num_tracks * num_ticks as usize * track_bytes)?;
+                None
+            } else {
+                // Effect params already consumed by read_effect_params
+                None
+            };
+
+            patterns.push(BmxPattern { name, ticks: num_ticks, pattern, param_pattern });
         }
 
         if !patterns.is_empty() {
-            eprintln!(
-                "[BMX] PATT: machine \"{}\" has {} patterns{}",
-                mach.name, patterns.len(),
-                if mach.is_tracker { " [tracker cells]" } else { "" }
-            );
+            let has_params = patterns.iter().any(|p| p.param_pattern.is_some());
+            let tag = if mach.is_tracker { " [tracker]" }
+                else if has_params { " [params]" }
+                else { "" };
+            eprintln!("[BMX] PATT: \"{}\" {} patterns{}", mach.name, patterns.len(), tag);
         }
 
         all_patterns.push(patterns);
@@ -700,6 +752,87 @@ fn read_tracker_pattern(
     }
 
     Ok(pattern)
+}
+
+/// Read effect machine parameters (global + track) into a ParamPattern.
+///
+/// BMX layout:
+/// - Global params: num_ticks × global_byte_size (tick-major)
+/// - Track params: num_tracks × (num_ticks × track_byte_size) (track-major, then tick-major)
+///
+/// For effects with only track params (like WahPro), num_tracks is typically 1.
+/// Values are pre-scaled from their native range to 0..65535 for `Machine::set_param`.
+fn read_effect_params(
+    r: &mut BmxReader,
+    num_ticks: u16,
+    num_tracks: usize,
+    global_params: &[BmxParam],
+    track_params: &[BmxParam],
+) -> Result<ParamPattern, FormatError> {
+    let all_params: Vec<&BmxParam> = global_params.iter()
+        .chain(track_params.iter())
+        .collect();
+    let num_cols = all_params.len();
+    let columns: Vec<(u16, i32)> = all_params.iter().enumerate()
+        .map(|(i, p)| (i as u16, scale_no_value(p)))
+        .collect();
+
+    // Read global params tick-by-tick into a temporary buffer
+    let mut global_data = Vec::with_capacity(num_ticks as usize * global_params.len());
+    for _ in 0..num_ticks {
+        for p in global_params {
+            global_data.push(read_param_value(r, p.param_type)?);
+        }
+    }
+
+    // Read track params: track-major, tick-major. Use first track only.
+    let mut track_data = Vec::with_capacity(num_ticks as usize * track_params.len());
+    for track in 0..num_tracks {
+        for _ in 0..num_ticks {
+            for p in track_params {
+                let raw = read_param_value(r, p.param_type)?;
+                if track == 0 { track_data.push(raw); }
+            }
+        }
+    }
+
+    // Interleave global + track into row-major values
+    let mut values = Vec::with_capacity(num_ticks as usize * num_cols);
+    for tick in 0..num_ticks as usize {
+        for (ci, p) in all_params.iter().enumerate() {
+            let raw = if ci < global_params.len() {
+                global_data[tick * global_params.len() + ci]
+            } else {
+                track_data[tick * track_params.len() + (ci - global_params.len())]
+            };
+            values.push(scale_param_value(raw, p));
+        }
+    }
+    Ok(ParamPattern { rows: num_ticks, columns, values })
+}
+
+/// Read a single parameter value (BYTE or WORD) from the stream.
+fn read_param_value(r: &mut BmxReader, param_type: u8) -> Result<i32, FormatError> {
+    if param_type == PT_WORD {
+        Ok(r.read_u16_le()? as i32)
+    } else {
+        Ok(r.read_u8()? as i32)
+    }
+}
+
+/// Scale a raw BMX param value to the 0..65535 range used by `Machine::set_param`.
+/// Returns the no_value sentinel unchanged (mapped via `scale_no_value`).
+fn scale_param_value(raw: i32, param: &BmxParam) -> i32 {
+    if raw == param.no_value { return scale_no_value(param); }
+    let range = param.max - param.min;
+    if range <= 0 { return 0; }
+    ((raw - param.min) as i64 * 65535 / range as i64) as i32
+}
+
+/// Map a param's no_value sentinel into the scaled domain.
+/// Uses -1 as the sentinel since valid scaled values are 0..65535.
+fn scale_no_value(_param: &BmxParam) -> i32 {
+    -1
 }
 
 // ---------------------------------------------------------------------------
@@ -808,12 +941,16 @@ fn parse_sequ(
             tracks.push(track);
         } else {
             let node_id = mach.map(|m| m.node_id);
-            let mut track = Track::new(node_id, 0, 1);
+            let mut track = Track::new(node_id, 0, 0);
 
-            // Add empty clips from this machine's pattern pool
+            // Add ParamPattern clips (or empty Pattern fallback) from this machine's pattern pool
             if let Some(pats) = all_patterns.get(machine_idx) {
                 for bp in pats {
-                    track.clips.push(Clip::Pattern(Pattern::new(bp.ticks, 1)));
+                    let clip = match &bp.param_pattern {
+                        Some(pp) => Clip::ParamPattern(pp.clone()),
+                        None => Clip::Pattern(Pattern::new(bp.ticks, 1)),
+                    };
+                    track.clips.push(clip);
                 }
             }
 

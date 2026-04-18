@@ -46,7 +46,7 @@ fn clips_section(ui: &imgui::Ui, gui: &mut GuiState) {
         let song = gui.controller.song();
         let Some(track) = song.tracks.get(gui.selected_track) else { return };
         let info: Vec<(usize, u16)> = track.clips.iter().enumerate()
-            .map(|(i, clip)| (i, clip.pattern().map(|p| p.rows).unwrap_or(0)))
+            .map(|(i, clip)| (i, clip.rows()))
             .collect();
         gui.cached_clip_info = Some((gui.selected_track, info));
     }

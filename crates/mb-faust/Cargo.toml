@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 description = "Faust JIT integration for masterblaster"
 
+[features]
+# Enable to run tests. libfaust is not thread-safe, so tests must run
+# single-threaded via `make test-faust`.
+faust-tests = []
+
 [dependencies]
 mb-ir = { workspace = true, features = ["std"] }
 mb-engine = { workspace = true }

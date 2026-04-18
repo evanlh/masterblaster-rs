@@ -1,7 +1,7 @@
 .PHONY: ci test test-gui test-faust bench
 
 # Run everything: tests, GUI tests, benchmarks
-ci: test test-gui bench
+ci: test test-faust test-gui bench
 
 # All workspace tests (unit + integration + snapshots), excluding mb-faust (requires libfaust)
 test:
@@ -9,7 +9,7 @@ test:
 
 # Faust JIT tests (requires libfaust installed, must be single-threaded)
 test-faust:
-	cargo test -p mb-faust -- --test-threads=1
+	cargo test -p mb-faust --features faust-tests -- --test-threads=1
 
 # GUI tests (requires display)
 test-gui:

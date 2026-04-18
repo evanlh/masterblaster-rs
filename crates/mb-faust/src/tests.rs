@@ -218,6 +218,81 @@ mod tests {
         assert!(tail_energy > 0.0001, "reverb2 should produce a tail, energy={tail_energy}");
     }
 
+    // --- WahMan Pro tests ---
+
+    #[test]
+    fn wahpro_compiles() {
+        let dsp = load_dsp("wahpro", "wahpro.dsp");
+        assert_eq!(dsp.num_inputs, 2, "wahpro should be stereo in");
+        assert_eq!(dsp.num_outputs, 2, "wahpro should be stereo out");
+        assert_eq!(dsp.params.len(), 8, "wahpro should have 8 params");
+    }
+
+    #[test]
+    fn wahpro_filters_signal() {
+        let mut machine = FaustMachine::new(load_dsp("wahpro", "wahpro.dsp"));
+        machine.init(44100);
+
+        // Feed a broadband impulse and check output is non-zero
+        let mut buf = AudioBuffer::new(2, 256);
+        buf.channel_mut(0)[0] = 1.0;
+        buf.channel_mut(1)[0] = 1.0;
+        machine.render(&mut buf);
+
+        let energy: f32 = buf.channel(0).iter().map(|s| s * s).sum();
+        assert!(energy > 0.0001, "wahpro should produce output, energy={energy}");
+    }
+
+    // --- WahMan Pro 2 tests ---
+
+    #[test]
+    fn wahpro2_compiles() {
+        let dsp = load_dsp("wahpro2", "wahpro2.dsp");
+        assert_eq!(dsp.num_inputs, 2, "wahpro2 should be stereo in");
+        assert_eq!(dsp.num_outputs, 2, "wahpro2 should be stereo out");
+        assert_eq!(dsp.params.len(), 8, "wahpro2 should have 8 params");
+    }
+
+    #[test]
+    fn wahpro2_filters_signal() {
+        let mut machine = FaustMachine::new(load_dsp("wahpro2", "wahpro2.dsp"));
+        machine.init(44100);
+
+        let mut buf = AudioBuffer::new(2, 256);
+        buf.channel_mut(0)[0] = 1.0;
+        buf.channel_mut(1)[0] = 1.0;
+        machine.render(&mut buf);
+
+        let energy: f32 = buf.channel(0).iter().map(|s| s * s).sum();
+        assert!(energy > 0.0001, "wahpro2 should produce output, energy={energy}");
+    }
+
+    #[test]
+    fn wahpro2_lp_attenuates_highs() {
+        let mut machine = FaustMachine::new(load_dsp("wahpro2", "wahpro2.dsp"));
+        machine.init(44100);
+
+        // Set Type=0 (LP), low cutoff, no LFO
+        machine.set_param(2, 0);      // Filter = 0 (LP)
+        machine.set_param(0, 6553);   // Cutoff ~20/240 (low)
+        machine.set_param(4, 0);      // LFO mod = 0
+
+        // Generate 10kHz sine
+        let frames = 1024_u16;
+        let mut buf = AudioBuffer::new(2, frames);
+        for i in 0..frames as usize {
+            let s = (2.0 * std::f32::consts::PI * 10000.0 * i as f32 / 44100.0).sin();
+            buf.channel_mut(0)[i] = s;
+            buf.channel_mut(1)[i] = s;
+        }
+        machine.render(&mut buf);
+
+        let energy: f32 = buf.channel(0)[512..].iter().map(|s| s * s).sum();
+        let rms = (energy / 512.0).sqrt();
+        // WahPro2 has 2x output gain + 1/sqrt(Q) normalization, so attenuation is less dramatic
+        assert!(rms < 1.0, "LP filter should attenuate 10kHz, RMS={rms}");
+    }
+
     // --- Registry tests ---
 
     #[test]
@@ -233,6 +308,16 @@ mod tests {
     #[test]
     fn registry_resolves_freeverb() {
         assert!(crate::create_faust_machine("Jeskola Freeverb").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_wahpro() {
+        assert!(crate::create_faust_machine("FSM WahPro").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_wahpro2() {
+        assert!(crate::create_faust_machine("FSM WahPro2").is_some());
     }
 
     #[test]

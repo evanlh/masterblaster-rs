@@ -417,12 +417,20 @@ fn build_machines(song: &Song, sample_rate: u32) -> Vec<Option<Box<dyn mb_engine
     let mut machines = mb_engine::init_machines(song, sample_rate);
     for (i, node) in song.graph.nodes.iter().enumerate() {
         if let mb_ir::NodeType::Machine { machine_name, .. } = &node.node_type {
-            if let Some(mut m) = mb_faust::create_faust_machine(machine_name) {
-                m.init(sample_rate);
-                for param in &node.parameters {
-                    m.set_param(param.id, param.value);
+            match mb_faust::create_faust_machine(machine_name) {
+                Some(mut m) => {
+                    m.init(sample_rate);
+                    for param in &node.parameters {
+                        m.set_param(param.id, param.value);
+                    }
+                    eprintln!("[Faust] node {}: \"{}\" -> Faust DSP ({} params)",
+                        i, machine_name, node.parameters.len());
+                    machines[i] = Some(m);
                 }
-                machines[i] = Some(m);
+                None => {
+                    eprintln!("[Faust] node {}: \"{}\" -> passthrough (no Faust impl)",
+                        i, machine_name);
+                }
             }
         }
     }
