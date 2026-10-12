@@ -1,7 +1,7 @@
 //! Integration tests for BMX format loading.
 
 use mb_formats::load_bmx;
-use mb_ir::NodeType;
+use mb_ir::{Node, NodeType};
 use std::fs;
 use std::path::PathBuf;
 
@@ -142,5 +142,59 @@ fn load_all_bmx_fixtures() {
         let data = fs::read(&path).unwrap();
         let result = load_bmx(&data);
         assert!(result.is_ok(), "Failed to load {}: {:?}", name, result.err());
+    }
+}
+
+fn find_machine_node<'a>(song: &'a mb_ir::Song, name: &str) -> Option<&'a Node> {
+    song.graph.nodes.iter().find(|n| matches!(&n.node_type,
+        NodeType::Machine { machine_name, .. } if machine_name == name))
+}
+
+fn assert_machine_param_count(song: &mb_ir::Song, name: &str, expected: usize) {
+    let node = find_machine_node(song, name)
+        .unwrap_or_else(|| panic!("machine '{name}' not found"));
+    assert_eq!(node.parameters.len(), expected,
+        "{name}: expected {expected} params, got {}", node.parameters.len());
+}
+
+fn assert_params_in_range(song: &mb_ir::Song, name: &str) {
+    let node = find_machine_node(song, name)
+        .unwrap_or_else(|| panic!("machine '{name}' not found"));
+    for p in &node.parameters {
+        assert!(p.value == -1 || (0..=65535).contains(&p.value),
+            "{name} param '{}': value {} out of range", p.name, p.value);
+    }
+}
+
+#[test]
+fn insomnium_wahpro2_has_8_params() {
+    let song = load_fixture("Insomnium - Skooled RMX.bmx");
+    assert_machine_param_count(&song, "FSM WahPro2", 8);
+}
+
+#[test]
+fn insomnium_wahpro2_params_in_range() {
+    let song = load_fixture("Insomnium - Skooled RMX.bmx");
+    assert_params_in_range(&song, "FSM WahPro2");
+}
+
+#[test]
+fn insomnium_filter2_has_3_params() {
+    let song = load_fixture("Insomnium - Skooled RMX.bmx");
+    if find_machine_node(&song, "Jeskola Filter 2").is_some() {
+        assert_machine_param_count(&song, "Jeskola Filter 2", 3);
+        assert_params_in_range(&song, "Jeskola Filter 2");
+    }
+}
+
+#[test]
+fn insomnium_reverb2_params_in_range() {
+    let song = load_fixture("Insomnium - Skooled RMX.bmx");
+    if find_machine_node(&song, "Jeskola Reverb 2").is_some() {
+        // Reverb 2 has more params in C++ than our Faust DSP implements (5 vs 6+)
+        let node = find_machine_node(&song, "Jeskola Reverb 2").unwrap();
+        assert!(node.parameters.len() >= 5,
+            "Reverb 2 should have at least 5 params, got {}", node.parameters.len());
+        assert_params_in_range(&song, "Jeskola Reverb 2");
     }
 }

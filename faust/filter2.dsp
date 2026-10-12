@@ -1,9 +1,9 @@
 // Jeskola Filter 2 — multimode resonant filter (LP/HP/BP/Notch)
 import("stdfaust.lib");
 
-ftype = hslider("Type", 0, 0, 3, 1);
-cutoff = hslider("Cutoff", 64, 0, 127, 1);
-resonance = hslider("Resonance", 0, 0, 127, 1);
+ftype = hslider("[0]Type", 0, 0, 3, 1);
+cutoff = hslider("[1]Cutoff", 64, 0, 127, 1);
+resonance = hslider("[2]Resonance", 0, 0, 127, 1);
 
 // Map cutoff 0-127 to frequency 20-20000 Hz (exponential)
 freq = 20.0 * pow(1000.0, cutoff / 127.0);

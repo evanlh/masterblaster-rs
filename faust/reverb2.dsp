@@ -1,11 +1,11 @@
 // Jeskola Reverb 2 — Schroeder reverb with early reflections
 import("stdfaust.lib");
 
-dry_out = hslider("Dry Out", 127, 0, 127, 1);
-rev_out = hslider("Rev Out", 80, 0, 127, 1);
-er_out = hslider("ER Out", 64, 0, 127, 1);
-rev_time = hslider("Rev Time", 64, 0, 127, 1);
-predelay = hslider("Pre-Delay", 10, 0, 127, 1);
+dry_out = hslider("[0]Dry Out", 127, 0, 127, 1);
+rev_out = hslider("[1]Rev Out", 80, 0, 127, 1);
+er_out = hslider("[2]ER Out", 64, 0, 127, 1);
+rev_time = hslider("[3]Rev Time", 64, 0, 127, 1);
+predelay = hslider("[4]Pre-Delay", 10, 0, 127, 1);
 
 // Normalize levels to 0..1
 dry_level = dry_out / 127.0;

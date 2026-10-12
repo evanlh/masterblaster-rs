@@ -3,14 +3,14 @@
 import("stdfaust.lib");
 
 // === Parameters (matching Buzz ranges) ===
-cutoff = hslider("Cutoff", 120, 0, 240, 1);
-reso = hslider("Resonance", 120, 0, 240, 1);
-ftype = int(hslider("Filter", 1, 0, 4, 1));
-lfo_rate = hslider("LFO rate", 30, 0, 240, 1);
-lfo_depth = hslider("LFO mod", 60, 0, 240, 1);
-lfo_shape = int(hslider("LFO Shape", 1, 0, 8, 1));
-inertia_p = hslider("Inertia", 10, 0, 60, 1);
-phase_p = hslider("Set phase", 0, 0, 127, 1);
+cutoff = hslider("[0]Cutoff", 120, 0, 240, 1);
+reso = hslider("[1]Resonance", 120, 0, 240, 1);
+ftype = int(hslider("[2]Filter", 1, 0, 4, 1));
+lfo_rate = hslider("[3]LFO rate", 30, 0, 240, 1);
+lfo_depth = hslider("[4]LFO mod", 60, 0, 240, 1);
+lfo_shape = int(hslider("[5]LFO Shape", 1, 0, 8, 1));
+inertia_p = hslider("[6]Inertia", 10, 0, 60, 1);
+phase_p = hslider("[7]Set phase", 0, 0, 127, 1);
 
 // === LFO ===
 lfo_freq = 0.05 * pow(800.0, lfo_rate / 255.0);

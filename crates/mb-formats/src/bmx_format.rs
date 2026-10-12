@@ -289,8 +289,8 @@ fn known_machine_byte_sizes(dll_name: &str) -> Option<(usize, usize)> {
         "Jeskola Mixer" => Some((1, 0)),
         "Jeskola Noise" => Some((2, 0)),
         "Jeskola Kick XP" => Some((9, 0)),
-        "FSM WahPro" => Some((8, 0)),
-        "FSM WahPro2" => Some((8, 0)),
+        "FSM WahPro" => Some((0, 8)),
+        "FSM WahPro2" => Some((0, 8)),
         _ => None,
     }
 }
@@ -1636,7 +1636,49 @@ mod tests {
     #[test]
     fn known_machine_lookup() {
         assert_eq!(known_machine_byte_sizes("Jeskola Tracker"), Some((1, 5)));
+        assert_eq!(known_machine_byte_sizes("FSM WahPro"), Some((0, 8)));
+        assert_eq!(known_machine_byte_sizes("FSM WahPro2"), Some((0, 8)));
         assert_eq!(known_machine_byte_sizes("Unknown Machine"), None);
+    }
+
+    fn make_param(min: i32, max: i32, no_value: i32) -> BmxParam {
+        BmxParam { param_type: PT_BYTE, name: String::new(), min, max, no_value, flags: 0, default: 0 }
+    }
+
+    #[test]
+    fn scale_param_min_maps_to_zero() {
+        let p = make_param(0, 255, 0xFF);
+        assert_eq!(scale_param_value(0, &p), 0);
+    }
+
+    #[test]
+    fn scale_param_max_maps_to_65535() {
+        // no_value must differ from max to test the max path
+        let p = make_param(0, 255, 0xFFFF);
+        assert_eq!(scale_param_value(255, &p), 65535);
+    }
+
+    #[test]
+    fn scale_param_midpoint() {
+        let p = make_param(0, 240, 0xFF);
+        let scaled = scale_param_value(120, &p);
+        // 120/240 * 65535 = 32767
+        assert_eq!(scaled, 32767);
+    }
+
+    #[test]
+    fn scale_param_no_value_returns_neg1() {
+        let p = make_param(0, 255, 0xFF);
+        assert_eq!(scale_param_value(0xFF, &p), -1);
+    }
+
+    #[test]
+    fn scale_param_nonzero_min() {
+        let p = make_param(10, 110, 0xFF);
+        assert_eq!(scale_param_value(10, &p), 0);
+        assert_eq!(scale_param_value(110, &p), 65535);
+        // midpoint: (60-10)/(110-10) * 65535 = 32767
+        assert_eq!(scale_param_value(60, &p), 32767);
     }
 
     #[test]
