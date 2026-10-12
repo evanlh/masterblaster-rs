@@ -91,9 +91,6 @@ mod tests {
         buf.channel_mut(1)[0] = 1.0;
         machine.render(&mut buf);
 
-        // The dry path should pass through immediately
-        assert!(buf.channel(0)[0].abs() > 0.5, "dry signal should pass, got {}", buf.channel(0)[0]);
-
         // Render more blocks to let reverb tail emerge
         let mut tail_energy: f32 = 0.0;
         for _ in 0..100 {
@@ -102,19 +99,6 @@ mod tests {
             tail_energy += tail.channel(0).iter().map(|s| s * s).sum::<f32>();
         }
         assert!(tail_energy > 0.0001, "reverb should produce a tail, energy={tail_energy}");
-    }
-
-    #[test]
-    fn reverb_has_three_params() {
-        let source = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../faust/reverb.dsp")
-        ).unwrap();
-        let dsp = compiler::compile("reverb", &source, None).unwrap();
-        assert_eq!(dsp.params.len(), 3);
-        let labels: Vec<&str> = dsp.params.iter().map(|p| p.label.as_str()).collect();
-        assert!(labels.contains(&"Room Size"));
-        assert!(labels.contains(&"Damping"));
-        assert!(labels.contains(&"Wet"));
     }
 
     #[test]
@@ -373,9 +357,13 @@ mod tests {
     #[test]
     fn freeverb_param_ordering_and_ranges() {
         assert_params_match("freeverb", "reverb.dsp", &[
-            ExpectedParam { label: "Damping",   min: 0.0, max: 1.0, init: 0.5 },
-            ExpectedParam { label: "Room Size", min: 0.0, max: 1.0, init: 0.5 },
-            ExpectedParam { label: "Wet",       min: 0.0, max: 1.0, init: 0.33 },
+            ExpectedParam { label: "Rev Time",  min: 0.0, max: 127.0, init: 40.0 },
+            ExpectedParam { label: "HF Damp",   min: 0.0, max: 127.0, init: 50.0 },
+            ExpectedParam { label: "Pre Delay", min: 0.0, max: 127.0, init: 0.0 },
+            ExpectedParam { label: "Low Cut",   min: 0.0, max: 127.0, init: 0.0 },
+            ExpectedParam { label: "High Cut",  min: 0.0, max: 127.0, init: 127.0 },
+            ExpectedParam { label: "Rev Out",   min: 0.0, max: 127.0, init: 80.0 },
+            ExpectedParam { label: "Dry Out",   min: 0.0, max: 127.0, init: 127.0 },
         ]);
     }
 
@@ -419,6 +407,76 @@ mod tests {
         assert_set_param_routes("reverb2", "reverb2.dsp", &[
             "Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay",
         ]);
+    }
+
+    #[test]
+    fn freeverb_set_param_follows_bmx_order() {
+        assert_set_param_routes("freeverb", "reverb.dsp", &[
+            "Rev Time", "HF Damp", "Pre Delay", "Low Cut", "High Cut", "Rev Out", "Dry Out",
+        ]);
+    }
+
+    // --- Jeskola Freeverb behaviour ---
+
+    const FV_PRE_DELAY: u16 = 2;
+    const FV_REV_OUT: u16 = 5;
+    const FV_DRY_OUT: u16 = 6;
+
+    /// Set a Buzz byte param (0..127) via the BMX 0..65535 scaling.
+    fn set_byte_param(machine: &mut FaustMachine, param: u16, value: i32) {
+        machine.set_param(param, (value * 65535 + 63) / 127);
+    }
+
+    fn freeverb_with(params: &[(u16, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("freeverb", "reverb.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| set_byte_param(&mut machine, p, v));
+        machine
+    }
+
+    /// Render `input` (same signal on both channels) and return the left channel.
+    fn render_left(machine: &mut FaustMachine, input: &[f32]) -> Vec<f32> {
+        let mut buf = AudioBuffer::new(2, input.len() as u16);
+        buf.channel_mut(0).copy_from_slice(input);
+        buf.channel_mut(1).copy_from_slice(input);
+        machine.render(&mut buf);
+        buf.channel(0).to_vec()
+    }
+
+    fn render_impulse_left(machine: &mut FaustMachine, frames: usize) -> Vec<f32> {
+        let mut input = vec![0.0; frames];
+        input[0] = 1.0;
+        input.chunks(256).flat_map(|c| render_left(machine, c)).collect()
+    }
+
+    fn first_audible(samples: &[f32]) -> Option<usize> {
+        samples.iter().position(|s| s.abs() > 1e-6)
+    }
+
+    #[test]
+    fn freeverb_dry_out_scales_input() {
+        // Jeskola: dry = dryOut / 0xFF * scaledry(2); Rev Out 0 => wet ~ -60dB
+        let mut machine = freeverb_with(&[(FV_REV_OUT, 0), (FV_DRY_OUT, 64)]);
+        let out = (0..40).flat_map(|_| render_left(&mut machine, &[0.5; 256])).last().unwrap();
+        let expected = 0.5 * 64.0 / 255.0 * 2.0;
+        assert!((out - expected).abs() < 0.01, "expected ~{expected}, got {out}");
+    }
+
+    #[test]
+    fn freeverb_pre_delay_postpones_tail() {
+        // Pre Delay is in ms at the host rate: 50 => 2205 samples at 44.1kHz
+        let without = render_impulse_left(&mut freeverb_with(&[(FV_DRY_OUT, 0)]), 8192);
+        let with = render_impulse_left(&mut freeverb_with(&[(FV_DRY_OUT, 0), (FV_PRE_DELAY, 50)]), 8192);
+        let (onset, delayed) = (first_audible(&without).unwrap(), first_audible(&with).unwrap());
+        assert!((delayed as i64 - onset as i64 - 2205).abs() <= 2,
+            "pre-delay should shift tail by 2205 samples: {onset} -> {delayed}");
+    }
+
+    #[test]
+    fn freeverb_silent_with_both_outputs_zero() {
+        let mut machine = freeverb_with(&[(FV_REV_OUT, 0), (FV_DRY_OUT, 0)]);
+        let peak = render_impulse_left(&mut machine, 8192).iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak < 0.01, "both outputs at 0 should be near-silent, peak={peak}");
     }
 
     // --- Round-trip scaling tests ---
