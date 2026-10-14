@@ -1,7 +1,7 @@
 # Faust DSP Integration Design
 
 Created: 20260213
-Updated: 20260329
+Updated: 20261014
 
 
 ## Status
@@ -26,9 +26,16 @@ Updated: 20260329
 - [ ] Starter effects
   - [ ] 1. Distortion (pipeline validation)
   - [ ] 2. Delay
-  - [x] 3. Freeverb (`faust/reverb.dsp`)
+  - [x] 3. Jeskola Freeverb (`faust/reverb.dsp`) — ported from C++: Jezar Freeverb + hi/lo cut + pre-delay, 7 params
   - [x] 4. Jeskola Filter 2 (`faust/filter2.dsp`) — multimode SVF (LP/HP/BP/Notch)
-  - [x] 5. Jeskola Reverb 2 (`faust/reverb2.dsp`) — Schroeder reverb with ER + pre-delay
+  - [x] 5. Jeskola Reverb 2 (`faust/reverb2.dsp`) — Schroeder reverb with ER + pre-delay + High Cutoff (approximation, no C++ source)
+  - [x] 6. FSM WahPro (`faust/wahpro.dsp`) and FSM WahPro2 (`faust/wahpro2.dsp`)
+- [x] Buzz parameter fidelity (see [Porting Buzz Machines](#porting-buzz-machines-parameter-fidelity))
+  - [x] `[N]` label prefixes so Faust param order matches C++ `pParameters[]`
+  - [x] Slider ranges/defaults match the BMX PARA section
+  - [x] Per-DSP tests: param order/ranges, `set_param` routing by BMX index
+- [ ] Jeskola Reverb 2 DSP is an approximation — revisit if C++ source turns up
+- [ ] Startup JIT pause — see [024](024-eager-faust-compilation.md)
 - [ ] Approach B — AOT C codegen via cc crate (fallback for Rust backend issues)
 
 ## Motivation
@@ -765,6 +772,63 @@ filter = _ : select3(mode,
 
 process = filter, filter;
 ```
+
+## Porting Buzz Machines: Parameter Fidelity
+
+BMX automation and initial state address a machine's params **by index** in
+the original C++ `pParameters[]` order, with values pre-scaled to 0..65535
+over the param's raw `min..max` (`bmx_format.rs::scale_param_value`, no-value
+cells become `-1` and are skipped). `FaustMachine::set_param(i, v)` maps index
+`i` onto the Faust param list and rescales `v` into the slider's `min..max`.
+For automation to land on the right control with the right value, a Faust DSP
+standing in for a Buzz machine must match it on three things:
+
+1. **Param order.** libfaust reports params **alphabetically by label**, not in
+   declaration order. Prefix every label with `[N]` order metadata in C++
+   order, e.g. `hslider("[1]Resonance", ...)`. Faust strips the prefix from the
+   label it reports.
+2. **Ranges.** Slider `min..max` should be the machine's raw range, so DSP code
+   works in the original units (Hz, ms, 0..4096 gain).
+3. **Defaults.** Slider `init` should be the machine's default.
+
+### Where to find the ground truth
+
+- **BMX files store each machine's param definitions** in the PARA section:
+  per param `type` (u8: 2 = byte, 3 = word), name (null-terminated), then
+  little-endian i32 `min`, `max`, `no_value`, `flags`, `default`
+  (`read_param_defs` in `bmx_format.rs`). Any fixture using the machine gives
+  you order, names, ranges and defaults, even without source code. Quick
+  extraction from a fixture, given a param name:
+
+  ```python
+  import struct
+  d = open("tests/fixtures/bmx/Voices.bmx", "rb").read()
+  i = d.find(b"High Cutoff\0")
+  ptype = d[i - 1]
+  mn, mx, no_value, flags, default = struct.unpack("<5i", d[i + 12:i + 32])
+  ```
+
+  To list all param names per machine, iterate `song.graph.nodes` after
+  `mb_formats::load_bmx` and print `node.parameters[*].name`.
+- **C++ sources** for many machines are in `~/code/buzzmachines` (e.g.
+  `Jeskola/Freeverb/main.cpp`: `CMachineParameter` structs and `mi::Tick()`
+  give the value→DSP mappings). Not every machine is there — Jeskola Reverb 2
+  and Filter 2 are not.
+
+### Known machines
+
+| Machine | Params (C++ order) | Source of truth |
+|---|---|---|
+| FSM WahPro / WahPro2 | Cutoff, Resonance, Filter, LFO rate, LFO mod, LFO Shape, Inertia, Set phase (track params) | BMX PARA |
+| Jeskola Filter 2 | Type, Cutoff, Resonance | BMX PARA |
+| Jeskola Reverb 2 | Dry Out 0..4096 (4096), Rev Out 0..4096 (768), ER Out 0..4096 (0), Rev Time 1..64 (10), Pre-Delay 0..100 ms (0), High Cutoff 100..16384 Hz (5000) | BMX PARA; DSP mapping is guessed |
+| Jeskola Freeverb | Rev Time, HF Damp, Pre Delay, Low Cut, High Cut, Rev Out, Dry Out (all 0..127) | C++ `Jeskola/Freeverb` |
+
+### Tests
+
+`crates/mb-faust/src/tests.rs` has `assert_params_match` (labels, ranges,
+defaults in order) and `assert_set_param_routes` (`set_param(i, 65535)` moves
+the identically-labelled param to its max). Add both for every new Buzz port.
 
 ## Relationship to Hand-written Machines
 

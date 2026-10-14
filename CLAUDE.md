@@ -11,7 +11,7 @@ Full design in [SPECIFICATION.md](SPECIFICATION.md). Design docs in [designs/](d
 - **mb-engine**: Working. Block-based rendering with sub-tick splitting, TrackerMachine (encapsulates channel logic), modulator-based effects (vibrato, tremolo, arpeggio, retrigger), envelope state, beat-based scheduling via MusicalTime, lazy EventSource/ClipSource model, song end detection.
 - **mb-audio**: Working. AudioOutput trait, CpalOutput with ring buffer, stereo stream with spin-wait writes. Forces 2-channel output for macOS compatibility.
 - **mb-master**: Headless Controller. Unified API for song loading, real-time playback (audio thread), offline rendering, edit dispatch (SetCell, SetNodeBypass, SetSeqEntry), track mute. Builds machines with optional Faust JIT replacement (`faust` feature, enabled by default).
-- **mb-faust**: Faust JIT integration via libfaust C API. Compiles Faust DSP strings/files at runtime, wraps as Machine. Registry maps Buzz machine names → embedded Faust DSP sources (Filter 2, Reverb 2, Freeverb).
+- **mb-faust**: Faust JIT integration via libfaust C API. Compiles Faust DSP strings/files at runtime, wraps as Machine. Registry maps Buzz machine names → embedded Faust DSP sources (Filter 2, Reverb 2, Freeverb, WahPro, WahPro2). Param order/ranges match the Buzz originals (see [designs/005](designs/005-faust-integration.md#porting-buzz-machines-parameter-fidelity)).
 - **GUI (src/main.rs)**: imgui-rs shell. 3-panel layout, file dialog, playback controls, pattern editor with edit mode (note/hex entry, copy/paste, undo/redo), audio graph visualization, sequence editor. UI state in `GuiState`, delegates to `Controller`.
 - **mb-cli (src/bin/cli.rs)**: CLI binary for headless playback and WAV export via Controller.
 
@@ -23,7 +23,8 @@ Full design in [SPECIFICATION.md](SPECIFICATION.md). Design docs in [designs/](d
 - Song end detection (stops at last pattern row, handles PatternBreak/PositionJump)
 - Effects: VolumeSlide, PortaUp/Down, TonePorta, TonePortaVolSlide, Vibrato, VibratoVolSlide, Tremolo, Arpeggio, RetriggerNote, NoteCut, SampleOffset, FineVolumeSlide, FinePorta
 - Machine trait + audio graph: TrackerMachine, AmigaFilter, PassthroughMachine
-- Faust JIT machines: Jeskola Filter 2, Jeskola Reverb 2, Jeskola Freeverb
+- Faust JIT machines: Jeskola Filter 2, Jeskola Reverb 2, Jeskola Freeverb, FSM WahPro, FSM WahPro2
+- Effect machine parameter automation (BMX param patterns → `set_param`)
 - Pattern editing with edit mode toggle, undo/redo, copy/paste
 - Sequence editing (place/remove clips, overlap detection)
 - Track mute (live bypass via edit dispatch)
@@ -53,7 +54,7 @@ cargo run --no-default-features
 
 `cargo cli` is a cargo alias for `cargo run --bin mb-cli --` (defined in `.cargo/config.toml`).
 
-The `faust` feature is enabled by default and requires `libfaust` (`brew install faust` on macOS). It provides real DSP for Buzz machines (Filter 2, Reverb 2, Freeverb). Without it, those machines pass audio through unprocessed.
+The `faust` feature is enabled by default and requires `libfaust` (`brew install faust` on macOS). It provides real DSP for Buzz machines (Filter 2, Reverb 2, Freeverb, WahPro, WahPro2). Without it, those machines pass audio through unprocessed.
 
 ## Pre-commit
 
@@ -100,7 +101,9 @@ HTML reports are generated in `target/criterion/`.
 
 - 16.16 fixed-point position limits sample addressing to 65535 frames — large MOD samples (>64KB) would wrap
 - `period_to_note` quantizes to nearest semitone, losing finetune precision vs direct period-based playback
-- Most Buzz machines fall through to PassthroughMachine (only Filter 2, Reverb 2, Freeverb have Faust implementations)
+- Most Buzz machines fall through to PassthroughMachine (only Filter 2, Reverb 2, Freeverb, WahPro, WahPro2 have Faust implementations)
+- Jeskola Reverb 2 DSP is an approximation (no C++ source); only its param order/ranges are faithful
+- Pressing Play pauses while Faust JIT-compiles machines (~0.5–0.8s per WahPro2) — see [designs/024](designs/024-eager-faust-compilation.md)
 
 ## Architecture Reminders
 
@@ -117,6 +120,7 @@ HTML reports are generated in `target/criterion/`.
 - **Panning formula**: `pan_right = pan + 64` (0..128), then `(128 - pan_right) * vol >> 7` for left, `pan_right * vol >> 7` for right
 - **cpal backend**: forces `config.channels = 2`; ring buffer carries interleaved f32 samples directly
 - **Faust machine injection**: `mb-master::build_machines()` calls `Engine::with_machines()` with pre-built machines; Faust replaces passthrough when `faust` feature is enabled
+- **Faust param order**: libfaust lists params alphabetically. DSPs standing in for Buzz machines prefix labels with `[N]` (C++ `pParameters[]` order) and use the machine's raw ranges/defaults — get these from the BMX PARA section or `~/code/buzzmachines`
 
 ## Code Conventions
 
@@ -154,8 +158,10 @@ masterblaster-rs/
 │       └── undo.rs          # Undo/redo stack
 ├── faust/                  # Faust DSP source files
 │   ├── filter2.dsp         # Jeskola Filter 2 (multimode SVF)
-│   ├── reverb2.dsp         # Jeskola Reverb 2 (Schroeder + ER)
-│   └── reverb.dsp          # Jeskola Freeverb
+│   ├── reverb2.dsp         # Jeskola Reverb 2 (Schroeder + ER + high cutoff)
+│   ├── reverb.dsp          # Jeskola Freeverb (Freeverb + hi/lo cut + pre-delay)
+│   ├── wahpro.dsp          # FSM WahPro
+│   └── wahpro2.dsp         # FSM WahPro2
 ├── designs/                # Design documents (active + completed/)
 ├── tests/
 │   ├── fixtures/

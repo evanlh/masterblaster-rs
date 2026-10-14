@@ -164,7 +164,7 @@ mod tests {
         let dsp = load_dsp("reverb2", "reverb2.dsp");
         assert_eq!(dsp.num_inputs, 2, "reverb2 should be stereo in");
         assert_eq!(dsp.num_outputs, 2, "reverb2 should be stereo out");
-        assert_eq!(dsp.params.len(), 5, "reverb2 should have 5 params");
+        assert_eq!(dsp.params.len(), 6, "reverb2 should have 6 params");
         let labels: Vec<&str> = dsp.params.iter().map(|p| p.label.as_str()).collect();
         assert!(labels.contains(&"Dry Out"));
         assert!(labels.contains(&"Rev Out"));
@@ -346,11 +346,13 @@ mod tests {
     #[test]
     fn reverb2_param_ordering_and_ranges() {
         assert_params_match("reverb2", "reverb2.dsp", &[
-            ExpectedParam { label: "Dry Out",   min: 0.0, max: 127.0, init: 127.0 },
-            ExpectedParam { label: "Rev Out",   min: 0.0, max: 127.0, init: 80.0 },
-            ExpectedParam { label: "ER Out",    min: 0.0, max: 127.0, init: 64.0 },
-            ExpectedParam { label: "Rev Time",  min: 0.0, max: 127.0, init: 64.0 },
-            ExpectedParam { label: "Pre-Delay", min: 0.0, max: 127.0, init: 10.0 },
+            // Ranges and defaults from the BMX PARA section (no C++ source available)
+            ExpectedParam { label: "Dry Out",     min: 0.0,   max: 4096.0,  init: 4096.0 },
+            ExpectedParam { label: "Rev Out",     min: 0.0,   max: 4096.0,  init: 768.0 },
+            ExpectedParam { label: "ER Out",      min: 0.0,   max: 4096.0,  init: 0.0 },
+            ExpectedParam { label: "Rev Time",    min: 1.0,   max: 64.0,    init: 10.0 },
+            ExpectedParam { label: "Pre-Delay",   min: 0.0,   max: 100.0,   init: 0.0 },
+            ExpectedParam { label: "High Cutoff", min: 100.0, max: 16384.0, init: 5000.0 },
         ]);
     }
 
@@ -405,7 +407,7 @@ mod tests {
     #[test]
     fn reverb2_set_param_follows_bmx_order() {
         assert_set_param_routes("reverb2", "reverb2.dsp", &[
-            "Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay",
+            "Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay", "High Cutoff",
         ]);
     }
 
@@ -414,6 +416,37 @@ mod tests {
         assert_set_param_routes("freeverb", "reverb.dsp", &[
             "Rev Time", "HF Damp", "Pre Delay", "Low Cut", "High Cut", "Rev Out", "Dry Out",
         ]);
+    }
+
+    // --- Jeskola Reverb 2 behaviour ---
+
+    const RV2_DRY_OUT: u16 = 0;
+    const RV2_HIGH_CUTOFF: u16 = 5;
+
+    fn reverb2_with(params: &[(u16, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("reverb2", "reverb2.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, v));
+        machine
+    }
+
+    fn sine(freq: f32, frames: usize) -> Vec<f32> {
+        (0..frames).map(|i| (i as f32 * freq * core::f32::consts::TAU / 44100.0).sin() * 0.5).collect()
+    }
+
+    /// RMS of the wet-only (Dry Out = 0) response to a sine, after the tail builds up.
+    fn reverb2_wet_rms(high_cutoff_scaled: i32, freq: f32) -> f32 {
+        let mut machine = reverb2_with(&[(RV2_DRY_OUT, 0), (RV2_HIGH_CUTOFF, high_cutoff_scaled)]);
+        let out: Vec<f32> = sine(freq, 44100).chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
+        let tail = &out[22050..];
+        (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn reverb2_high_cutoff_attenuates_highs_in_wet_signal() {
+        let (open, closed) = (reverb2_wet_rms(65535, 8000.0), reverb2_wet_rms(0, 8000.0));
+        assert!(closed < open * 0.1,
+            "High Cutoff at 100Hz should cut an 8kHz wet signal: open={open}, closed={closed}");
     }
 
     // --- Jeskola Freeverb behaviour ---
