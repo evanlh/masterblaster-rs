@@ -34,8 +34,32 @@ impl Drop for CompiledDsp {
 /// Default Faust library search path.
 const DEFAULT_LIB_PATH: &str = "/usr/local/share/faust";
 
-/// Compile a Faust DSP from source code.
+/// Compile a Faust DSP from source code (no disk cache).
 pub fn compile(name: &str, source: &str, lib_path: Option<&str>) -> Result<CompiledDsp, String> {
+    let factory = compile_factory(name, source, lib_path)?;
+    instance_from_factory(factory)
+}
+
+/// Compile a Faust DSP from source code, using the machine-code disk cache.
+pub fn compile_cached(name: &str, source: &str, lib_path: Option<&str>) -> Result<CompiledDsp, String> {
+    if let Some(factory) = crate::cache::try_load(name, source) {
+        eprintln!("[Faust] cache hit: {name}");
+        return instance_from_factory(factory);
+    }
+    let factory = compile_factory(name, source, lib_path)?;
+    crate::cache::save(name, source, factory);
+    eprintln!("[Faust] compiled + cached: {name}");
+    instance_from_factory(factory)
+}
+
+/// Compile a Faust DSP from a .dsp file path (no disk cache).
+pub fn compile_file(name: &str, path: &str, lib_path: Option<&str>) -> Result<CompiledDsp, String> {
+    let source = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
+    compile(name, &source, lib_path)
+}
+
+/// JIT-compile DSP source into a factory (the expensive step).
+fn compile_factory(name: &str, source: &str, lib_path: Option<&str>) -> Result<*mut ffi::LlvmDspFactory, String> {
     let c_name = CString::new(name).map_err(|e| e.to_string())?;
     let c_source = CString::new(source).map_err(|e| e.to_string())?;
     let c_target = CString::new("").unwrap();
@@ -59,10 +83,13 @@ pub fn compile(name: &str, source: &str, lib_path: Option<&str>) -> Result<Compi
     };
 
     if factory.is_null() {
-        let msg = extract_error(&error_buf);
-        return Err(msg);
+        return Err(extract_error(&error_buf));
     }
+    Ok(factory)
+}
 
+/// Create an instance + discover params from an existing factory.
+fn instance_from_factory(factory: *mut ffi::LlvmDspFactory) -> Result<CompiledDsp, String> {
     let instance = unsafe { ffi::createCDSPInstance(factory) };
     if instance.is_null() {
         unsafe { ffi::deleteCDSPFactory(factory); }
@@ -77,12 +104,6 @@ pub fn compile(name: &str, source: &str, lib_path: Option<&str>) -> Result<Compi
     unsafe { ffi::buildUserInterfaceCDSPInstance(instance, &mut glue); }
 
     Ok(CompiledDsp { factory, instance, num_inputs, num_outputs, params })
-}
-
-/// Compile a Faust DSP from a .dsp file path.
-pub fn compile_file(name: &str, path: &str, lib_path: Option<&str>) -> Result<CompiledDsp, String> {
-    let source = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
-    compile(name, &source, lib_path)
 }
 
 fn extract_error(buf: &[u8]) -> String {

@@ -12,3 +12,5 @@ faust-tests = []
 [dependencies]
 mb-ir = { workspace = true, features = ["std"] }
 mb-engine = { workspace = true }
+dirs = "6"
+md5 = "0.7"

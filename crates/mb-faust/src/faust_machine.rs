@@ -42,6 +42,12 @@ impl FaustMachine {
         Ok(Self::new(dsp))
     }
 
+    /// Compile from source (using the machine-code disk cache) and wrap as a Machine.
+    pub fn from_source_cached(name: &str, source: &str) -> Result<Self, String> {
+        let dsp = crate::compiler::compile_cached(name, source, None)?;
+        Ok(Self::new(dsp))
+    }
+
     /// Compile from a .dsp file and wrap as a Machine.
     pub fn from_file(name: &str, path: &str) -> Result<Self, String> {
         let dsp = crate::compiler::compile_file(name, path, None)?;

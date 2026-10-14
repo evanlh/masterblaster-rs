@@ -100,5 +100,19 @@ extern "C" {
 
     pub fn metadataCDSPInstance(dsp: *mut LlvmDsp, meta: *mut MetaGlue);
 
+    pub fn writeCDSPFactoryToMachineFile(
+        factory: *mut LlvmDspFactory,
+        machine_code_path: *const c_char,
+        target: *const c_char,
+    ) -> bool;
+
+    pub fn readCDSPFactoryFromMachineFile(
+        machine_code_path: *const c_char,
+        target: *const c_char,
+        error_msg: *mut c_char,
+    ) -> *mut LlvmDspFactory;
+
+    pub fn getCLibFaustVersion() -> *const c_char;
+
     pub fn freeCMemory(ptr: *mut c_void);
 }

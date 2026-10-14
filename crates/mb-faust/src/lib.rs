@@ -1,6 +1,7 @@
 pub mod ffi;
 pub mod ui_visitor;
 pub mod compiler;
+mod cache;
 pub mod faust_machine;
 mod registry;
 

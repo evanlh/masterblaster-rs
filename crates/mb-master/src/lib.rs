@@ -5,6 +5,7 @@
 
 use mb_audio::{AudioOutput, CpalOutput};
 use mb_engine::Engine;
+use mb_engine::machine::Machine;
 use mb_ir::BLOCK_SIZE;
 use ringbuf::HeapRb;
 use ringbuf::traits::{Consumer, Producer, Split};
@@ -18,6 +19,11 @@ pub use mb_ir::{pack_time, unpack_time, Edit, PlaybackPosition, Song, TrackPlayb
 
 /// Ring buffer capacity for edit commands sent to the audio thread.
 const EDIT_RING_CAPACITY: usize = 256;
+
+/// Sample rate used to pre-build machines at load time. Machines are
+/// re-initialized to the actual device/render rate when playback or rendering
+/// begins (see `finalize_machines`).
+const DEFAULT_SAMPLE_RATE: u32 = 44100;
 
 // ---------------------------------------------------------------------------
 // Allocation guards — no-ops without the `alloc_check` feature.
@@ -47,6 +53,8 @@ pub struct Controller {
     /// The song actually being played (may differ from `song` during pattern playback).
     active_song: Option<Song>,
     playback: Option<PlaybackHandle>,
+    /// Machines pre-built at load time (avoids JIT compilation on the audio thread).
+    machines: Vec<Option<Box<dyn Machine>>>,
 }
 
 struct PlaybackHandle {
@@ -64,6 +72,7 @@ impl Controller {
             song: Song::with_channels("Untitled", 4),
             active_song: None,
             playback: None,
+            machines: Vec::new(),
         }
     }
 
@@ -73,31 +82,46 @@ impl Controller {
         &self.song
     }
 
-    pub fn set_song(&mut self, song: Song) {
+    /// Rebuild `machines` from the current song at the default sample rate.
+    ///
+    /// `machines` is derived state: whenever `song` changes, this cache must
+    /// be rebuilt so `play_song` can `mem::take` it without JIT on the audio
+    /// thread.
+    fn rebuild_machines(&mut self) {
+        self.machines = build_machines(&self.song, DEFAULT_SAMPLE_RATE);
+    }
+
+    /// Stop, replace the current song, and rebuild machines in one step.
+    ///
+    /// Every full-song replacement (load/new/set) funnels through here so the
+    /// rebuild cannot be forgotten.
+    fn load_song(&mut self, song: Song) {
         self.stop();
         self.song = song;
+        self.rebuild_machines();
+    }
+
+    pub fn set_song(&mut self, song: Song) {
+        self.load_song(song);
     }
 
     pub fn load_mod(&mut self, data: &[u8]) -> Result<(), FormatError> {
-        self.stop();
-        self.song = mb_formats::load_mod(data)?;
+        self.load_song(mb_formats::load_mod(data)?);
         Ok(())
     }
 
     pub fn load_bmx(&mut self, data: &[u8]) -> Result<(), FormatError> {
-        self.stop();
-        self.song = mb_formats::load_bmx(data)?;
+        self.load_song(mb_formats::load_bmx(data)?);
         Ok(())
     }
 
     /// Create a new empty song with default settings.
     pub fn new_song(&mut self, channels: u8) {
-        self.stop();
         let mut song = Song::with_channels("Untitled", channels);
         let patterns = vec![mb_ir::Pattern::new(64, channels)];
         let order = vec![mb_ir::OrderEntry::Pattern(0)];
         mb_ir::build_tracks(&mut song, &patterns, &order);
-        self.song = song;
+        self.load_song(song);
     }
 
     /// Load a WAV file as a sample and add it to the song.
@@ -110,6 +134,9 @@ impl Controller {
         let mut inst = mb_ir::Instrument::new(name);
         inst.set_single_sample(sample_idx);
         self.song.instruments.push(inst);
+        // TrackerMachine owns copies of the song's samples/instruments, so a
+        // new sample invalidates the derived machines cache.
+        self.rebuild_machines();
 
         Ok(self.song.instruments.len() as u8) // 1-based
     }
@@ -241,6 +268,13 @@ impl Controller {
         let song = active_song.clone();
         self.active_song = Some(active_song);
 
+        // Machines may have been consumed by a previous play; rebuild from the
+        // disk cache (~5ms) rather than JIT-compiling on the audio thread.
+        if self.machines.is_empty() {
+            self.rebuild_machines();
+        }
+        let machines = std::mem::take(&mut self.machines);
+
         // Collect initial mute state before song is moved to audio thread
         let initial_bypasses: Vec<_> = song.tracks.iter()
             .filter(|t| t.muted)
@@ -259,7 +293,7 @@ impl Controller {
         let done = finished.clone();
 
         let thread = std::thread::spawn(move || {
-            audio_thread(song, stop, time, done, edit_consumer);
+            audio_thread(song, machines, stop, time, done, edit_consumer);
         });
 
         let mut pb = PlaybackHandle {
@@ -405,6 +439,24 @@ fn rebuild_track_sequences(song: &mut Song, track_idx: usize, clip_idx: u16) {
     }
 }
 
+/// Re-initialize pre-built machines at `sample_rate` and re-apply graph params.
+///
+/// Machines are built at `DEFAULT_SAMPLE_RATE` on load. Before use they are
+/// re-initialized at the actual rate (recomputing rate-dependent coefficients)
+/// and node parameters are re-applied, since `Machine::init` may reset them.
+fn finalize_machines(song: &Song, machines: &mut [Option<Box<dyn Machine>>], sample_rate: u32) {
+    for (node, slot) in song.graph.nodes.iter().zip(machines.iter_mut()) {
+        if !matches!(&node.node_type, mb_ir::NodeType::Machine { .. }) {
+            continue;
+        }
+        let Some(machine) = slot.as_mut() else { continue };
+        machine.init(sample_rate);
+        for param in &node.parameters {
+            machine.set_param(param.id, param.value);
+        }
+    }
+}
+
 /// Build machines for a song, replacing passthrough with Faust implementations when available.
 /// Build machines for a song, replacing passthrough with Faust implementations when available.
 #[cfg(not(feature = "faust"))]
@@ -458,6 +510,7 @@ fn render_song_to_wav(song: Song, sample_rate: u32, max_seconds: u32) -> Vec<u8>
 
 fn audio_thread(
     song: Song,
+    machines: Vec<Option<Box<dyn Machine>>>,
     stop_signal: Arc<AtomicBool>,
     current_time: Arc<AtomicU64>,
     finished: Arc<AtomicBool>,
@@ -469,7 +522,8 @@ fn audio_thread(
     };
 
     let sample_rate = output.sample_rate();
-    let machines = build_machines(&song, sample_rate);
+    let mut machines = machines;
+    finalize_machines(&song, &mut machines, sample_rate);
     let mut engine = Engine::with_machines(song, sample_rate, machines);
     engine.schedule_song();
 

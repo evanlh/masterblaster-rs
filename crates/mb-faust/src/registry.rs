@@ -17,7 +17,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "FSM WahPro2" => ("wahpro2", include_str!("../../../faust/wahpro2.dsp")),
         _ => return None,
     };
-    FaustMachine::from_source(dsp_name, source)
+    FaustMachine::from_source_cached(dsp_name, source)
         .ok()
         .map(|m| Box::new(m) as Box<dyn Machine>)
 }

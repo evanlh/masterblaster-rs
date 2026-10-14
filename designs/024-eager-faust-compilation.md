@@ -1,15 +1,15 @@
 # 024: Eager Faust JIT Compilation
 
 Created: 20260403
-Updated: 20260403
+Updated: 20261014
 
 ## Status
 
-- [ ] Add machine code disk cache (`cache.rs`)
-- [ ] Add FFI bindings for `writeCDSPFactoryToMachineFile` / `readCDSPFactoryFromMachineFile`
-- [ ] Cache pre-built machines on Controller (move to load time)
-- [ ] Pass cached machines to audio thread / offline render
-- [ ] Verify no pause on Play
+- [x] Add machine code disk cache (`cache.rs`)
+- [x] Add FFI bindings for `writeCDSPFactoryToMachineFile` / `readCDSPFactoryFromMachineFile`
+- [x] Cache pre-built machines on Controller (move to load time)
+- [x] Pass cached machines to audio thread / offline render
+- [x] Verify no pause on Play
 
 ## Problem
 
@@ -106,3 +106,25 @@ After disk-cached compilation, cache the built machines on the Controller so
 3. Second run: machines load from cache (<10ms total)
 4. Modify a `.dsp` file: cache miss, recompile + save new cache
 5. Play button: no multi-second pause
+
+> **Note on item 5:** verified indirectly — compilation now happens in
+> `rebuild_machines()` at load time and factories load from disk cache via
+> `readCDSPFactoryFromMachineFile()`, so `play_song()` no longer JITs. A direct
+> GUI play-latency timing (loading a multi-WahPro2 BMX and measuring
+> play-to-audio delay) has not been run and should be confirmed manually.
+
+## Implementation Notes
+
+- **Sample-rate handling.** Machines are built on the Controller at a fixed
+  `DEFAULT_SAMPLE_RATE` (44100) because the device rate is not known until the
+  audio thread opens the output. `finalize_machines()` re-initializes each
+  machine at the actual rate and re-applies graph node params before use, since
+  `FaustMachine::init()` → `initCDSPInstance()` resets slider zones to the DSP
+  defaults. This keeps rate-dependent coefficients correct on non-44100 devices.
+- **Cache key.** The filename hash covers the DSP source *and* the value of
+  `getCLibFaustVersion()`, so a libfaust upgrade automatically invalidates the
+  cache. A library `compile_cached()` is used only by the registry;
+  `compiler::compile()` remains uncached for tests.
+- **Offline render** (`render_to_wav` / `render_frames`, `&self`) still calls
+  `build_machines()`, which now hits the disk cache; the audio thread uses the
+  Controller's in-memory machines via `std::mem::take()`.

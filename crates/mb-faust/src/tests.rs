@@ -598,4 +598,22 @@ mod tests {
     fn registry_returns_none_for_unknown() {
         assert!(crate::create_faust_machine("Unknown Machine XYZ").is_none());
     }
+
+    // --- Machine-code disk cache tests ---
+
+    #[test]
+    fn cache_miss_returns_none() {
+        assert!(crate::cache::try_load("no-such-machine", "process = _;").is_none());
+    }
+
+    #[test]
+    fn cache_round_trip_saves_and_loads() {
+        let name = "cache_round_trip";
+        let source = "process = *(0.5), *(0.5); // cache round-trip marker";
+        let dsp = crate::compiler::compile_cached(name, source, None).unwrap();
+        assert_eq!(dsp.num_inputs, 2);
+        let factory = crate::cache::try_load(name, source)
+            .expect("factory should be cached after compile_cached");
+        unsafe { crate::ffi::deleteCDSPFactory(factory); }
+    }
 }
