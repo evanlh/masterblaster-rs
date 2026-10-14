@@ -261,8 +261,12 @@ impl Engine {
             EventTarget::Global => {
                 self.apply_global_event(&event.payload);
             }
-            EventTarget::Node(_id) => {
-                // TODO: Route to graph node
+            EventTarget::Node(id) => {
+                if let Some(Some(machine)) = self.machines.get_mut(id as usize) {
+                    if let EventPayload::ParamChange { param, value } = &event.payload {
+                        machine.set_param(*param, *value);
+                    }
+                }
             }
         }
     }

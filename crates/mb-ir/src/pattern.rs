@@ -164,6 +164,31 @@ impl Pattern {
     }
 }
 
+/// Parameter pattern for effect/generator machines.
+/// Stores per-tick values for each parameter column.
+#[derive(Clone, Debug)]
+pub struct ParamPattern {
+    /// Number of rows (ticks) in this pattern.
+    pub rows: u16,
+    /// (param_id, no_value) for each column.
+    pub columns: Vec<(u16, i32)>,
+    /// Row-major values: `columns.len() * rows` entries.
+    /// Pre-scaled to 0..65535 range for `Machine::set_param`.
+    pub values: Vec<i32>,
+}
+
+impl ParamPattern {
+    /// Get the value at (row, col), returning `None` if it equals the column's no_value.
+    pub fn value(&self, row: u16, col: usize) -> Option<i32> {
+        if col >= self.columns.len() || row >= self.rows {
+            return None;
+        }
+        let v = self.values[row as usize * self.columns.len() + col];
+        let (_, no_value) = self.columns[col];
+        if v == no_value { None } else { Some(v) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +239,41 @@ mod tests {
 
         assert_eq!(pattern.cell(10, 2).note, Note::On(60));
         assert_eq!(pattern.cell(10, 1).note, Note::None);
+    }
+
+    fn make_param_pattern() -> ParamPattern {
+        // 2 columns, 3 rows, no_value = -1
+        ParamPattern {
+            rows: 3,
+            columns: alloc::vec![(0, -1), (1, -1)],
+            values: alloc::vec![
+                100, -1,   // row 0: col0=100, col1=no_value
+                -1, 200,   // row 1: col0=no_value, col1=200
+                50, 60,    // row 2: both set
+            ],
+        }
+    }
+
+    #[test]
+    fn param_pattern_value_returns_some_for_set() {
+        let pp = make_param_pattern();
+        assert_eq!(pp.value(0, 0), Some(100));
+        assert_eq!(pp.value(1, 1), Some(200));
+        assert_eq!(pp.value(2, 0), Some(50));
+        assert_eq!(pp.value(2, 1), Some(60));
+    }
+
+    #[test]
+    fn param_pattern_value_returns_none_for_no_value() {
+        let pp = make_param_pattern();
+        assert_eq!(pp.value(0, 1), None);
+        assert_eq!(pp.value(1, 0), None);
+    }
+
+    #[test]
+    fn param_pattern_value_out_of_bounds() {
+        let pp = make_param_pattern();
+        assert_eq!(pp.value(5, 0), None);
+        assert_eq!(pp.value(0, 5), None);
     }
 }

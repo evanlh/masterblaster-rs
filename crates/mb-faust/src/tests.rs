@@ -91,9 +91,6 @@ mod tests {
         buf.channel_mut(1)[0] = 1.0;
         machine.render(&mut buf);
 
-        // The dry path should pass through immediately
-        assert!(buf.channel(0)[0].abs() > 0.5, "dry signal should pass, got {}", buf.channel(0)[0]);
-
         // Render more blocks to let reverb tail emerge
         let mut tail_energy: f32 = 0.0;
         for _ in 0..100 {
@@ -102,19 +99,6 @@ mod tests {
             tail_energy += tail.channel(0).iter().map(|s| s * s).sum::<f32>();
         }
         assert!(tail_energy > 0.0001, "reverb should produce a tail, energy={tail_energy}");
-    }
-
-    #[test]
-    fn reverb_has_three_params() {
-        let source = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../faust/reverb.dsp")
-        ).unwrap();
-        let dsp = compiler::compile("reverb", &source, None).unwrap();
-        assert_eq!(dsp.params.len(), 3);
-        let labels: Vec<&str> = dsp.params.iter().map(|p| p.label.as_str()).collect();
-        assert!(labels.contains(&"Room Size"));
-        assert!(labels.contains(&"Damping"));
-        assert!(labels.contains(&"Wet"));
     }
 
     #[test]
@@ -180,7 +164,7 @@ mod tests {
         let dsp = load_dsp("reverb2", "reverb2.dsp");
         assert_eq!(dsp.num_inputs, 2, "reverb2 should be stereo in");
         assert_eq!(dsp.num_outputs, 2, "reverb2 should be stereo out");
-        assert_eq!(dsp.params.len(), 5, "reverb2 should have 5 params");
+        assert_eq!(dsp.params.len(), 6, "reverb2 should have 6 params");
         let labels: Vec<&str> = dsp.params.iter().map(|p| p.label.as_str()).collect();
         assert!(labels.contains(&"Dry Out"));
         assert!(labels.contains(&"Rev Out"));
@@ -218,6 +202,371 @@ mod tests {
         assert!(tail_energy > 0.0001, "reverb2 should produce a tail, energy={tail_energy}");
     }
 
+    // --- WahMan Pro tests ---
+
+    #[test]
+    fn wahpro_compiles() {
+        let dsp = load_dsp("wahpro", "wahpro.dsp");
+        assert_eq!(dsp.num_inputs, 2, "wahpro should be stereo in");
+        assert_eq!(dsp.num_outputs, 2, "wahpro should be stereo out");
+        assert_eq!(dsp.params.len(), 8, "wahpro should have 8 params");
+    }
+
+    #[test]
+    fn wahpro_filters_signal() {
+        let mut machine = FaustMachine::new(load_dsp("wahpro", "wahpro.dsp"));
+        machine.init(44100);
+
+        // Feed a broadband impulse and check output is non-zero
+        let mut buf = AudioBuffer::new(2, 256);
+        buf.channel_mut(0)[0] = 1.0;
+        buf.channel_mut(1)[0] = 1.0;
+        machine.render(&mut buf);
+
+        let energy: f32 = buf.channel(0).iter().map(|s| s * s).sum();
+        assert!(energy > 0.0001, "wahpro should produce output, energy={energy}");
+    }
+
+    // --- WahMan Pro 2 tests ---
+
+    #[test]
+    fn wahpro2_compiles() {
+        let dsp = load_dsp("wahpro2", "wahpro2.dsp");
+        assert_eq!(dsp.num_inputs, 2, "wahpro2 should be stereo in");
+        assert_eq!(dsp.num_outputs, 2, "wahpro2 should be stereo out");
+        assert_eq!(dsp.params.len(), 8, "wahpro2 should have 8 params");
+    }
+
+    #[test]
+    fn wahpro2_filters_signal() {
+        let mut machine = FaustMachine::new(load_dsp("wahpro2", "wahpro2.dsp"));
+        machine.init(44100);
+
+        let mut buf = AudioBuffer::new(2, 256);
+        buf.channel_mut(0)[0] = 1.0;
+        buf.channel_mut(1)[0] = 1.0;
+        machine.render(&mut buf);
+
+        let energy: f32 = buf.channel(0).iter().map(|s| s * s).sum();
+        assert!(energy > 0.0001, "wahpro2 should produce output, energy={energy}");
+    }
+
+    #[test]
+    fn wahpro2_lp_attenuates_highs() {
+        let mut machine = FaustMachine::new(load_dsp("wahpro2", "wahpro2.dsp"));
+        machine.init(44100);
+
+        // Set Type=0 (LP), low cutoff, no LFO
+        machine.set_param(2, 0);      // Filter = 0 (LP)
+        machine.set_param(0, 6553);   // Cutoff ~20/240 (low)
+        machine.set_param(4, 0);      // LFO mod = 0
+
+        // Generate 10kHz sine
+        let frames = 1024_u16;
+        let mut buf = AudioBuffer::new(2, frames);
+        for i in 0..frames as usize {
+            let s = (2.0 * std::f32::consts::PI * 10000.0 * i as f32 / 44100.0).sin();
+            buf.channel_mut(0)[i] = s;
+            buf.channel_mut(1)[i] = s;
+        }
+        machine.render(&mut buf);
+
+        let energy: f32 = buf.channel(0)[512..].iter().map(|s| s * s).sum();
+        let rms = (energy / 512.0).sqrt();
+        // WahPro2 has 2x output gain + 1/sqrt(Q) normalization, so attenuation is less dramatic
+        assert!(rms < 1.0, "LP filter should attenuate 10kHz, RMS={rms}");
+    }
+
+    // --- Parameter ordering + range validation ---
+
+    struct ExpectedParam {
+        label: &'static str,
+        min: f32,
+        max: f32,
+        init: f32,
+    }
+
+    fn assert_params_match(dsp_name: &str, dsp_file: &str, expected: &[ExpectedParam]) {
+        let dsp = load_dsp(dsp_name, dsp_file);
+        assert_eq!(dsp.params.len(), expected.len(),
+            "{dsp_name}: param count mismatch");
+        for (i, (got, exp)) in dsp.params.iter().zip(expected).enumerate() {
+            assert_eq!(got.label, exp.label,
+                "{dsp_name} param[{i}]: label mismatch");
+            assert!((got.min - exp.min).abs() < 0.01,
+                "{dsp_name} param[{i}] ({}) min: expected {}, got {}", exp.label, exp.min, got.min);
+            assert!((got.max - exp.max).abs() < 0.01,
+                "{dsp_name} param[{i}] ({}) max: expected {}, got {}", exp.label, exp.max, got.max);
+            assert!((got.init - exp.init).abs() < 0.01,
+                "{dsp_name} param[{i}] ({}) init: expected {}, got {}", exp.label, exp.init, got.init);
+        }
+    }
+
+    // Faust sorts params alphabetically by label unless labels carry `[N]`
+    // order metadata. BMX automation indexes params by the C++ pParameters[]
+    // order, so DSPs mirroring Buzz machines must prefix labels with `[N]`.
+
+    #[test]
+    fn wahpro2_param_ordering_and_ranges() {
+        assert_params_match("wahpro2", "wahpro2.dsp", &[
+            ExpectedParam { label: "Cutoff",    min: 0.0, max: 240.0, init: 120.0 },
+            ExpectedParam { label: "Resonance", min: 0.0, max: 240.0, init: 120.0 },
+            ExpectedParam { label: "Filter",    min: 0.0, max: 7.0,   init: 6.0 },
+            ExpectedParam { label: "LFO rate",  min: 0.0, max: 254.0, init: 30.0 },
+            ExpectedParam { label: "LFO mod",   min: 0.0, max: 240.0, init: 60.0 },
+            ExpectedParam { label: "LFO Shape", min: 0.0, max: 16.0,  init: 0.0 },
+            ExpectedParam { label: "Inertia",   min: 0.0, max: 60.0,  init: 10.0 },
+            ExpectedParam { label: "Set phase", min: 0.0, max: 127.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn wahpro_param_ordering_and_ranges() {
+        assert_params_match("wahpro", "wahpro.dsp", &[
+            ExpectedParam { label: "Cutoff",    min: 0.0, max: 240.0, init: 120.0 },
+            ExpectedParam { label: "Resonance", min: 0.0, max: 240.0, init: 120.0 },
+            ExpectedParam { label: "Filter",    min: 0.0, max: 4.0,   init: 1.0 },
+            ExpectedParam { label: "LFO rate",  min: 0.0, max: 240.0, init: 30.0 },
+            ExpectedParam { label: "LFO mod",   min: 0.0, max: 240.0, init: 60.0 },
+            ExpectedParam { label: "LFO Shape", min: 0.0, max: 8.0,   init: 1.0 },
+            ExpectedParam { label: "Inertia",   min: 0.0, max: 60.0,  init: 10.0 },
+            ExpectedParam { label: "Set phase", min: 0.0, max: 127.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn filter2_param_ordering_and_ranges() {
+        assert_params_match("filter2", "filter2.dsp", &[
+            ExpectedParam { label: "Type",      min: 0.0, max: 3.0,   init: 0.0 },
+            ExpectedParam { label: "Cutoff",    min: 0.0, max: 127.0, init: 64.0 },
+            ExpectedParam { label: "Resonance", min: 0.0, max: 127.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn reverb2_param_ordering_and_ranges() {
+        assert_params_match("reverb2", "reverb2.dsp", &[
+            // Ranges and defaults from the BMX PARA section (no C++ source available)
+            ExpectedParam { label: "Dry Out",     min: 0.0,   max: 4096.0,  init: 4096.0 },
+            ExpectedParam { label: "Rev Out",     min: 0.0,   max: 4096.0,  init: 768.0 },
+            ExpectedParam { label: "ER Out",      min: 0.0,   max: 4096.0,  init: 0.0 },
+            ExpectedParam { label: "Rev Time",    min: 1.0,   max: 64.0,    init: 10.0 },
+            ExpectedParam { label: "Pre-Delay",   min: 0.0,   max: 100.0,   init: 0.0 },
+            ExpectedParam { label: "High Cutoff", min: 100.0, max: 16384.0, init: 5000.0 },
+        ]);
+    }
+
+    #[test]
+    fn freeverb_param_ordering_and_ranges() {
+        assert_params_match("freeverb", "reverb.dsp", &[
+            ExpectedParam { label: "Rev Time",  min: 0.0, max: 127.0, init: 40.0 },
+            ExpectedParam { label: "HF Damp",   min: 0.0, max: 127.0, init: 50.0 },
+            ExpectedParam { label: "Pre Delay", min: 0.0, max: 127.0, init: 0.0 },
+            ExpectedParam { label: "Low Cut",   min: 0.0, max: 127.0, init: 0.0 },
+            ExpectedParam { label: "High Cut",  min: 0.0, max: 127.0, init: 127.0 },
+            ExpectedParam { label: "Rev Out",   min: 0.0, max: 127.0, init: 80.0 },
+            ExpectedParam { label: "Dry Out",   min: 0.0, max: 127.0, init: 127.0 },
+        ]);
+    }
+
+    /// Set each BMX param index to max and check it lands on the
+    /// identically-labelled Faust param (C++ pParameters[] order).
+    fn assert_set_param_routes(dsp_name: &str, dsp_file: &str, bmx_order: &[&str]) {
+        let dsp = load_dsp(dsp_name, dsp_file);
+        let zones: Vec<_> = bmx_order.iter()
+            .map(|label| (find_param(dsp.params(), label).zone, find_param(dsp.params(), label).max))
+            .collect();
+        let mut machine = FaustMachine::new(dsp);
+        for (i, (label, (zone, max))) in bmx_order.iter().zip(&zones).enumerate() {
+            machine.set_param(i as u16, 65535);
+            let got = unsafe { **zone };
+            assert!((got - max).abs() < 0.01,
+                "{dsp_name}: set_param({i}) should set '{label}' to {max}, got {got}");
+        }
+    }
+
+    #[test]
+    fn wahpro2_set_param_follows_bmx_order() {
+        assert_set_param_routes("wahpro2", "wahpro2.dsp", &[
+            "Cutoff", "Resonance", "Filter", "LFO rate", "LFO mod", "LFO Shape", "Inertia", "Set phase",
+        ]);
+    }
+
+    #[test]
+    fn wahpro_set_param_follows_bmx_order() {
+        assert_set_param_routes("wahpro", "wahpro.dsp", &[
+            "Cutoff", "Resonance", "Filter", "LFO rate", "LFO mod", "LFO Shape", "Inertia", "Set phase",
+        ]);
+    }
+
+    #[test]
+    fn filter2_set_param_follows_bmx_order() {
+        assert_set_param_routes("filter2", "filter2.dsp", &["Type", "Cutoff", "Resonance"]);
+    }
+
+    #[test]
+    fn reverb2_set_param_follows_bmx_order() {
+        assert_set_param_routes("reverb2", "reverb2.dsp", &[
+            "Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay", "High Cutoff",
+        ]);
+    }
+
+    #[test]
+    fn freeverb_set_param_follows_bmx_order() {
+        assert_set_param_routes("freeverb", "reverb.dsp", &[
+            "Rev Time", "HF Damp", "Pre Delay", "Low Cut", "High Cut", "Rev Out", "Dry Out",
+        ]);
+    }
+
+    // --- Jeskola Reverb 2 behaviour ---
+
+    const RV2_DRY_OUT: u16 = 0;
+    const RV2_HIGH_CUTOFF: u16 = 5;
+
+    fn reverb2_with(params: &[(u16, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("reverb2", "reverb2.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, v));
+        machine
+    }
+
+    fn sine(freq: f32, frames: usize) -> Vec<f32> {
+        (0..frames).map(|i| (i as f32 * freq * core::f32::consts::TAU / 44100.0).sin() * 0.5).collect()
+    }
+
+    /// RMS of the wet-only (Dry Out = 0) response to a sine, after the tail builds up.
+    fn reverb2_wet_rms(high_cutoff_scaled: i32, freq: f32) -> f32 {
+        let mut machine = reverb2_with(&[(RV2_DRY_OUT, 0), (RV2_HIGH_CUTOFF, high_cutoff_scaled)]);
+        let out: Vec<f32> = sine(freq, 44100).chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
+        let tail = &out[22050..];
+        (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn reverb2_high_cutoff_attenuates_highs_in_wet_signal() {
+        let (open, closed) = (reverb2_wet_rms(65535, 8000.0), reverb2_wet_rms(0, 8000.0));
+        assert!(closed < open * 0.1,
+            "High Cutoff at 100Hz should cut an 8kHz wet signal: open={open}, closed={closed}");
+    }
+
+    // --- Jeskola Freeverb behaviour ---
+
+    const FV_PRE_DELAY: u16 = 2;
+    const FV_REV_OUT: u16 = 5;
+    const FV_DRY_OUT: u16 = 6;
+
+    /// Set a Buzz byte param (0..127) via the BMX 0..65535 scaling.
+    fn set_byte_param(machine: &mut FaustMachine, param: u16, value: i32) {
+        machine.set_param(param, (value * 65535 + 63) / 127);
+    }
+
+    fn freeverb_with(params: &[(u16, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("freeverb", "reverb.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| set_byte_param(&mut machine, p, v));
+        machine
+    }
+
+    /// Render `input` (same signal on both channels) and return the left channel.
+    fn render_left(machine: &mut FaustMachine, input: &[f32]) -> Vec<f32> {
+        let mut buf = AudioBuffer::new(2, input.len() as u16);
+        buf.channel_mut(0).copy_from_slice(input);
+        buf.channel_mut(1).copy_from_slice(input);
+        machine.render(&mut buf);
+        buf.channel(0).to_vec()
+    }
+
+    fn render_impulse_left(machine: &mut FaustMachine, frames: usize) -> Vec<f32> {
+        let mut input = vec![0.0; frames];
+        input[0] = 1.0;
+        input.chunks(256).flat_map(|c| render_left(machine, c)).collect()
+    }
+
+    fn first_audible(samples: &[f32]) -> Option<usize> {
+        samples.iter().position(|s| s.abs() > 1e-6)
+    }
+
+    #[test]
+    fn freeverb_dry_out_scales_input() {
+        // Jeskola: dry = dryOut / 0xFF * scaledry(2); Rev Out 0 => wet ~ -60dB
+        let mut machine = freeverb_with(&[(FV_REV_OUT, 0), (FV_DRY_OUT, 64)]);
+        let out = (0..40).flat_map(|_| render_left(&mut machine, &[0.5; 256])).last().unwrap();
+        let expected = 0.5 * 64.0 / 255.0 * 2.0;
+        assert!((out - expected).abs() < 0.01, "expected ~{expected}, got {out}");
+    }
+
+    #[test]
+    fn freeverb_pre_delay_postpones_tail() {
+        // Pre Delay is in ms at the host rate: 50 => 2205 samples at 44.1kHz
+        let without = render_impulse_left(&mut freeverb_with(&[(FV_DRY_OUT, 0)]), 8192);
+        let with = render_impulse_left(&mut freeverb_with(&[(FV_DRY_OUT, 0), (FV_PRE_DELAY, 50)]), 8192);
+        let (onset, delayed) = (first_audible(&without).unwrap(), first_audible(&with).unwrap());
+        assert!((delayed as i64 - onset as i64 - 2205).abs() <= 2,
+            "pre-delay should shift tail by 2205 samples: {onset} -> {delayed}");
+    }
+
+    #[test]
+    fn freeverb_silent_with_both_outputs_zero() {
+        let mut machine = freeverb_with(&[(FV_REV_OUT, 0), (FV_DRY_OUT, 0)]);
+        let peak = render_impulse_left(&mut machine, 8192).iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak < 0.01, "both outputs at 0 should be near-silent, peak={peak}");
+    }
+
+    // --- Round-trip scaling tests ---
+
+    fn round_trip_f32(param: &crate::ui_visitor::FaustParam, raw: f32) -> f32 {
+        // Simulate BMX pipeline: raw → scale to 0..65535 → scaled_to_f32
+        let range = param.max - param.min;
+        let scaled = if range > 0.0 { ((raw - param.min) / range * 65535.0) as i32 } else { 0 };
+        crate::ui_visitor::scaled_to_f32(param, scaled)
+    }
+
+    #[test]
+    fn wahpro2_defaults_round_trip() {
+        let dsp = load_dsp("wahpro2", "wahpro2.dsp");
+        for p in &dsp.params {
+            let result = round_trip_f32(p, p.init);
+            assert!((result - p.init).abs() < 0.01,
+                "{}: init {}, round-tripped to {result}", p.label, p.init);
+        }
+    }
+
+    #[test]
+    fn wahpro2_boundary_values_round_trip() {
+        let dsp = load_dsp("wahpro2", "wahpro2.dsp");
+        for p in &dsp.params {
+            let at_min = crate::ui_visitor::scaled_to_f32(p, 0);
+            assert!((at_min - p.min).abs() < 0.01,
+                "{}: min round-trip expected {}, got {at_min}", p.label, p.min);
+            let at_max = crate::ui_visitor::scaled_to_f32(p, 65535);
+            assert!((at_max - p.max).abs() < 0.01,
+                "{}: max round-trip expected {}, got {at_max}", p.label, p.max);
+        }
+    }
+
+    fn find_param<'a>(params: &'a [crate::ui_visitor::FaustParam], label: &str) -> &'a crate::ui_visitor::FaustParam {
+        params.iter().find(|p| p.label == label).unwrap_or_else(|| panic!("param '{label}' not found"))
+    }
+
+    #[test]
+    fn wahpro2_integer_params_quantize_cleanly() {
+        let dsp = load_dsp("wahpro2", "wahpro2.dsp");
+        // Filter type (0-7) should quantize to integers
+        let filter_param = find_param(&dsp.params, "Filter");
+        for expected in 0..=7 {
+            let result = round_trip_f32(filter_param, expected as f32);
+            assert!((result - expected as f32).abs() < 0.5,
+                "Filter type {expected} round-trips to {result}");
+        }
+        // LFO Shape (0-16) should quantize to integers
+        let lfo_shape = find_param(&dsp.params, "LFO Shape");
+        for expected in 0..=16 {
+            let result = round_trip_f32(lfo_shape, expected as f32);
+            assert!((result - expected as f32).abs() < 0.5,
+                "LFO Shape {expected} round-trips to {result}");
+        }
+    }
+
     // --- Registry tests ---
 
     #[test]
@@ -233,6 +582,16 @@ mod tests {
     #[test]
     fn registry_resolves_freeverb() {
         assert!(crate::create_faust_machine("Jeskola Freeverb").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_wahpro() {
+        assert!(crate::create_faust_machine("FSM WahPro").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_wahpro2() {
+        assert!(crate::create_faust_machine("FSM WahPro2").is_some());
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! reads pattern data lazily so edits ahead of the cursor take effect.
 
 use alloc::vec::Vec;
-use mb_ir::{Effect, Event, MusicalTime, Song, Track};
+use mb_ir::{Effect, Event, EventPayload, EventTarget, MusicalTime, Song, Track};
 
 use crate::event_source::EventSource;
 use crate::scheduler::{schedule_cell, target_for_track_column};
@@ -31,6 +31,8 @@ pub struct ClipSourceState {
     rows_processed: u64,
     /// Whether this source is exhausted
     exhausted: bool,
+    /// True if this track uses param patterns (non-tracker effect machine)
+    is_param_track: bool,
     /// The time at which this source became exhausted (accounts for PatternBreak/PositionJump).
     end_time: Option<MusicalTime>,
 }
@@ -42,11 +44,14 @@ impl ClipSourceState {
         let time = track.sequence.first()
             .map(|e| e.start)
             .unwrap_or(MusicalTime::zero());
+        let is_tracker = song.is_tracker(track);
+        let has_param_clips = track.clips.iter().any(|c| c.param_pattern().is_some());
+        let is_param_track = !is_tracker && has_param_clips;
         let exhausted = track.sequence.is_empty()
             || track.muted
-            || !song.is_tracker(track);
+            || (!is_tracker && !is_param_track);
         let song_rpb = song.rows_per_beat as u32;
-        let initial_row = entry_start_row(track, 0, song_rpb);
+        let initial_row = if is_param_track { 0 } else { entry_start_row(track, 0, song_rpb) };
         Self {
             track_idx,
             seq_idx: 0,
@@ -57,6 +62,7 @@ impl ClipSourceState {
             max_rows: compute_max_rows(track, song_rpb),
             rows_processed: 0,
             exhausted,
+            is_param_track,
             end_time: if exhausted { Some(MusicalTime::zero()) } else { None },
         }
     }
@@ -76,7 +82,10 @@ impl ClipSourceState {
 fn compute_max_rows(track: &Track, song_rpb: u32) -> u64 {
     let channels = (track.num_channels as u64).max(1);
     let from_clips: u64 = track.clips.iter()
-        .filter_map(|c| c.pattern().map(|p| p.rows as u64))
+        .map(|c| match c {
+            mb_ir::Clip::Pattern(p) => p.rows as u64,
+            mb_ir::Clip::ParamPattern(pp) => pp.rows as u64,
+        })
         .sum();
     let from_seq: u64 = track.sequence.iter()
         .map(|e| e.duration.to_rows(song_rpb) as u64)
@@ -139,8 +148,9 @@ fn advance_to_seq_entry(track: &Track, seq_idx: usize, current: MusicalTime) -> 
     track.sequence.get(seq_idx).map_or(current, |e| e.start)
 }
 
-impl EventSource for ClipSourceState {
-    fn drain_until(&mut self, time: MusicalTime, song: &Song, out: &mut Vec<Event>) -> usize {
+impl ClipSourceState {
+    /// Drain events for a tracker track (note/effect cells).
+    fn drain_tracker_track(&mut self, time: MusicalTime, song: &Song, out: &mut Vec<Event>) -> usize {
         let start_len = out.len();
 
         while !self.exhausted && self.time <= time {
@@ -217,6 +227,81 @@ impl EventSource for ClipSourceState {
         }
 
         out.len() - start_len
+    }
+
+    /// Drain events for a param track (effect machine parameter automation).
+    fn drain_param_track(&mut self, time: MusicalTime, song: &Song, out: &mut Vec<Event>) -> usize {
+        let start_len = out.len();
+        let track = &song.tracks[self.track_idx];
+        let rpb = self.song_rpb;
+        let node_id = match track.machine_node {
+            Some(id) => id,
+            None => { self.exhausted = true; return 0; }
+        };
+        let target = EventTarget::Node(node_id);
+
+        while !self.exhausted && self.time <= time {
+            if self.seq_idx >= track.sequence.len() {
+                self.exhausted = true;
+                self.end_time = Some(self.time);
+                break;
+            }
+
+            let entry = &track.sequence[self.seq_idx];
+            let pp = match track.clips.get(entry.clip_idx as usize)
+                .and_then(|c| c.param_pattern())
+            {
+                Some(pp) => pp,
+                None => {
+                    self.seq_idx += 1;
+                    self.time = advance_to_seq_entry(track, self.seq_idx, self.time);
+                    self.row = 0;
+                    continue;
+                }
+            };
+
+            let duration_rows = entry.duration.to_rows(rpb) as u16;
+            let num_rows = duration_rows.min(pp.rows);
+
+            if self.row >= num_rows {
+                self.seq_idx += 1;
+                self.time = advance_to_seq_entry(track, self.seq_idx, self.time);
+                self.row = 0;
+                continue;
+            }
+
+            // Emit ParamChange events for this row
+            for col in 0..pp.columns.len() {
+                if let Some(value) = pp.value(self.row, col) {
+                    let (param_id, _) = pp.columns[col];
+                    out.push(Event::new(
+                        self.time,
+                        target,
+                        EventPayload::ParamChange { param: param_id, value },
+                    ));
+                }
+            }
+
+            self.time = self.time.add_rows(1, rpb);
+            self.row += 1;
+            self.rows_processed += 1;
+            if self.rows_processed >= self.max_rows {
+                self.exhausted = true;
+                self.end_time = Some(self.time);
+                break;
+            }
+        }
+
+        out.len() - start_len
+    }
+}
+
+impl EventSource for ClipSourceState {
+    fn drain_until(&mut self, time: MusicalTime, song: &Song, out: &mut Vec<Event>) -> usize {
+        if self.is_param_track {
+            return self.drain_param_track(time, song, out);
+        }
+        self.drain_tracker_track(time, song, out)
     }
 
     fn seek(&mut self, _time: MusicalTime, song: &Song) {

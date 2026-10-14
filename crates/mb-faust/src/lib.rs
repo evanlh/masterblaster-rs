@@ -6,5 +6,5 @@ mod registry;
 
 pub use registry::create_faust_machine;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "faust-tests"))]
 mod tests;

@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 use mb_ir::{
-    Cell, Effect, Event, EventPayload, EventTarget, MusicalTime, Note, Song,
+    Cell, Effect, Event, EventPayload, EventTarget, MusicalTime, Note, ParamPattern, Song,
     Track, VolumeCommand
 };
 
@@ -28,11 +28,23 @@ pub fn schedule_song(song: &Song) -> ScheduleResult {
     let mut events = Vec::new();
     let mut max_time = MusicalTime::zero();
 
-    for track in &song.tracks {
-        if track.muted || !song.is_tracker(track) {
-            continue;
+    for (ti, track) in song.tracks.iter().enumerate() {
+        if track.muted { continue; }
+        let is_tracker = song.is_tracker(track);
+        let before = events.len();
+        let t = if is_tracker {
+            schedule_track(track, song, &mut events)
+        } else {
+            schedule_param_track(track, song, &mut events)
+        };
+        let added = events.len() - before;
+        if !is_tracker {
+            eprintln!("[Scheduler] track {}: node {:?}, is_tracker={}, {} clips ({}pp), {} seq, {} events",
+                ti, track.machine_node, is_tracker,
+                track.clips.len(),
+                track.clips.iter().filter(|c| c.param_pattern().is_some()).count(),
+                track.sequence.len(), added);
         }
-        let t = schedule_track(track, song, &mut events);
         if t > max_time { max_time = t; }
     }
 
@@ -295,6 +307,67 @@ fn schedule_track(
 }
 
 
+/// Schedule events for a non-tracker (effect/generator) param track.
+///
+/// Iterates sequence entries, reads ParamPattern clips, and emits
+/// `ParamChange` events for each row where a parameter has a value.
+fn schedule_param_track(
+    track: &Track,
+    song: &Song,
+    events: &mut Vec<Event>,
+) -> MusicalTime {
+    let node_id = match track.machine_node {
+        Some(id) => id,
+        None => return MusicalTime::zero(),
+    };
+    let rpb = song.rows_per_beat as u32;
+    let target = EventTarget::Node(node_id);
+
+    let mut max_time = MusicalTime::zero();
+    for entry in &track.sequence {
+        let clip = track.clips.get(entry.clip_idx as usize);
+        let pp = match clip.and_then(|c| c.param_pattern()) {
+            Some(pp) => pp,
+            None => {
+                eprintln!("[Scheduler] param track node {:?}: clip_idx={} -> {:?}",
+                    track.machine_node, entry.clip_idx,
+                    clip.map(|c| match c { mb_ir::Clip::Pattern(_) => "Pattern", mb_ir::Clip::ParamPattern(_) => "ParamPattern" }));
+                continue;
+            }
+        };
+        let duration_rows = entry.duration.to_rows(rpb) as u16;
+        let num_rows = duration_rows.min(pp.rows);
+        schedule_param_rows(pp, num_rows, entry.start, rpb, target, events);
+        let end = entry.start + entry.duration;
+        if end > max_time { max_time = end; }
+    }
+    max_time
+}
+
+/// Emit ParamChange events for each non-empty cell in a ParamPattern.
+fn schedule_param_rows(
+    pp: &ParamPattern,
+    num_rows: u16,
+    start: MusicalTime,
+    rpb: u32,
+    target: EventTarget,
+    events: &mut Vec<Event>,
+) {
+    for row in 0..num_rows {
+        let time = start.add_rows(row as u32, rpb);
+        for col in 0..pp.columns.len() {
+            if let Some(value) = pp.value(row, col) {
+                let (param_id, _) = pp.columns[col];
+                events.push(Event::new(
+                    time,
+                    target,
+                    EventPayload::ParamChange { param: param_id, value },
+                ));
+            }
+        }
+    }
+}
+
 /// Get the start time for the next sequence entry, falling back to current time.
 ///
 /// Used when seq_idx advances: sets time to the entry's absolute start position.
@@ -343,7 +416,7 @@ fn scan_row_flow_control(pattern: &mb_ir::Pattern, row: u16) -> FlowControl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mb_ir::{build_tracks, OrderEntry, Pattern};
+    use mb_ir::{build_tracks, OrderEntry, Pattern, SeqEntry};
 
     /// Schedule and return just the events (convenience for tests).
     fn schedule_events(song: &Song) -> Vec<Event> {
@@ -955,6 +1028,86 @@ mod tests {
             .collect();
         // Only rows 0 and 2 should play (row 4 is beyond length=3)
         assert_eq!(notes.len(), 2, "break-truncated entry should only play rows 0-2");
+    }
+
+    // --- Param track scheduling tests ---
+
+    /// Build a song with a single non-tracker (effect) machine track containing a ParamPattern.
+    fn effect_machine_song(pp: mb_ir::ParamPattern) -> Song {
+        let mut song = Song::new("test");
+        let node_id = song.graph.add_node(mb_ir::NodeType::Machine {
+            machine_name: alloc::string::String::from("TestEffect"),
+            is_tracker: false,
+        });
+        song.graph.connect(node_id, 0); // effect → master
+
+        let mut track = Track::new(Some(node_id), 0, 0);
+        let rows = pp.rows;
+        track.clips.push(mb_ir::Clip::ParamPattern(pp));
+        track.sequence.push(SeqEntry {
+            start: MusicalTime::zero(),
+            clip_idx: 0,
+            duration: MusicalTime::from_rows(rows as u32, 4),
+            clip_offset: MusicalTime::zero(),
+            termination: mb_ir::SeqTermination::Natural,
+        });
+        song.tracks.push(track);
+        song
+    }
+
+    #[test]
+    fn param_track_emits_param_change_events() {
+        let pp = mb_ir::ParamPattern {
+            rows: 4,
+            columns: alloc::vec![(0, -1), (1, -1)],
+            values: alloc::vec![
+                100, -1,   // row 0: param 0 = 100
+                -1, 200,   // row 1: param 1 = 200
+                -1, -1,    // row 2: nothing
+                50, 60,    // row 3: both params
+            ],
+        };
+        let song = effect_machine_song(pp);
+        let events = schedule_events(&song);
+
+        let param_events: Vec<_> = events.iter()
+            .filter_map(|e| match &e.payload {
+                EventPayload::ParamChange { param, value } => Some((e.time, *param, *value)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(param_events.len(), 4);
+        assert_eq!(param_events[0], (time_at_row(0), 0, 100));
+        assert_eq!(param_events[1], (time_at_row(1), 1, 200));
+        assert_eq!(param_events[2], (time_at_row(3), 0, 50));
+        assert_eq!(param_events[3], (time_at_row(3), 1, 60));
+    }
+
+    #[test]
+    fn param_track_empty_pattern_produces_no_events() {
+        let pp = mb_ir::ParamPattern {
+            rows: 4,
+            columns: alloc::vec![(0, -1)],
+            values: alloc::vec![-1, -1, -1, -1],
+        };
+        let song = effect_machine_song(pp);
+        assert!(schedule_events(&song).is_empty());
+    }
+
+    #[test]
+    fn param_track_targets_node() {
+        let pp = mb_ir::ParamPattern {
+            rows: 1,
+            columns: alloc::vec![(0, -1)],
+            values: alloc::vec![42],
+        };
+        let song = effect_machine_song(pp);
+        let events = schedule_events(&song);
+
+        assert_eq!(events.len(), 1);
+        let node_id = song.tracks[0].machine_node.unwrap();
+        assert_eq!(events[0].target, EventTarget::Node(node_id));
     }
 
 }

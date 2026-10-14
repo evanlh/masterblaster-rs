@@ -13,6 +13,8 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "Jeskola Filter 2" => ("filter2", include_str!("../../../faust/filter2.dsp")),
         "Jeskola Reverb 2" => ("reverb2", include_str!("../../../faust/reverb2.dsp")),
         "Jeskola Freeverb" => ("reverb", include_str!("../../../faust/reverb.dsp")),
+        "FSM WahPro" => ("wahpro", include_str!("../../../faust/wahpro.dsp")),
+        "FSM WahPro2" => ("wahpro2", include_str!("../../../faust/wahpro2.dsp")),
         _ => return None,
     };
     FaustMachine::from_source(dsp_name, source)
