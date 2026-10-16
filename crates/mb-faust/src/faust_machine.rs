@@ -1,6 +1,6 @@
 //! FaustMachine — Machine adapter for JIT-compiled Faust DSPs.
 
-use mb_ir::{AudioBuffer, AudioStream, ChannelConfig};
+use mb_ir::{AudioBuffer, AudioStream, ChannelConfig, BLOCK_SIZE};
 use mb_engine::machine::{Machine, MachineInfo, MachineType};
 
 use crate::compiler::CompiledDsp;
@@ -15,6 +15,10 @@ pub struct FaustMachine {
     /// Scratch buffers for Faust inputs beyond AudioBuffer channels.
     extra_input_bufs: Vec<Vec<f32>>,
     output_bufs: Vec<Vec<f32>>,
+    /// Per-render pointer arrays, pre-sized to the DSP's I/O count. Overwritten
+    /// in place each render so the audio thread never heap-allocates.
+    input_ptrs: Vec<*const f32>,
+    output_ptrs: Vec<*mut f32>,
 }
 
 // Safety: CompiledDsp is Send, and we only access from one thread.
@@ -32,8 +36,20 @@ impl FaustMachine {
         // Extra input buffers for Faust inputs beyond the 2-channel AudioBuffer
         let extra_count = dsp.num_inputs.saturating_sub(2);
         let extra_input_bufs = (0..extra_count).map(|_| Vec::new()).collect();
-        let output_bufs = (0..dsp.num_outputs).map(|_| Vec::new()).collect();
-        Self { dsp, info, sample_rate: 44100, extra_input_bufs, output_bufs }
+        // Output buffers are pre-sized to BLOCK_SIZE so `resize` never allocates
+        // during render.
+        let output_bufs = (0..dsp.num_outputs).map(|_| Vec::with_capacity(BLOCK_SIZE)).collect();
+        let input_ptrs = vec![std::ptr::null::<f32>(); dsp.num_inputs];
+        let output_ptrs = vec![std::ptr::null_mut::<f32>(); dsp.num_outputs];
+        Self {
+            dsp,
+            info,
+            sample_rate: 44100,
+            extra_input_bufs,
+            output_bufs,
+            input_ptrs,
+            output_ptrs,
+        }
     }
 
     /// Compile from source and wrap as a Machine.
@@ -73,33 +89,32 @@ impl AudioStream for FaustMachine {
             buf.iter_mut().for_each(|s| *s = 0.0);
         }
 
-        // Build input pointers: first from AudioBuffer, rest from zero-filled extras
-        let input_ptrs: Vec<*const f32> = (0..self.dsp.num_inputs)
-            .map(|i| {
-                if i < buf_channels {
-                    output.channel(i as u16).as_ptr()
-                } else {
-                    self.extra_input_bufs[i - buf_channels].as_ptr()
-                }
-            })
-            .collect();
-
-        // Ensure scratch output buffers are large enough
-        for buf in &mut self.output_bufs {
-            buf.resize(frames, 0.0);
-            buf.iter_mut().for_each(|s| *s = 0.0);
+        // Update input pointers in place: first from AudioBuffer, rest from extras
+        for i in 0..self.dsp.num_inputs {
+            self.input_ptrs[i] = if i < buf_channels {
+                output.channel(i as u16).as_ptr()
+            } else {
+                self.extra_input_bufs[i - buf_channels].as_ptr()
+            };
         }
 
-        let mut output_ptrs: Vec<*mut f32> = self.output_bufs.iter_mut()
-            .map(|b| b.as_mut_ptr())
-            .collect();
+        // Ensure scratch output buffers are large enough. Faust overwrites every
+        // output sample, so no zeroing is needed here.
+        for buf in &mut self.output_bufs {
+            buf.resize(frames, 0.0);
+        }
+
+        // Update output pointers in place (no allocation)
+        for (i, buf) in self.output_bufs.iter_mut().enumerate() {
+            self.output_ptrs[i] = buf.as_mut_ptr();
+        }
 
         unsafe {
             ffi::computeCDSPInstance(
                 self.dsp.instance(),
                 frames as i32,
-                input_ptrs.as_ptr(),
-                output_ptrs.as_mut_ptr(),
+                self.input_ptrs.as_ptr(),
+                self.output_ptrs.as_mut_ptr(),
             );
         }
 

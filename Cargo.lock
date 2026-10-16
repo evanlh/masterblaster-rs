@@ -1571,6 +1571,7 @@ dependencies = [
 name = "mb-faust"
 version = "0.1.0"
 dependencies = [
+ "assert_no_alloc",
  "dirs",
  "mb-engine",
  "mb-ir",
