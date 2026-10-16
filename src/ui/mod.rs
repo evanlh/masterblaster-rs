@@ -49,6 +49,9 @@ pub struct GuiState {
     pub(crate) seq_lookups: Option<Vec<HashMap<u32, SeqCellContent>>>,
     /// A3: Cached modeline string keyed by packed track positions.
     pub(crate) modeline_cache: Option<(Vec<Option<mb_ir::TrackPlaybackPosition>>, String)>,
+    /// T2: Scratch buffer reused to compare modeline positions each frame
+    /// without allocating.
+    pub(crate) modeline_positions: Vec<Option<mb_ir::TrackPlaybackPosition>>,
     /// A4: Cached clip info for patterns panel (selected_track, [(index, rows)]).
     pub(crate) cached_clip_info: Option<(usize, Vec<(usize, u16)>)>,
 }
@@ -67,6 +70,7 @@ impl Default for GuiState {
             undo_stack: UndoStack::new(),
             seq_lookups: None,
             modeline_cache: None,
+            modeline_positions: Vec::new(),
             cached_clip_info: None,
         }
     }
@@ -169,24 +173,35 @@ pub fn build_ui(ui: &imgui::Ui, gui: &mut GuiState) {
 /// Track position modeline: shows per-machine playback position.
 /// Cached — only rebuilds the string when any track position changes.
 fn track_position_modeline(ui: &imgui::Ui, gui: &mut GuiState) {
-    let song = gui.controller.song();
-    if song.tracks.is_empty() {
+    let num_tracks = gui.controller.song().tracks.len();
+    if num_tracks == 0 {
         return;
     }
-    let positions: Vec<Option<mb_ir::TrackPlaybackPosition>> =
-        (0..song.tracks.len()).map(|i| gui.controller.track_position(i)).collect();
+
+    // Refill the scratch buffer in place (reuses capacity, no allocation).
+    let scratch = &mut gui.modeline_positions;
+    scratch.clear();
+    for i in 0..num_tracks {
+        scratch.push(gui.controller.track_position(i));
+    }
 
     let need_rebuild = match &gui.modeline_cache {
-        Some((cached_pos, _)) => cached_pos != &positions,
+        Some((cached_pos, _)) => cached_pos != &*scratch,
         None => true,
     };
 
     if need_rebuild {
-        let text = build_modeline_string(song, &positions);
-        gui.modeline_cache = Some((positions, text));
+        let text = build_modeline_string(gui.controller.song(), scratch);
+        match &mut gui.modeline_cache {
+            Some((cached_pos, cached_text)) => {
+                cached_pos.clone_from(scratch);
+                *cached_text = text;
+            }
+            None => gui.modeline_cache = Some((scratch.to_vec(), text)),
+        }
     }
 
-    if let Some((_, ref text)) = gui.modeline_cache {
+    if let Some((_, text)) = &gui.modeline_cache {
         ui.text(text);
     }
 }
