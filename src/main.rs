@@ -11,6 +11,11 @@ use winit::window::WindowId;
 /// Idle timeout — redraw at least this often when stopped (for cursor blink, etc.)
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+/// Playback throttle — redraw the UI at most this often while playing. The
+/// position modeline and playing-row highlight don't need vsync, and spinning
+/// at vsync steals CPU from the audio thread (design 026 T1).
+const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(33);
+
 fn main() {
     let event_loop = EventLoop::new().unwrap();
     let mut handler = AppHandler {
@@ -81,17 +86,22 @@ impl ApplicationHandler for AppHandler {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let Some(app) = &self.app else { return };
 
-        if self.needs_redraw || self.is_playing() {
+        if self.needs_redraw {
+            // Input or state change: redraw promptly.
             self.needs_redraw = false;
             app.window().request_redraw();
-            // During playback, keep rendering at vsync rate
             event_loop.set_control_flow(ControlFlow::Poll);
+        } else if self.is_playing() {
+            // Playback: redraw at a throttled rate instead of spinning at vsync.
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + PLAYBACK_POLL_INTERVAL,
+            ));
+            app.window().request_redraw();
         } else {
-            // Idle: sleep until next input or timeout
+            // Idle: sleep until input or the idle timeout (cursor blink).
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + IDLE_POLL_INTERVAL,
             ));
-            // Still redraw on timeout (for cursor blink, etc.)
             app.window().request_redraw();
         }
     }
