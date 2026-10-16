@@ -64,6 +64,7 @@ glutin = { workspace = true }
 glutin-winit = { workspace = true }
 raw-window-handle = { workspace = true }
 rfd = { workspace = true }
+assert_no_alloc = { version = "1.1", optional = true }
 
 [[bin]]
 name = "mb-cli"
@@ -72,7 +73,7 @@ path = "src/bin/cli.rs"
 [features]
 default = ["faust"]
 test-harness = ["png"]
-alloc_check = ["mb-master/alloc_check"]
+alloc_check = ["mb-master/alloc_check", "dep:assert_no_alloc"]
 faust = ["mb-master/faust"]
 
 [[test]]

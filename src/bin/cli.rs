@@ -10,6 +10,14 @@ use mb_master::Controller;
 use std::io::Write;
 use std::{env, fs};
 
+// `alloc_check` installs `assert_no_alloc`'s allocator so the audio thread's
+// `assert_no_alloc` guards actually detect allocations. The allocator is only
+// available (and only compiled) in debug builds — assert_no_alloc is a no-op in
+// release — so this is gated on `debug_assertions` to match.
+#[cfg(all(feature = "alloc_check", debug_assertions))]
+#[global_allocator]
+static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let path = args.get(1).unwrap_or_else(|| {

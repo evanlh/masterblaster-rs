@@ -8,6 +8,14 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
 
+// `alloc_check` installs `assert_no_alloc`'s allocator so the audio thread's
+// `assert_no_alloc` guards actually detect allocations. The allocator is only
+// available (and only compiled) in debug builds — assert_no_alloc is a no-op in
+// release — so this is gated on `debug_assertions` to match.
+#[cfg(all(feature = "alloc_check", debug_assertions))]
+#[global_allocator]
+static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
+
 /// Idle timeout — redraw at least this often when stopped (for cursor blink, etc.)
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
