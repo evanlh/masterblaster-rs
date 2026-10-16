@@ -1,11 +1,11 @@
 # 026: Playback Performance Optimization
 
 Created: 20261014
-Updated: 20261014
+Updated: 20261016
 
 ## Status
 
-- [ ] A1: Eliminate per-block allocations in `FaustMachine::render`
+- [x] A1: Eliminate per-block allocations in `FaustMachine::render`
 - [ ] A2: Single-dispatch mono/stereo interpolation in `SampleData::get_stereo_interpolated`
 - [ ] A3: Hoist `has_loop()` / `len()` / loop bounds out of the per-sample loop
 - [ ] A4: Remove the event `.clone()` in the dispatch loop
@@ -14,8 +14,8 @@ Updated: 20261014
 - [ ] A7: Lazy `clear_outputs` (only silence buffers actually written)
 - [ ] M1: Parallel render of independent topo "levels"
 - [ ] M2: Parallel offline render
-- [ ] T1: Throttle the winit redraw loop during playback (`ControlFlow::Poll` → `WaitUntil`)
-- [ ] T2: Remove per-frame allocation in `track_position_modeline`
+- [x] T1: Throttle the winit redraw loop during playback (`ControlFlow::Poll` → `WaitUntil`)
+- [x] T2: Remove per-frame allocation in `track_position_modeline`
 - [ ] T3: Hoist the per-cell clip/pattern lookup in the pattern editor
 - [ ] T4: Cache the graph-panel layout (`compute_graph_layers` + node centers)
 
