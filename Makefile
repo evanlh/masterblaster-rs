@@ -1,4 +1,4 @@
-.PHONY: ci test test-gui test-faust bench
+.PHONY: ci test test-gui test-faust bench bench-faust
 
 # Run everything: tests, GUI tests, benchmarks
 ci: test test-faust test-gui bench
@@ -18,3 +18,7 @@ test-gui:
 # Criterion benchmarks (quick mode)
 bench:
 	cargo bench -p mb-engine --bench engine_bench -- --quick
+
+# Faust render benchmarks (requires libfaust)
+bench-faust:
+	cargo bench -p mb-faust --bench faust_render -- --quick
