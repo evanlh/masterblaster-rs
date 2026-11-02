@@ -369,6 +369,19 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn delay_param_ordering_and_ranges() {
+        assert_params_match("delay", "delay.dsp", &[
+            // Dry thru is a switch declared -1/-1; Faust forbids init 1 outside
+            // that range and masterblaster always delivers 0, so the DSP pins it.
+            ExpectedParam { label: "Dry thru",    min: -1.0, max: -1.0,    init: -1.0 },
+            ExpectedParam { label: "Length",      min: 1.0,  max: 32768.0, init: 3.0 },
+            ExpectedParam { label: "Length unit", min: 0.0,  max: 3.0,     init: 0.0 },
+            ExpectedParam { label: "Feedback",    min: 0.0,  max: 128.0,   init: 96.0 },
+            ExpectedParam { label: "Wet out",     min: 0.0,  max: 128.0,   init: 48.0 },
+        ]);
+    }
+
     /// Set each BMX param index to max and check it lands on the
     /// identically-labelled Faust param (C++ pParameters[] order).
     fn assert_set_param_routes(dsp_name: &str, dsp_file: &str, bmx_order: &[&str]) {
@@ -409,6 +422,40 @@ mod tests {
         assert_set_param_routes("reverb2", "reverb2.dsp", &[
             "Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay", "High Cutoff",
         ]);
+    }
+
+    #[test]
+    fn delay_set_param_follows_bmx_order() {
+        assert_set_param_routes("delay", "delay.dsp", &[
+            "Dry thru", "Length", "Length unit", "Feedback", "Wet out",
+        ]);
+    }
+
+    /// Render a one-sample impulse through the delay at its defaults.
+    fn delay_impulse_response(frames: usize) -> Vec<f32> {
+        let source = std::fs::read_to_string(
+            format!("{}/../../faust/delay.dsp", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let mut machine = FaustMachine::from_source("delay", &source).unwrap();
+        machine.init(44100);
+        let mut out = Vec::with_capacity(frames);
+        let mut first = true;
+        while out.len() < frames {
+            let mut buf = AudioBuffer::new(2, 256);
+            if first { buf.channel_mut(0)[0] = 1.0; buf.channel_mut(1)[0] = 1.0; first = false; }
+            machine.render(&mut buf);
+            out.extend_from_slice(buf.channel(0));
+        }
+        out
+    }
+
+    #[test]
+    fn delay_defaults_echo_every_three_ticks() {
+        // Defaults: 3 ticks (3 * 5250 samples), feedback 0x60 = +50%, wet 0x30 = 37.5%.
+        let ir = delay_impulse_response(32000);
+        assert!((ir[0] - 1.0).abs() < 1e-6, "dry thru at unity, got {}", ir[0]);
+        assert!((ir[15750] - 0.375).abs() < 1e-6, "first echo, got {}", ir[15750]);
+        assert!((ir[31500] - 0.1875).abs() < 1e-6, "second echo, got {}", ir[31500]);
+        assert_eq!(ir[15749], 0.0);
     }
 
     #[test]
@@ -592,6 +639,11 @@ mod tests {
     #[test]
     fn registry_resolves_wahpro2() {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_delay() {
+        assert!(crate::create_faust_machine("Jeskola Delay").is_some());
     }
 
     #[test]
