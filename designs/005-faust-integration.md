@@ -1,7 +1,7 @@
 # Faust DSP Integration Design
 
 Created: 20260213
-Updated: 20261014
+Updated: 20261103
 
 
 ## Status
@@ -823,6 +823,7 @@ standing in for a Buzz machine must match it on three things:
 | Jeskola Filter 2 | Type, Cutoff, Resonance | BMX PARA |
 | Jeskola Reverb 2 | Dry Out 0..4096 (4096), Rev Out 0..4096 (768), ER Out 0..4096 (0), Rev Time 1..64 (10), Pre-Delay 0..100 ms (0), High Cutoff 100..16384 Hz (5000) | BMX PARA; DSP mapping is guessed |
 | Jeskola Freeverb | Rev Time, HF Damp, Pre Delay, Low Cut, High Cut, Rev Out, Dry Out (all 0..127) | C++ `Jeskola/Freeverb` |
+| Jeskola Cross Delay | Dry thru (switch, pinned on), L. Length, R. Length 1..32768 (3), Length unit 0..3 (0), Feedback 0..128 (96), Wet out 0..128 (48) | info.json + oracle measurements (clean room); tick fixed at 126 BPM / 4 TPB |
 
 ### Tests
 
