@@ -512,6 +512,56 @@ mod tests {
         assert!(peak < 0.01, "both outputs at 0 should be near-silent, peak={peak}");
     }
 
+    // --- Geonik's Compressor ---
+
+    const GC_DSP: (&str, &str) = ("geonik_compressor", "geonik_compressor.dsp");
+
+    #[test]
+    fn geonik_compressor_param_ordering_and_ranges() {
+        assert_params_match(GC_DSP.0, GC_DSP.1, &[
+            ExpectedParam { label: "Threshold", min: 0.0,  max: 128.0,  init: 92.0 },
+            ExpectedParam { label: "Ratio",     min: 0.0,  max: 240.0,  init: 20.0 },
+            ExpectedParam { label: "Attack",    min: 5.0,  max: 8000.0, init: 10.0 },
+            ExpectedParam { label: "Release",   min: 30.0, max: 8000.0, init: 2000.0 },
+            ExpectedParam { label: "Gain",      min: 0.0,  max: 128.0,  init: 6.0 },
+        ]);
+    }
+
+    #[test]
+    fn geonik_compressor_set_param_follows_bmx_order() {
+        assert_set_param_routes(GC_DSP.0, GC_DSP.1, &["Threshold", "Ratio", "Attack", "Release", "Gain"]);
+    }
+
+    /// Steady-state output/input amplitude ratio of a 1 kHz sine at `amp`.
+    fn geonik_compressor_steady_gain(params: &[(u16, i32)], amp: f32) -> f32 {
+        let mut machine = FaustMachine::new(load_dsp(GC_DSP.0, GC_DSP.1));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, v));
+        let input = sine(1000.0, 44100 * 3).iter().map(|s| s * 2.0 * amp).collect::<Vec<_>>();
+        let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
+        rms(&out[out.len() - 4410..]) / rms(&input[input.len() - 4410..])
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn geonik_compressor_compresses_linearly_above_threshold() {
+        // Defaults: threshold 2^-3 (-18 dB), 3:1, gain 2^0.5 (+3 dB), release 30 ms
+        // so the start-up fade-in has settled. A 0 dBFS sine has RMS 0.7071.
+        let got = geonik_compressor_steady_gain(&[(3, 0)], 1.0);
+        let (thr, e) = (0.125f32, 0.70710677f32);
+        let expected = (thr + (e - thr) / 3.0) / e * 2f32.sqrt();
+        assert!((got - expected).abs() < 0.01, "expected {expected}, got {got}");
+    }
+
+    #[test]
+    fn geonik_compressor_passes_quiet_signals_with_output_gain() {
+        let got = geonik_compressor_steady_gain(&[(3, 0)], 0.01);
+        assert!((got - 2f32.sqrt()).abs() < 0.01, "expected sqrt(2), got {got}");
+    }
+
     // --- Round-trip scaling tests ---
 
     fn round_trip_f32(param: &crate::ui_visitor::FaustParam, raw: f32) -> f32 {
@@ -592,6 +642,11 @@ mod tests {
     #[test]
     fn registry_resolves_wahpro2() {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_geonik_compressor() {
+        assert!(crate::create_faust_machine("Geonik's Compressor").is_some());
     }
 
     #[test]
