@@ -277,6 +277,22 @@ mod tests {
         assert!(rms < 1.0, "LP filter should attenuate 10kHz, RMS={rms}");
     }
 
+    #[test]
+    fn wahpro2_bandpeak_dc_gain_matches_measured() {
+        // Filter 2 (single peaking EQ) passes DC at 1.2 / (7 - res/60) = 0.24 at res 120,
+        // as measured from the original's per-block filter fits.
+        let mut machine = FaustMachine::new(load_dsp("wahpro2", "wahpro2.dsp"));
+        machine.init(44100);
+        machine.set_param(2, 18724); // Filter = 2
+        machine.set_param(4, 0);     // LFO mod = 0
+        let mut buf = AudioBuffer::new(2, 8192);
+        buf.channel_mut(0).fill(0.5);
+        buf.channel_mut(1).fill(0.5);
+        machine.render(&mut buf);
+        let last = buf.channel(0)[8191];
+        assert!((last - 0.12).abs() < 0.002, "DC gain should be 0.24, got {}", last / 0.5);
+    }
+
     // --- Parameter ordering + range validation ---
 
     struct ExpectedParam {
