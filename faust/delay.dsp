@@ -24,24 +24,18 @@
 // it per Work() chunk (<= 256 samples), so the cut can land up to one
 // chunk later than here.
 //
-// Known masterblaster limitations:
-//   * "Dry thru" is a switch declared -1..-1 (min == max); masterblaster
-//     always delivers it as 0, so it is pinned to its default (1 = dry on).
-//     Faust rejects an init outside [min, max], so the slider is declared
-//     -1/-1 with init -1 (schema check: default 1 vs -1) and ignored.
-//     Configurations with Dry thru = 0 therefore keep the dry signal.
+// Parameters:
+//   * "Dry thru" is a 0/1 switch (Buzz declares it -1/-1; masterblaster maps
+//     switches 0 -> 0 and 1 -> 65535), so the slider is 0..1, default 1.
+// Known masterblaster limitation:
 //   * masterblaster gives Faust no tempo; a tick is fixed at 126 BPM / 4 TPB.
 import("stdfaust.lib");
 
-dryThru = hslider("[0]Dry thru", -1, -1, -1, 1) : pin(1);
+dryThru = hslider("[0]Dry thru", 1, 0, 1, 1) : rint;
 lengthRaw = hslider("[1]Length", 3, 1, 32768, 1) : rint;
 unitRaw = hslider("[2]Length unit", 0, 0, 3, 1) : rint;
 feedbackRaw = hslider("[3]Feedback", 96, 0, 128, 1) : rint;
 wetRaw = hslider("[4]Wet out", 48, 0, 128, 1) : rint;
-
-// Returns v but still reads x, so Faust keeps the slider in the UI (an
-// unused slider would be dropped and shift every later param index).
-pin(v, x) = ba.if(x == 12345.0, x, v);
 
 maxDelay = 65536;
 maxSamples = int(ma.SR);                       // Max Delay attribute: 1000 ms

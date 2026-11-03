@@ -372,9 +372,9 @@ mod tests {
     #[test]
     fn delay_param_ordering_and_ranges() {
         assert_params_match("delay", "delay.dsp", &[
-            // Dry thru is a switch declared -1/-1; Faust forbids init 1 outside
-            // that range and masterblaster always delivers 0, so the DSP pins it.
-            ExpectedParam { label: "Dry thru",    min: -1.0, max: -1.0,    init: -1.0 },
+            // Dry thru is a switch (Buzz declares -1/-1); masterblaster maps
+            // switches 0 -> 0 and 1 -> 65535, so the slider is 0..1.
+            ExpectedParam { label: "Dry thru",    min: 0.0,  max: 1.0,     init: 1.0 },
             ExpectedParam { label: "Length",      min: 1.0,  max: 32768.0, init: 3.0 },
             ExpectedParam { label: "Length unit", min: 0.0,  max: 3.0,     init: 0.0 },
             ExpectedParam { label: "Feedback",    min: 0.0,  max: 128.0,   init: 96.0 },
@@ -431,12 +431,13 @@ mod tests {
         ]);
     }
 
-    /// Render a one-sample impulse through the delay at its defaults.
-    fn delay_impulse_response(frames: usize) -> Vec<f32> {
+    /// Render a one-sample impulse through the delay after `setup`.
+    fn delay_impulse_response(frames: usize, setup: impl Fn(&mut FaustMachine)) -> Vec<f32> {
         let source = std::fs::read_to_string(
             format!("{}/../../faust/delay.dsp", env!("CARGO_MANIFEST_DIR"))).unwrap();
         let mut machine = FaustMachine::from_source("delay", &source).unwrap();
         machine.init(44100);
+        setup(&mut machine);
         let mut out = Vec::with_capacity(frames);
         let mut first = true;
         while out.len() < frames {
@@ -451,11 +452,19 @@ mod tests {
     #[test]
     fn delay_defaults_echo_every_three_ticks() {
         // Defaults: 3 ticks (3 * 5250 samples), feedback 0x60 = +50%, wet 0x30 = 37.5%.
-        let ir = delay_impulse_response(32000);
+        let ir = delay_impulse_response(32000, |_| {});
         assert!((ir[0] - 1.0).abs() < 1e-6, "dry thru at unity, got {}", ir[0]);
         assert!((ir[15750] - 0.375).abs() < 1e-6, "first echo, got {}", ir[15750]);
         assert!((ir[31500] - 0.1875).abs() < 1e-6, "second echo, got {}", ir[31500]);
         assert_eq!(ir[15749], 0.0);
+    }
+
+    #[test]
+    fn delay_dry_thru_off_removes_dry_signal() {
+        // masterblaster scales a switch's 0 to 0 (and 1 to 65535).
+        let ir = delay_impulse_response(16000, |m| m.set_param(0, 0));
+        assert_eq!(ir[0], 0.0, "dry thru off");
+        assert!((ir[15750] - 0.375).abs() < 1e-6, "echo kept, got {}", ir[15750]);
     }
 
     #[test]
