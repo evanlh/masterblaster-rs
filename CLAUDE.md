@@ -102,7 +102,6 @@ HTML reports are generated in `target/criterion/`.
 - 16.16 fixed-point position limits sample addressing to 65535 frames — large MOD samples (>64KB) would wrap
 - `period_to_note` quantizes to nearest semitone, losing finetune precision vs direct period-based playback
 - Most Buzz machines fall through to PassthroughMachine (only Filter 2, Reverb 2, Freeverb, WahPro, WahPro2 have Faust implementations)
-- Jeskola Reverb 2 DSP is an approximation (no C++ source); only its param order/ranges are faithful
 - Pressing Play pauses while Faust JIT-compiles machines (~0.5–0.8s per WahPro2) — see [designs/024](designs/024-eager-faust-compilation.md)
 
 ## Architecture Reminders
@@ -158,7 +157,7 @@ masterblaster-rs/
 │       └── undo.rs          # Undo/redo stack
 ├── faust/                  # Faust DSP source files
 │   ├── filter2.dsp         # Jeskola Filter 2 (multimode SVF)
-│   ├── reverb2.dsp         # Jeskola Reverb 2 (Schroeder + ER + high cutoff)
+│   ├── reverb2.dsp         # Jeskola Reverb 2 (Gardner medium room + Moorer ER, measured from oracles)
 │   ├── reverb.dsp          # Jeskola Freeverb (Freeverb + hi/lo cut + pre-delay)
 │   ├── wahpro.dsp          # FSM WahPro
 │   └── wahpro2.dsp         # FSM WahPro2
