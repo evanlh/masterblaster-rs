@@ -418,6 +418,80 @@ mod tests {
         ]);
     }
 
+    // --- Automaton Compressor mkII ---
+
+    const ACM2: (&str, &str) = ("automaton_compressor_mkii", "automaton_compressor_mkii.dsp");
+    const ACM2_ORDER: [&str; 7] = ["Mode", "Channel", "Threshold", "Ratio", "Attack", "Release", "Gain"];
+
+    #[test]
+    fn automaton_compressor_mkii_param_ordering_and_ranges() {
+        assert_params_match(ACM2.0, ACM2.1, &[
+            ExpectedParam { label: "Mode",      min: 0.0, max: 2.0,     init: 0.0 },
+            ExpectedParam { label: "Channel",   min: 1.0, max: 32.0,    init: 1.0 },
+            ExpectedParam { label: "Threshold", min: 0.0, max: 65534.0, init: 47512.0 },
+            ExpectedParam { label: "Ratio",     min: 0.0, max: 65534.0, init: 0.0 },
+            ExpectedParam { label: "Attack",    min: 0.0, max: 65534.0, init: 12577.0 },
+            ExpectedParam { label: "Release",   min: 0.0, max: 65534.0, init: 7452.0 },
+            ExpectedParam { label: "Gain",      min: 0.0, max: 65534.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn automaton_compressor_mkii_set_param_follows_bmx_order() {
+        assert_set_param_routes(ACM2.0, ACM2.1, &ACM2_ORDER);
+    }
+
+    /// Steady-state output level of a constant 0.5 input after `params` (BMX-scaled 0..65535).
+    fn acm2_steady_level(params: &[(u16, i32)]) -> f32 {
+        let mut machine = FaustMachine::new(load_dsp(ACM2.0, ACM2.1));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, v));
+        (0..400).flat_map(|_| render_left(&mut machine, &[0.5; 256])).last().unwrap()
+    }
+
+    #[test]
+    fn automaton_compressor_mkii_defaults_pass_through() {
+        let level = acm2_steady_level(&[]);
+        assert!((level - 0.5).abs() < 1e-4, "ratio 1:1 should be unity, got {level}");
+    }
+
+    #[test]
+    fn automaton_compressor_mkii_max_ratio_approaches_one_over_25() {
+        // Threshold min (-64 dB), ratio 25:1: gain = 1/25 + T/env * 24/25.
+        let level = acm2_steady_level(&[(2, 0), (3, 65535)]);
+        let t = 10f32.powf(-64.0 / 20.0);
+        let expected = 0.5 * (1.0 / 25.0 + t / 0.5 * 24.0 / 25.0);
+        assert!((level - expected).abs() < 1e-4, "expected {expected}, got {level}");
+    }
+
+    #[test]
+    fn automaton_compressor_mkii_gain_is_db_linear() {
+        let level = acm2_steady_level(&[(6, 32768)]);
+        let expected = 0.5 * 10f32.powf(32.0 / 20.0);
+        assert!((level / expected - 1.0).abs() < 1e-3, "expected {expected}, got {level}");
+    }
+
+    #[test]
+    fn automaton_compressor_mkii_level_mode_is_silent() {
+        assert_eq!(acm2_steady_level(&[(0, 65535)]), 0.0);
+    }
+
+    #[test]
+    fn automaton_compressor_mkii_integer_params_quantize_cleanly() {
+        let dsp = load_dsp(ACM2.0, ACM2.1);
+        let quantizes = |label: &str, range: std::ops::RangeInclusive<i32>| range.for_each(|v| {
+            let got = round_trip_f32(find_param(&dsp.params, label), v as f32);
+            assert!((got - v as f32).abs() < 0.5, "{label} {v} round-trips to {got}");
+        });
+        quantizes("Mode", 0..=2);
+        quantizes("Channel", 1..=32);
+    }
+
+    #[test]
+    fn registry_resolves_automaton_compressor_mkii() {
+        assert!(crate::create_faust_machine("Automaton Compressor mkII").is_some());
+    }
+
     // --- Jeskola Reverb 2 behaviour ---
 
     const RV2_DRY_OUT: u16 = 0;
