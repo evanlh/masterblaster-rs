@@ -616,4 +616,68 @@ mod tests {
             .expect("factory should be cached after compile_cached");
         unsafe { crate::ffi::deleteCDSPFactory(factory); }
     }
+
+    // --- Argüelles KFlanger ---
+
+    #[test]
+    fn kflanger_param_ordering_and_ranges() {
+        assert_params_match("kflanger", "kflanger.dsp", &[
+            ExpectedParam { label: "Min Flanger",  min: 0.0, max: 254.0,   init: 0.0 },
+            ExpectedParam { label: "Max Flanger",  min: 0.0, max: 254.0,   init: 127.0 },
+            ExpectedParam { label: "Flanger Mode", min: 0.0, max: 1.0,     init: 0.0 },
+            ExpectedParam { label: "Sweep Speed",  min: 0.0, max: 254.0,   init: 1.0 },
+            ExpectedParam { label: "Feedback",     min: 0.0, max: 65534.0, init: 32767.0 },
+        ]);
+    }
+
+    #[test]
+    fn kflanger_set_param_follows_bmx_order() {
+        assert_set_param_routes("kflanger", "kflanger.dsp", &[
+            "Min Flanger", "Max Flanger", "Flanger Mode", "Sweep Speed", "Feedback",
+        ]);
+    }
+
+    const KF_MODE: u16 = 2;
+    const KF_SPEED: u16 = 3;
+
+    fn kflanger_with(params: &[(u16, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("kflanger", "kflanger.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, v));
+        machine
+    }
+
+    /// Renders `blocks` successive 256-sample blocks of the same input.
+    fn kflanger_blocks(machine: &mut FaustMachine, input: &[f32], blocks: usize) -> Vec<Vec<f32>> {
+        (0..blocks).map(|_| render_left(machine, input)).collect()
+    }
+
+    /// Ramp input whose value encodes its position, so delays are readable.
+    fn kflanger_ramp() -> Vec<f32> {
+        (0..256).map(|i| (i as f32 + 1.0) / 512.0).collect()
+    }
+
+    #[test]
+    fn kflanger_defaults_add_undelayed_wet() {
+        let input = kflanger_ramp();
+        let out = render_left(&mut kflanger_with(&[]), &input);
+        out.iter().zip(&input).for_each(|(y, x)| assert!((y - 2.0 * x).abs() < 1e-3));
+    }
+
+    #[test]
+    fn kflanger_mode_1_cancels_at_zero_delay() {
+        let out = render_left(&mut kflanger_with(&[(KF_MODE, 65535)]), &kflanger_ramp());
+        assert!(out.iter().all(|y| y.abs() < 1e-4), "dry - wet should cancel at delay 0");
+    }
+
+    #[test]
+    fn kflanger_full_speed_adds_one_sample_of_delay_per_block() {
+        let input = kflanger_ramp();
+        let blocks = kflanger_blocks(&mut kflanger_with(&[(KF_SPEED, 65535)]), &input, 4);
+        // Block k reads the wet signal k samples late (speed 254/256 per block).
+        blocks.iter().enumerate().skip(1).for_each(|(k, out)| {
+            let wet = out[100] - input[100];
+            assert!((wet - input[100 - k]).abs() < 1e-3, "block {k}: wet {wet}");
+        });
+    }
 }
