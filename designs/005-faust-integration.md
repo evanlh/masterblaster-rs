@@ -1,7 +1,7 @@
 # Faust DSP Integration Design
 
 Created: 20260213
-Updated: 20261014
+Updated: 20261103
 
 
 ## Status
@@ -822,6 +822,7 @@ standing in for a Buzz machine must match it on three things:
 | FSM WahPro / WahPro2 | Cutoff, Resonance, Filter, LFO rate, LFO mod, LFO Shape, Inertia, Set phase (track params) | BMX PARA |
 | Jeskola Filter 2 | Type, Cutoff, Resonance | BMX PARA |
 | Jeskola Reverb 2 | Dry Out 0..4096 (4096), Rev Out 0..4096 (768), ER Out 0..4096 (0), Rev Time 1..64 (10), Pre-Delay 0..100 ms (0), High Cutoff 100..16384 Hz (5000) | BMX PARA; DSP mapping is guessed |
+| Jeskola Stereo Reverb | Same schema as Jeskola Reverb 2 | BMX PARA; DSP mapping measured against buzz-machines-oracles (clean room, see `faust/stereoreverb.dsp`) |
 | Jeskola Freeverb | Rev Time, HF Damp, Pre Delay, Low Cut, High Cut, Rev Out, Dry Out (all 0..127) | C++ `Jeskola/Freeverb` |
 
 ### Tests

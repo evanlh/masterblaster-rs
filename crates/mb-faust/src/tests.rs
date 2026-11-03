@@ -202,6 +202,44 @@ mod tests {
         assert!(tail_energy > 0.0001, "reverb2 should produce a tail, energy={tail_energy}");
     }
 
+    // --- Stereo Reverb tests ---
+
+    /// Render `frames` samples of a unit impulse (both inputs) at defaults.
+    fn stereoreverb_impulse_response(frames: u16) -> AudioBuffer {
+        let mut machine = FaustMachine::new(load_dsp("stereoreverb", "stereoreverb.dsp"));
+        machine.init(44100);
+        let mut buf = AudioBuffer::new(2, frames);
+        buf.channel_mut(0)[0] = 1.0;
+        buf.channel_mut(1)[0] = 1.0;
+        machine.render(&mut buf);
+        buf
+    }
+
+    fn first_nonzero_after(samples: &[f32], start: usize) -> usize {
+        start + samples[start..].iter().position(|s| *s != 0.0).unwrap()
+    }
+
+    #[test]
+    fn stereoreverb_is_mono_in_stereo_out() {
+        let dsp = load_dsp("stereoreverb", "stereoreverb.dsp");
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+    }
+
+    #[test]
+    fn stereoreverb_dry_passes_unfiltered() {
+        let buf = stereoreverb_impulse_response(4096);
+        assert!((buf.channel(0)[0] - 1.0).abs() < 1e-6);
+        assert!((buf.channel(1)[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stereoreverb_combs_start_at_measured_delays() {
+        // Comb delays measured from the oracle: 2137 (left), 1774 (right).
+        let buf = stereoreverb_impulse_response(4096);
+        assert_eq!(first_nonzero_after(buf.channel(0), 1), 2137);
+        assert_eq!(first_nonzero_after(buf.channel(1), 1), 1774);
+    }
+
     // --- WahMan Pro tests ---
 
     #[test]
@@ -343,17 +381,28 @@ mod tests {
         ]);
     }
 
+    /// Jeskola Reverb 2 and Jeskola Stereo Reverb share this parameter
+    /// schema (BMX PARA section / buzz-machines-oracles info.json).
+    const JESKOLA_REVERB_PARAMS: [ExpectedParam; 6] = [
+        ExpectedParam { label: "Dry Out",     min: 0.0,   max: 4096.0,  init: 4096.0 },
+        ExpectedParam { label: "Rev Out",     min: 0.0,   max: 4096.0,  init: 768.0 },
+        ExpectedParam { label: "ER Out",      min: 0.0,   max: 4096.0,  init: 0.0 },
+        ExpectedParam { label: "Rev Time",    min: 1.0,   max: 64.0,    init: 10.0 },
+        ExpectedParam { label: "Pre-Delay",   min: 0.0,   max: 100.0,   init: 0.0 },
+        ExpectedParam { label: "High Cutoff", min: 100.0, max: 16384.0, init: 5000.0 },
+    ];
+
+    const JESKOLA_REVERB_BMX_ORDER: [&str; 6] =
+        ["Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay", "High Cutoff"];
+
     #[test]
     fn reverb2_param_ordering_and_ranges() {
-        assert_params_match("reverb2", "reverb2.dsp", &[
-            // Ranges and defaults from the BMX PARA section (no C++ source available)
-            ExpectedParam { label: "Dry Out",     min: 0.0,   max: 4096.0,  init: 4096.0 },
-            ExpectedParam { label: "Rev Out",     min: 0.0,   max: 4096.0,  init: 768.0 },
-            ExpectedParam { label: "ER Out",      min: 0.0,   max: 4096.0,  init: 0.0 },
-            ExpectedParam { label: "Rev Time",    min: 1.0,   max: 64.0,    init: 10.0 },
-            ExpectedParam { label: "Pre-Delay",   min: 0.0,   max: 100.0,   init: 0.0 },
-            ExpectedParam { label: "High Cutoff", min: 100.0, max: 16384.0, init: 5000.0 },
-        ]);
+        assert_params_match("reverb2", "reverb2.dsp", &JESKOLA_REVERB_PARAMS);
+    }
+
+    #[test]
+    fn stereoreverb_param_ordering_and_ranges() {
+        assert_params_match("stereoreverb", "stereoreverb.dsp", &JESKOLA_REVERB_PARAMS);
     }
 
     #[test]
@@ -406,9 +455,12 @@ mod tests {
 
     #[test]
     fn reverb2_set_param_follows_bmx_order() {
-        assert_set_param_routes("reverb2", "reverb2.dsp", &[
-            "Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay", "High Cutoff",
-        ]);
+        assert_set_param_routes("reverb2", "reverb2.dsp", &JESKOLA_REVERB_BMX_ORDER);
+    }
+
+    #[test]
+    fn stereoreverb_set_param_follows_bmx_order() {
+        assert_set_param_routes("stereoreverb", "stereoreverb.dsp", &JESKOLA_REVERB_BMX_ORDER);
     }
 
     #[test]
