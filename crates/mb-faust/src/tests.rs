@@ -517,7 +517,7 @@ mod tests {
     #[test]
     fn cross_delay_param_ordering_and_ranges() {
         assert_params_match("crossdelay", "crossdelay.dsp", &[
-            // Dry thru is a Buzz switch (min == max == -1): its range is free, default 1
+            // Dry thru is a Buzz switch: 0 = off, 1 = on (delivered as 0 / 65535)
             ExpectedParam { label: "Dry thru",    min: 0.0, max: 1.0,     init: 1.0 },
             ExpectedParam { label: "L. Length",   min: 1.0, max: 32768.0, init: 3.0 },
             ExpectedParam { label: "R. Length",   min: 1.0, max: 32768.0, init: 3.0 },
@@ -578,6 +578,16 @@ mod tests {
         assert_near(l[100], wet, "left echo at L. Length");
         assert_near(r[130], wet * 0.5, "right echo at L + R, scaled by feedback");
         assert_near(l[230], wet * 0.25, "second left echo after a full loop");
+    }
+
+    #[test]
+    fn cross_delay_dry_thru_off_removes_dry_signal() {
+        let mut machine = cross_delay_samples(100, 30);
+        machine.set_param(0, 0); // switch off (switches map 0 -> 0, 1 -> 65535)
+        let (l, r) = render_impulse_stereo(&mut machine, 256);
+        assert_near(l[0], 0.0, "no dry left");
+        assert_near(r[0], 0.0, "no dry right");
+        assert_near(l[100], 0.5 * 48.0 / 128.0, "wet echo still present");
     }
 
     #[test]

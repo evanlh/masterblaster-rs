@@ -23,11 +23,10 @@
 // Tempo: Faust gets no tempo from masterblaster, so a tick is fixed at
 // 126 BPM / 4 TPB (5250 samples at 44.1 kHz), the oracle's master settings.
 //
-// Known limitation: "Dry thru" is a Buzz switch (min == max == -1), which
-// masterblaster always delivers as 0; it is pinned to its default (1, on).
+// "Dry thru" is a Buzz switch (0 = off, 1 = on), delivered as 0 or 65535.
 import("stdfaust.lib");
 
-dryThru = attach(1, hslider("[0]Dry thru", 1, 0, 1, 1)); // pinned, see header
+dryThru = rint(hslider("[0]Dry thru", 1, 0, 1, 1));
 lLen    = rint(hslider("[1]L. Length", 3, 1, 32768, 1));
 rLen    = rint(hslider("[2]R. Length", 3, 1, 32768, 1));
 unit    = rint(hslider("[3]Length unit", 0, 0, 3, 1));
