@@ -134,6 +134,7 @@ impl<'a> BmxReader<'a> {
 // Parameter type constants
 // ---------------------------------------------------------------------------
 
+const PT_SWITCH: u8 = 1;
 const PT_BYTE: u8 = 2;
 const PT_WORD: u8 = 3;
 
@@ -824,9 +825,16 @@ fn read_param_value(r: &mut BmxReader, param_type: u8) -> Result<i32, FormatErro
 /// Returns the no_value sentinel unchanged (mapped via `scale_no_value`).
 fn scale_param_value(raw: i32, param: &BmxParam) -> i32 {
     if raw == param.no_value { return scale_no_value(param); }
+    if is_switch(param) { return if raw > 0 { 65535 } else { 0 }; }
     let range = param.max - param.min;
-    if range <= 0 { return 0; }
     ((raw - param.min) as i64 * 65535 / range as i64) as i32
+}
+
+/// Switches are 0/1 whatever range they declare: Jeskola Delay's "Dry thru" is declared
+/// -1..-1, which a linear rescale would collapse to a single value. Any param with
+/// max <= min is treated the same way, since it has no range to scale over.
+fn is_switch(param: &BmxParam) -> bool {
+    param.param_type == PT_SWITCH || param.max <= param.min
 }
 
 /// Map a param's no_value sentinel into the scaled domain.
@@ -1679,6 +1687,32 @@ mod tests {
         assert_eq!(scale_param_value(110, &p), 65535);
         // midpoint: (60-10)/(110-10) * 65535 = 32767
         assert_eq!(scale_param_value(60, &p), 32767);
+    }
+
+    fn make_switch(min: i32, max: i32) -> BmxParam {
+        BmxParam { param_type: PT_SWITCH, ..make_param(min, max, 0xFF) }
+    }
+
+    #[test]
+    fn switches_declared_without_a_range_keep_both_values() {
+        let p = make_switch(-1, -1);
+        assert_eq!(scale_param_value(0, &p), 0);
+        assert_eq!(scale_param_value(1, &p), 65535);
+        assert_eq!(scale_param_value(0xFF, &p), -1);
+    }
+
+    #[test]
+    fn switches_declared_zero_to_one_are_unchanged() {
+        let p = make_switch(0, 1);
+        assert_eq!(scale_param_value(0, &p), 0);
+        assert_eq!(scale_param_value(1, &p), 65535);
+    }
+
+    #[test]
+    fn degenerate_byte_ranges_scale_as_switches() {
+        let p = make_param(1, 1, 0xFF);
+        assert_eq!(scale_param_value(0, &p), 0);
+        assert_eq!(scale_param_value(1, &p), 65535);
     }
 
     #[test]
