@@ -594,6 +594,95 @@ mod tests {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
     }
 
+    // --- Geonik's Amplitude Modulation ---
+
+    const GAM_FREQUENCY: u16 = 0;
+    const GAM_FLOOR: u16 = 2;
+    const GAM_STEREO_PHASE: u16 = 3;
+
+    #[test]
+    fn geonik_am_compiles_two_in_two_out() {
+        let dsp = load_dsp("geonik_am", "geonik_am.dsp");
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+    }
+
+    #[test]
+    fn geonik_am_param_ordering_and_ranges() {
+        assert_params_match("geonik_am", "geonik_am.dsp", &[
+            ExpectedParam { label: "Frequency",   min: 0.0, max: 65534.0, init: 1000.0 },
+            ExpectedParam { label: "LfoType",     min: 0.0, max: 4.0,     init: 0.0 },
+            ExpectedParam { label: "Floor",       min: 0.0, max: 128.0,   init: 64.0 },
+            ExpectedParam { label: "StereoPhase", min: 0.0, max: 128.0,   init: 64.0 },
+            // Switch: masterblaster delivers it as 0/1 whatever range it declares.
+            ExpectedParam { label: "Restart",     min: 0.0, max: 1.0,     init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn geonik_am_set_param_follows_bmx_order() {
+        assert_set_param_routes("geonik_am", "geonik_am.dsp", &[
+            "Frequency", "LfoType", "Floor", "StereoPhase", "Restart",
+        ]);
+    }
+
+    #[test]
+    fn registry_resolves_geonik_am() {
+        assert!(crate::create_faust_machine("Geonik's Amplitude Modulation").is_some());
+    }
+
+    /// BMX scaling of a raw Buzz value over `min..max` (bmx_format::scale_param_value).
+    fn bmx_scaled(raw: i32, min: i32, max: i32) -> i32 {
+        ((raw - min) as i64 * 65535 / (max - min) as i64) as i32
+    }
+
+    fn geonik_am_with(params: &[(u16, i32, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("geonik_am", "geonik_am.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, raw, max)| machine.set_param(p, bmx_scaled(raw, 0, max)));
+        machine
+    }
+
+    /// Render a constant 1.0 input, so each output sample is the channel gain.
+    fn render_gains(machine: &mut FaustMachine, frames: usize) -> Vec<(f32, f32)> {
+        (0..frames.div_ceil(256)).flat_map(|_| {
+            let mut buf = AudioBuffer::new(2, 256);
+            buf.channel_mut(0).fill(1.0);
+            buf.channel_mut(1).fill(1.0);
+            machine.render(&mut buf);
+            buf.channel(0).iter().copied().zip(buf.channel(1).iter().copied()).collect::<Vec<_>>()
+        }).take(frames).collect()
+    }
+
+    #[test]
+    fn geonik_am_default_sine_swings_between_floor_and_unity() {
+        let gains = render_gains(&mut geonik_am_with(&[]), 44100);
+        assert!((gains[0].0 - 0.75).abs() < 1e-5, "starts mid-swing: {:?}", gains[0]);
+        assert!((gains[11100].0 - 1.0).abs() < 1e-5, "peak a quarter second in: {:?}", gains[11100]);
+        assert!((gains[33200].0 - 0.5).abs() < 1e-5, "trough at the floor: {:?}", gains[33200]);
+    }
+
+    #[test]
+    fn geonik_am_full_floor_is_unity_gain() {
+        let gains = render_gains(&mut geonik_am_with(&[(GAM_FLOOR, 128, 128)]), 4096);
+        assert!(gains.iter().all(|&(l, r)| (l - 1.0).abs() < 1e-6 && (r - 1.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn geonik_am_stereo_phase_zero_puts_right_half_a_cycle_behind() {
+        let gains = render_gains(&mut geonik_am_with(&[(GAM_STEREO_PHASE, 0, 128)]), 11100);
+        assert!((gains[11099].0 - 1.0).abs() < 1e-5 && (gains[11099].1 - 0.5).abs() < 1e-5,
+            "left at peak, right at trough: {:?}", gains[11099]);
+    }
+
+    #[test]
+    fn geonik_am_word_frequency_survives_bmx_scaling() {
+        // 49.151 Hz: the staircase reaches step 103 at sample 722 (floor(n * f * 128 / SR)).
+        // A Frequency one below (plain rint of the scaled slider) would step at 723.
+        let gains = render_gains(&mut geonik_am_with(&[(GAM_FREQUENCY, 49151, 65534)]), 730);
+        assert!(gains[721].0 != gains[722].0 && gains[722].0 == gains[723].0,
+            "step at 722: {:?}", &gains[720..724]);
+    }
+
     #[test]
     fn registry_returns_none_for_unknown() {
         assert!(crate::create_faust_machine("Unknown Machine XYZ").is_none());
