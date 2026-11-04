@@ -623,6 +623,19 @@ mod tests {
     }
 
     #[test]
+    fn routeq10_output_stops_on_silent_block() {
+        // Impulse at 441 (block 256..512): rings to 511, then the all-silent
+        // block 512..768 is cut, as the DLL's Work returns false.
+        let mut machine = routeq10_with(|_| 127);
+        let mut input = vec![0.0; 1024];
+        input[441] = 0.5;
+        let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
+        assert!(out[..441].iter().all(|s| *s == 0.0), "no output before the impulse");
+        assert!(out[500].abs() > 1e-4, "rings within the impulse's block");
+        assert!(out[512..].iter().all(|s| *s == 0.0), "silent block after the impulse is cut");
+    }
+
+    #[test]
     fn routeq10_raw_values_round_trip_to_integers() {
         let dsp = load_dsp("routeq10", "routeq10.dsp");
         for raw in 0..=254 {

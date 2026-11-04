@@ -14,8 +14,18 @@
 //   The first band is [0, 46] Hz and the last [12000, 22050] Hz (Nyquist).
 //   Residual deviations at the lowest bands match single-precision coefficients.
 // * Mono machine: both channels run the same filter bank.
-// Known difference: the DLL returns false from Work on silent input blocks, so
-// its output stops 256 samples after the input goes silent; this port rings on.
+// * Silent-input cut (Work returns false): the output is zero for every
+//   all-silent input block. Blocks are 256 samples on a grid that restarts at
+//   each 5250-sample tick (126 BPM, 4 TPB at 44.1 kHz; 20 blocks of 256 + one
+//   of 130), counted from DSP init. Evidence: the ESS input ends at sample
+//   132298 and every development output stops at 132529 = 25*5250 + 5*256 - 1
+//   (a plain 256 grid would stop at 132351); impulse outputs stop at 511.
+//   Emulated causally: output is muted while the current block has been
+//   silent so far (exact unless a block starts silent, then gets input).
+//   Whether filter state is frozen or cleared across silent blocks is not
+//   observable in any probe (input never resumes after silence), so the
+//   filters simply keep running on the zero input. masterblaster gives Faust
+//   no tempo, so the 5250-sample tick assumes 126 BPM / 4 TPB.
 import("stdfaust.lib");
 
 // Raw byte 0..254 (127 = unity); rint undoes masterblaster's 0..65535 truncation.
@@ -48,4 +58,14 @@ band(k) = bandpass(ba.take(k + 1, centers), ba.take(k + 1, widths)) * ba.take(k 
 
 eq = _ <: par(k, 10, band(k)) :> _;
 
-process = eq, eq;
+// Position inside the current tick, 0 at DSP init.
+tick_len = 5250;
+tick_pos = (+(1) : %(tick_len)) ~ _ : +(tick_len - 1) : %(tick_len);
+block_start = (tick_pos % 256) == 0;
+
+// 1 once the current block has had a non-zero input sample.
+heard(x) = (x != 0) : (max ~ *(1 - block_start));
+
+gated_eq(x) = eq(x) * heard(x);
+
+process = gated_eq, gated_eq;
