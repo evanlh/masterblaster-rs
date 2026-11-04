@@ -594,6 +594,39 @@ mod tests {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
     }
 
+    // --- smartelectronix tubescreamer (clean-room port) ---
+
+    const TUBESCREAMER: (&str, &str) =
+        ("smartelectronix_tubescreamer", "smartelectronix_tubescreamer.dsp");
+
+    #[test]
+    fn tubescreamer_is_stereo() {
+        let dsp = load_dsp(TUBESCREAMER.0, TUBESCREAMER.1);
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+    }
+
+    #[test]
+    fn tubescreamer_param_ordering_and_ranges() {
+        assert_params_match(TUBESCREAMER.0, TUBESCREAMER.1, &[
+            ExpectedParam { label: "PreGain",  min: 0.0, max: 240.0, init: 220.0 },
+            ExpectedParam { label: "Drive",    min: 0.0, max: 254.0, init: 0.0 },
+            ExpectedParam { label: "Tone",     min: 0.0, max: 254.0, init: 254.0 },
+            ExpectedParam { label: "PostGain", min: 0.0, max: 240.0, init: 131.0 },
+        ]);
+    }
+
+    #[test]
+    fn tubescreamer_set_param_follows_bmx_order() {
+        assert_set_param_routes(TUBESCREAMER.0, TUBESCREAMER.1, &[
+            "PreGain", "Drive", "Tone", "PostGain",
+        ]);
+    }
+
+    #[test]
+    fn registry_resolves_tubescreamer() {
+        assert!(crate::create_faust_machine("smartelectronix tubescreamer").is_some());
+    }
+
     #[test]
     fn registry_returns_none_for_unknown() {
         assert!(crate::create_faust_machine("Unknown Machine XYZ").is_none());
