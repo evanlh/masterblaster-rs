@@ -369,6 +369,23 @@ mod tests {
         ]);
     }
 
+    const MUON_DELAY_PARAMS: [&str; 7] =
+        ["Delay", "Feedback", "Cutoff", "LFO Depth", "LFO Freq", "Wet", "Dry"];
+
+    #[test]
+    fn muon_delay_param_ordering_and_ranges() {
+        // From buzz-machines-oracles info.json (Muon Delay, variant 41be35ce028d)
+        assert_params_match("muon_delay", "muon_delay.dsp", &[
+            ExpectedParam { label: "Delay",     min: 1.0, max: 2000.0, init: 480.0 },
+            ExpectedParam { label: "Feedback",  min: 0.0, max: 255.0,  init: 128.0 },
+            ExpectedParam { label: "Cutoff",    min: 0.0, max: 127.0,  init: 16.0 },
+            ExpectedParam { label: "LFO Depth", min: 0.0, max: 127.0,  init: 0.0 },
+            ExpectedParam { label: "LFO Freq",  min: 0.0, max: 127.0,  init: 0.0 },
+            ExpectedParam { label: "Wet",       min: 0.0, max: 255.0,  init: 128.0 },
+            ExpectedParam { label: "Dry",       min: 0.0, max: 255.0,  init: 128.0 },
+        ]);
+    }
+
     /// Set each BMX param index to max and check it lands on the
     /// identically-labelled Faust param (C++ pParameters[] order).
     fn assert_set_param_routes(dsp_name: &str, dsp_file: &str, bmx_order: &[&str]) {
@@ -615,5 +632,10 @@ mod tests {
         let factory = crate::cache::try_load(name, source)
             .expect("factory should be cached after compile_cached");
         unsafe { crate::ffi::deleteCDSPFactory(factory); }
+    }
+
+    #[test]
+    fn muon_delay_set_param_follows_bmx_order() {
+        assert_set_param_routes("muon_delay", "muon_delay.dsp", &MUON_DELAY_PARAMS);
     }
 }
