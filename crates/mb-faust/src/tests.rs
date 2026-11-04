@@ -567,7 +567,39 @@ mod tests {
         }
     }
 
+    // --- WhiteNoise's Harmonic Delay tests ---
+
+    const HARMONIC_DELAY: &str = "whitenoise_harmonic_delay.dsp";
+
+    #[test]
+    fn harmonic_delay_is_stereo() {
+        let dsp = load_dsp("whitenoise_harmonic_delay", HARMONIC_DELAY);
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+    }
+
+    #[test]
+    fn harmonic_delay_param_ordering_and_ranges() {
+        assert_params_match("whitenoise_harmonic_delay", HARMONIC_DELAY, &[
+            ExpectedParam { label: "Dry thru", min: 0.0, max: 1.0,   init: 1.0 },
+            ExpectedParam { label: "Note",     min: 1.0, max: 156.0, init: 1.0 },
+            ExpectedParam { label: "Feedback", min: 0.0, max: 128.0, init: 96.0 },
+            ExpectedParam { label: "Wet out",  min: 0.0, max: 128.0, init: 48.0 },
+        ]);
+    }
+
+    #[test]
+    fn harmonic_delay_set_param_follows_bmx_order() {
+        assert_set_param_routes("whitenoise_harmonic_delay", HARMONIC_DELAY, &[
+            "Dry thru", "Note", "Feedback", "Wet out",
+        ]);
+    }
+
     // --- Registry tests ---
+
+    #[test]
+    fn registry_resolves_harmonic_delay() {
+        assert!(crate::create_faust_machine("WhiteNoise's Harmonic Delay").is_some());
+    }
 
     #[test]
     fn registry_resolves_filter2() {
