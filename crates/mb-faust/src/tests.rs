@@ -418,6 +418,71 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn eq3_param_ordering_and_ranges() {
+        assert_params_match("eq3", "eq3.dsp", &[
+            ExpectedParam { label: "Low Gain",    min: 0.0,  max: 8192.0,  init: 4096.0 },
+            ExpectedParam { label: "Mid Gain",    min: 0.0,  max: 8192.0,  init: 4096.0 },
+            ExpectedParam { label: "High Gain",   min: 0.0,  max: 8192.0,  init: 4096.0 },
+            ExpectedParam { label: "Low Cutoff",  min: 10.0, max: 16000.0, init: 400.0 },
+            ExpectedParam { label: "High Cutoff", min: 10.0, max: 16000.0, init: 5000.0 },
+            // Buzz switch (declared -1..-1), delivered by masterblaster as 0/1
+            ExpectedParam { label: "Dry Thru",    min: 0.0,  max: 1.0,     init: 1.0 },
+        ]);
+    }
+
+    #[test]
+    fn eq3_set_param_follows_bmx_order() {
+        assert_set_param_routes("eq3", "eq3.dsp", &[
+            "Low Gain", "Mid Gain", "High Gain", "Low Cutoff", "High Cutoff", "Dry Thru",
+        ]);
+    }
+
+    fn eq3_with(params: &[(u16, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("eq3", "eq3.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, v));
+        machine
+    }
+
+    fn eq3_steady_sine_rms(params: &[(u16, i32)], freq: f32) -> f32 {
+        let mut machine = eq3_with(params);
+        let input = sine(freq, 256 * 40);
+        let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
+        let tail = &out[out.len() - 4096..];
+        (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn eq3_defaults_pass_input_through() {
+        let input = sine(1000.0, 256);
+        let out = render_left(&mut eq3_with(&[]), &input);
+        assert!(out.iter().zip(&input).all(|(o, i)| (o - i).abs() < 1e-6), "defaults should be identity");
+    }
+
+    #[test]
+    fn eq3_low_gain_max_boosts_bass_by_24db() {
+        // Low Gain 8192 (scaled 65535) = +24 dB on the low shelf band
+        let dry = eq3_steady_sine_rms(&[], 50.0);
+        let boosted = eq3_steady_sine_rms(&[(0, 65535)], 50.0);
+        let db = 20.0 * (boosted / dry).log10();
+        assert!((db - 24.0).abs() < 0.2, "expected ~+24 dB at 50 Hz, got {db}");
+    }
+
+    #[test]
+    fn eq3_dry_thru_off_with_unity_gains_is_silent() {
+        let peak = eq3_steady_sine_rms(&[(5, 0)], 1000.0);
+        assert!(peak < 1e-6, "Dry Thru off at unity gains should be silent, rms={peak}");
+    }
+
+    #[test]
+    fn eq3_output_stops_on_silent_block() {
+        let mut machine = eq3_with(&[(0, 65535)]);
+        let out = render_impulse_left(&mut machine, 1024);
+        assert!(out[1..256].iter().any(|s| s.abs() > 1e-6), "impulse block should ring");
+        assert!(out[256..].iter().all(|s| *s == 0.0), "silent blocks should be cut");
+    }
+
     // --- Jeskola Reverb 2 behaviour ---
 
     const RV2_DRY_OUT: u16 = 0;
@@ -592,6 +657,11 @@ mod tests {
     #[test]
     fn registry_resolves_wahpro2() {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_eq3() {
+        assert!(crate::create_faust_machine("Jeskola EQ-3").is_some());
     }
 
     #[test]
