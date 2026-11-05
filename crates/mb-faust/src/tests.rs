@@ -680,4 +680,16 @@ mod tests {
             assert!((wet - input[100 - k]).abs() < 1e-3, "block {k}: wet {wet}");
         });
     }
+
+    #[test]
+    fn kflanger_silent_block_outputs_zero_despite_feedback() {
+        // Feedback 65534 rings for seconds; Work returns false on silent input.
+        let mut machine = kflanger_with(&[(4, 65535)]);
+        let mut impulse = vec![0.0; 256];
+        impulse[10] = 0.5;
+        let first = render_left(&mut machine, &impulse);
+        let silent = render_left(&mut machine, &[0.0; 256]);
+        assert!(first[20].abs() > 0.1, "feedback should ring inside the input block");
+        assert!(silent.iter().all(|y| *y == 0.0), "silent block must be cut to zero");
+    }
 }

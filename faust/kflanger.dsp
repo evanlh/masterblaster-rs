@@ -23,7 +23,12 @@
 //   pos < Min clamps to Min and turns up in the next block (the trough is held
 //   one extra block). This reproduces every development sweep exactly.
 // * Silent chunks: the original returns false from Work on all-zero input
-//   and its LFO does not advance on those chunks (impulse probe: the LFO
+//   (the host then writes zeros): oracle tails end exactly on the 256-sample
+//   block grid restarting at each tick (impulse at 441 with Feedback 65534
+//   ends at 512; the ESS tail ends at 132530 = tick 25 + 5 blocks), with no
+//   hold time. The port outputs 0 while the current block has been silent so
+//   far and freezes the delay line and feedback during it (a small onset loss
+//   when input starts mid-block). Its LFO does not advance on those chunks (impulse probe: the LFO
 //   steps once fewer when the first block is silent). The port carries a
 //   per-block "heard input" flag and only commits LFO steps of blocks that had
 //   input.
@@ -32,8 +37,7 @@
 //   -9.9 … depending on the configuration). That garbage DC can't be
 //   reproduced; the port mutes the wet path while pos > Max instead, which
 //   gives the same transfer function (dry only).
-// * Known differences: the original's output stops with its input (the
-//   Faust path rings on, so tails differ: large at Feedback near 0 or 65534); with |c| ≈ 1 the
+// * Known differences: with |c| ≈ 1 the
 //   original's (double precision) feedback drifts from this float32 version
 //   after many seconds of resonance.
 import("stdfaust.lib");
@@ -88,16 +92,29 @@ with {
     };
 };
 lfoPos(x) = lfoState(x != 0) : (_, !, !, !, !);
+// 1 once the current block has seen non-zero input.
+blockHeard(x) = lfoState(x != 0) : (!, !, !, !, _);
 
 truncToward0 = int : float;
+delayLineSize = 512;
 
-flanger(x) = (\(prevOut).(x + wetSign * wet(prevOut))) ~ _
+// Delay line that only advances on samples of blocks that have had input, so
+// a silent block leaves the buffer, write position and feedback untouched.
+// While the block has been silent so far the output is 0 (Work returned
+// false). State: (previous output, write index).
+flanger(x) = (step ~ (_, _)) : (_, !) : *(active)
 with {
+    active = blockHeard(x);
     pos = lfoPos(x);
-    delaySamples = int(pos);
+    delaySamples = min(maxDelay, int(pos));
     wetMuted = pos > maxFlanger;
-    wet(prevOut) = (x + feedbackCoef * prevOut) : truncToward0
-        : de.delay(maxDelay, delaySamples) : *(1 - wetMuted);
+    step(prevOut, w) = ba.if(active, out, prevOut), w + active
+    with {
+        stored = (x + feedbackCoef * prevOut) : truncToward0;
+        wet = rwtable(delayLineSize, 0.0, w & (delayLineSize - 1), stored,
+            (w - delaySamples) & (delayLineSize - 1)) * (1 - wetMuted);
+        out = x + wetSign * wet;
+    };
 };
 
 kflanger = *(buzzScale) : flanger : /(buzzScale);
