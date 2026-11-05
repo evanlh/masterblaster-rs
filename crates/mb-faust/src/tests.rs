@@ -400,6 +400,20 @@ mod tests {
     }
 
     #[test]
+    fn whitenoise_fuzzbox_param_ordering_and_ranges() {
+        assert_params_match("whitenoise_fuzzbox", "whitenoise_fuzzbox.dsp", &[
+            ExpectedParam { label: "Mode",  min: 1.0, max: 4.0,     init: 1.0 },
+            ExpectedParam { label: "Q",     min: 0.0, max: 254.0,   init: 0.0 },
+            ExpectedParam { label: "Level", min: 0.0, max: 65534.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn whitenoise_fuzzbox_set_param_follows_bmx_order() {
+        assert_set_param_routes("whitenoise_fuzzbox", "whitenoise_fuzzbox.dsp", &["Mode", "Q", "Level"]);
+    }
+
+    #[test]
     fn filter2_set_param_follows_bmx_order() {
         assert_set_param_routes("filter2", "filter2.dsp", &["Type", "Cutoff", "Resonance"]);
     }
