@@ -46,8 +46,8 @@ declare description "Clean-room port of FSM WahMan Pro 2 (registry key FSM WahPr
 //   Sections run in the order listed (formants: F1 then F2), direct form I.
 //   "peak" is an RBJ peaking EQ: pole alpha = sin(w)/(2 poleQ), zero alpha =
 //   pole alpha * A^2.
-// Known differences: the machine stops output when the input is silent
-// (Work returns false); this port keeps ringing. LFO random values differ.
+// Silent input: like the machine (Work returns false), a host block whose input
+// is all zero outputs silence (see wahCut). LFO random values differ.
 
 import("stdfaust.lib");
 
@@ -62,7 +62,12 @@ setph   = hslider("[7]Set phase", 0, 0, 127, 1) : rint;
 
 // ---- control grid ---------------------------------------------------------
 tickLen = int(ma.SR * 60.0 / (126.0 * 4.0) + 0.5);
-blockStart = ((ba.time % tickLen) % 64) == 0;
+// Position inside the host's render block (ma.BS samples; masterblaster renders
+// blocks of <= 256 that never cross a tick, so 64-sample sub-blocks of each
+// render block reproduce the machine's tick-aligned control grid at any tempo).
+hostPos = (\(c).(select2(c + 1 >= int(ma.BS'), c + 1, 0))) ~ _ : max(0);
+hostStart = (hostPos == 0) | (ba.time == 0);
+blockStart = (hostPos % 64) == 0;
 
 // ---- LFO ------------------------------------------------------------------
 syncTicks(r) = (1, 2, 3, 4, 6, 8, 12, 16, 24, 28, 32, 48, 64, 96, 128)
@@ -73,7 +78,7 @@ lfoHz = select2(lrate >= 240, freeRate(lrate), ma.SR / (tickLen * syncTicks(lrat
 // Phase = offset + k * increment, with the offset folded at every tick start so
 // single-precision accumulation does not drift (rate changes land on ticks).
 phaseReset = (setph != setph') | (ba.time == 0);
-tickStart = (ba.time % tickLen) == 0;
+tickStart = hostStart;
 phaseInc = lfoHz / ma.SR;
 phaseState = loop ~ (_, _)
 with {
@@ -187,4 +192,13 @@ outGain = pick8(ftype, 2.0 / sqrt(P), 2.0 / sqrt(1.01 + reso / 8.0), 1.2 / (7.0 
 
 wah(sig) = (secondSection, (firstSection, sig : biquad)) : biquad : *(outGain);
 
-process = wah, wah;
+// Work-returns-false emulation: the machine outputs silence for a render block
+// whose input is all zero. Causally: output 0 while every input sample of the
+// current host block so far has been 0. (No probe has silent input blocks, so
+// whether the machine also freezes its filter/LFO state there is unmeasured;
+// state keeps running here.)
+heardInBlock(sig) = (\(h).(select2(hostStart, h, 0) | (sig != 0))) ~ _;
+gate(sig, y) = y * heardInBlock(sig);
+wahCut(sig) = gate(sig, wah(sig));
+
+process = wahCut, wahCut;

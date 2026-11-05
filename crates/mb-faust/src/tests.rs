@@ -293,6 +293,22 @@ mod tests {
         assert!((last - 0.12).abs() < 0.002, "DC gain should be 0.24, got {}", last / 0.5);
     }
 
+    #[test]
+    fn wahpro2_silent_block_outputs_silence() {
+        // The original returns false from Work on silent input, so its ringing tail
+        // is cut at the next all-silent render block.
+        let mut machine = FaustMachine::new(load_dsp("wahpro2", "wahpro2.dsp"));
+        machine.init(44100);
+        let mut loud = AudioBuffer::new(2, 256);
+        loud.channel_mut(0)[0] = 1.0;
+        loud.channel_mut(1)[0] = 1.0;
+        machine.render(&mut loud);
+        assert!(loud.channel(0).iter().any(|s| *s != 0.0), "impulse block should ring");
+        let mut silent = AudioBuffer::new(2, 256);
+        machine.render(&mut silent);
+        assert!(silent.channel(0).iter().all(|s| *s == 0.0), "silent block should be cut");
+    }
+
     // --- Parameter ordering + range validation ---
 
     struct ExpectedParam {
