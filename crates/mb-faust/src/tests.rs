@@ -369,6 +369,20 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn zephod_phaser_param_ordering_and_ranges() {
+        // Buzz reports default 0 for the 1.. params (their no_value); Faust
+        // rejects an init outside the range, so those start at their minimum.
+        assert_params_match("zephod_phaser", "zephod_phaser.dsp", &[
+            ExpectedParam { label: "Depth",        min: 1.0, max: 3000.0,  init: 1.0 },
+            ExpectedParam { label: "Feedback",     min: 0.0, max: 10000.0, init: 0.0 },
+            ExpectedParam { label: "LFOfrequency", min: 1.0, max: 3000.0,  init: 1.0 },
+            ExpectedParam { label: "LFOamplitide", min: 1.0, max: 10000.0, init: 1.0 },
+            ExpectedParam { label: "LFOshift",     min: 0.0, max: 1000.0,  init: 0.0 },
+            ExpectedParam { label: "Amount",       min: 1.0, max: 255.0,   init: 1.0 },
+        ]);
+    }
+
     /// Set each BMX param index to max and check it lands on the
     /// identically-labelled Faust param (C++ pParameters[] order).
     fn assert_set_param_routes(dsp_name: &str, dsp_file: &str, bmx_order: &[&str]) {
@@ -416,6 +430,41 @@ mod tests {
         assert_set_param_routes("freeverb", "reverb.dsp", &[
             "Rev Time", "HF Damp", "Pre Delay", "Low Cut", "High Cut", "Rev Out", "Dry Out",
         ]);
+    }
+
+    #[test]
+    fn zephod_phaser_set_param_follows_bmx_order() {
+        assert_set_param_routes("zephod_phaser", "zephod_phaser.dsp", &[
+            "Depth", "Feedback", "LFOfrequency", "LFOamplitide", "LFOshift", "Amount",
+        ]);
+    }
+
+    // --- Zephod Phaser behaviour ---
+
+    fn zephod_impulse_response(params: &[(u16, i32)], frames: u16) -> Vec<f32> {
+        let mut machine = FaustMachine::new(load_dsp("zephod_phaser", "zephod_phaser.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, v));
+        let mut buf = AudioBuffer::new(2, frames);
+        buf.channel_mut(0)[0] = 0.5;
+        buf.channel_mut(1)[0] = 0.5;
+        machine.render(&mut buf);
+        buf.channel(0).to_vec()
+    }
+
+    #[test]
+    fn zephod_phaser_echo_lands_depth_minus_one_samples_late() {
+        // Depth 101 (scaled 2185) -> 100-sample delay; Amount max -> wet gain ramping to 1.
+        let out = zephod_impulse_response(&[(0, 2185), (5, 65535)], 256);
+        assert!((out[0] - 0.5).abs() < 1e-6, "dry path is unity, got {}", out[0]);
+        assert!(out[1..100].iter().all(|s| s.abs() < 1e-9), "nothing before the echo");
+        assert!(out[100] > 0.4, "echo at Depth - 1, got {}", out[100]);
+    }
+
+    #[test]
+    fn zephod_phaser_mutes_silent_blocks() {
+        let out = zephod_impulse_response(&[(0, 2185), (5, 65535)], 512);
+        assert!(out[256..].iter().all(|s| *s == 0.0), "second block has silent input");
     }
 
     // --- Jeskola Reverb 2 behaviour ---
@@ -592,6 +641,11 @@ mod tests {
     #[test]
     fn registry_resolves_wahpro2() {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_zephod_phaser() {
+        assert!(crate::create_faust_machine("Zephod Phaser").is_some());
     }
 
     #[test]
