@@ -157,15 +157,29 @@ mod tests {
         assert!(rms < 0.3, "LP filter should attenuate 10kHz, RMS={rms}");
     }
 
-    /// Impulse response (left channel) of filter2 with BMX-scaled params (0..65535).
-    fn filter2_impulse(scaled: [i32; 3], frames: u16) -> Vec<f32> {
+    /// Response (left channel) of filter2 with BMX-scaled params (0..65535) to a
+    /// unit impulse at sample `at`.
+    fn filter2_impulse_at(scaled: [i32; 3], at: usize, frames: u16) -> Vec<f32> {
         let mut machine = FaustMachine::new(load_dsp("filter2", "filter2.dsp"));
         machine.init(44100);
         scaled.iter().enumerate().for_each(|(i, v)| machine.set_param(i as u16, *v));
         let mut buf = AudioBuffer::new(2, frames);
-        buf.channel_mut(0)[0] = 1.0;
+        buf.channel_mut(0)[at] = 1.0;
         machine.render(&mut buf);
         buf.channel(0).to_vec()
+    }
+
+    fn filter2_impulse(scaled: [i32; 3], frames: u16) -> Vec<f32> {
+        filter2_impulse_at(scaled, 0, frames)
+    }
+
+    // Oracle: the DLL returns false from Work on silent 256-sample blocks, so an
+    // impulse at 441 rings until 511 and the output is zero from 512 on.
+    #[test]
+    fn filter2_output_stops_after_silent_block_starts() {
+        let h = filter2_impulse_at([0, 0, 65535], 441, 1024);
+        assert!(h[441..512].iter().any(|s| s.abs() > 1e-6), "should ring within the block");
+        assert!(h[512..].iter().all(|s| *s == 0.0), "silent blocks must output zero");
     }
 
     fn assert_close(got: &[f32], expected: &[f32]) {
