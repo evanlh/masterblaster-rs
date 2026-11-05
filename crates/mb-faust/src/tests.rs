@@ -567,6 +567,99 @@ mod tests {
         }
     }
 
+    // --- Automaton EQ-10 ---
+
+    const EQ10_LABELS: [&str; 10] = [
+        "31 Hz", "62 Hz", "125 Hz", "250 Hz", "500 Hz", "1 kHz", "2 kHz", "4 kHz", "8 kHz", "16 kHz",
+    ];
+
+    fn eq10_dsp() -> crate::compiler::CompiledDsp {
+        load_dsp("automaton_eq10", "automaton_eq10.dsp")
+    }
+
+    #[test]
+    fn eq10_is_stereo() {
+        let dsp = eq10_dsp();
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+    }
+
+    #[test]
+    fn eq10_param_ordering_and_ranges() {
+        let expected: Vec<ExpectedParam> = EQ10_LABELS.iter()
+            .map(|&label| ExpectedParam { label, min: 0.0, max: 65534.0, init: 32767.0 })
+            .collect();
+        assert_params_match("automaton_eq10", "automaton_eq10.dsp", &expected);
+    }
+
+    #[test]
+    fn eq10_set_param_follows_bmx_order() {
+        assert_set_param_routes("automaton_eq10", "automaton_eq10.dsp", &EQ10_LABELS);
+    }
+
+    /// Mirrors the DSP's `word()`: undo the truncating 0..65535 rescale of a 0..65534 word.
+    fn eq10_recover_word(slider: f32) -> f32 {
+        (slider * 65535.0 / 65534.0).round().min(65534.0)
+    }
+
+    #[test]
+    fn eq10_word_values_round_trip_exactly() {
+        let dsp = eq10_dsp();
+        for p in &dsp.params {
+            for raw in [0i64, 1, 16384, 32767, 32768, 49151, 65533, 65534] {
+                // BMX integer rescale (mb_formats scale_param_value): truncating raw * 65535 / 65534.
+                let scaled = (raw * 65535 / 65534) as i32;
+                let got = eq10_recover_word(crate::ui_visitor::scaled_to_f32(p, scaled)) as i64;
+                assert_eq!(got, raw, "{}: raw {raw} round-trips to {got}", p.label);
+            }
+        }
+    }
+
+    fn eq10_sine_rms(params: &[(u16, i32)], freq: f32) -> f32 {
+        let mut machine = FaustMachine::new(eq10_dsp());
+        machine.init(44100);
+        for &(i, v) in params { machine.set_param(i, v); }
+        let out = render_left(&mut machine, &sine(freq, 8192));
+        (out[4096..].iter().map(|s| s * s).sum::<f32>() / 4096.0).sqrt()
+    }
+
+    /// Gain of `params` relative to the default settings, at one frequency.
+    fn eq10_gain_db(params: &[(u16, i32)], freq: f32) -> f32 {
+        20.0 * (eq10_sine_rms(params, freq) / eq10_sine_rms(&[], freq)).log10()
+    }
+
+    /// Absolute gain at the defaults, against the 1 kHz reference.
+    fn eq10_default_db(freq: f32) -> f32 {
+        20.0 * (eq10_sine_rms(&[], freq) / eq10_sine_rms(&[], 1.0e3)).log10()
+    }
+
+    #[test]
+    fn eq10_defaults_are_flat_in_midrange() {
+        assert!(eq10_default_db(250.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn eq10_fixed_high_shelf_is_minus_6db_at_16k() {
+        assert!((eq10_default_db(16000.0) + 6.0).abs() < 0.3);
+    }
+
+    #[test]
+    fn eq10_bands_sit_one_slot_below_their_labels() {
+        // "16 kHz" (index 9) at max boosts 8 kHz by 12 dB.
+        let db = eq10_gain_db(&[(9, 65535)], 8000.0);
+        assert!((db - 12.0).abs() < 0.3, "8 kHz gain {db}");
+    }
+
+    #[test]
+    fn eq10_31hz_slider_is_dead() {
+        assert!(eq10_gain_db(&[(0, 0)], 100.0).abs() < 0.01);
+        assert!(eq10_gain_db(&[(1, 0)], 31.25) < -5.0, "62 Hz slider drives the 31 Hz shelf");
+    }
+
+    #[test]
+    fn registry_resolves_automaton_eq10() {
+        assert!(crate::create_faust_machine("Automaton EQ-10").is_some());
+    }
+
     // --- Registry tests ---
 
     #[test]
