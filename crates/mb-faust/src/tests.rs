@@ -411,6 +411,58 @@ mod tests {
         ]);
     }
 
+    // --- Jeskola Chorus tests ---
+
+    const CHORUS_ORDER: [&str; 6] = ["freq", "depth", "feedback", "min. delay", "dry out", "wet out"];
+
+    #[test]
+    fn chorus_param_ordering_and_ranges() {
+        assert_params_match("chorus", "chorus.dsp", &[
+            ExpectedParam { label: "freq",       min: 0.0, max: 4096.0, init: 100.0 },
+            ExpectedParam { label: "depth",      min: 0.0, max: 127.0,  init: 64.0 },
+            ExpectedParam { label: "feedback",   min: 0.0, max: 128.0,  init: 64.0 },
+            ExpectedParam { label: "min. delay", min: 0.0, max: 50.0,   init: 25.0 },
+            ExpectedParam { label: "dry out",    min: 0.0, max: 128.0,  init: 128.0 },
+            ExpectedParam { label: "wet out",    min: 0.0, max: 128.0,  init: 128.0 },
+        ]);
+    }
+
+    #[test]
+    fn chorus_set_param_follows_bmx_order() {
+        assert_set_param_routes("chorus", "chorus.dsp", &CHORUS_ORDER);
+    }
+
+    /// Impulse through the chorus with the LFO stopped (freq 0, depth 127, min. delay 25):
+    /// the measured oracle puts the wet copy at exactly 1325 samples.
+    #[test]
+    fn chorus_static_delay_matches_oracle() {
+        let mut machine = FaustMachine::new(load_dsp("chorus", "chorus.dsp"));
+        machine.init(44100);
+        machine.set_param(0, 0);       // freq 0
+        machine.set_param(1, 65535);   // depth 127
+        machine.set_param(4, 32767);   // dry out 64 = 0%
+        let out = render_impulse_blocks(&mut machine, 2048);
+        let peak = (0..out.len()).max_by(|&a, &b| out[a].abs().total_cmp(&out[b].abs())).unwrap();
+        assert_eq!(peak, 1325, "wet copy should sit 1325 samples after the impulse");
+    }
+
+    /// Unit impulse at sample 0 in 256-sample blocks. A tiny carrier keeps the input non-silent,
+    /// since the port (like the original) stops output on silent blocks.
+    fn render_impulse_blocks(machine: &mut FaustMachine, frames: usize) -> Vec<f32> {
+        let mut out = Vec::with_capacity(frames);
+        for start in (0..frames).step_by(256) {
+            let mut buf = AudioBuffer::new(2, 256);
+            for i in 0..256 {
+                let s = if start + i == 0 { 1.0 } else { 1e-9 };
+                buf.channel_mut(0)[i] = s;
+                buf.channel_mut(1)[i] = s;
+            }
+            machine.render(&mut buf);
+            out.extend_from_slice(buf.channel(0));
+        }
+        out
+    }
+
     #[test]
     fn freeverb_set_param_follows_bmx_order() {
         assert_set_param_routes("freeverb", "reverb.dsp", &[
