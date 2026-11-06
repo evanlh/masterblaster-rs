@@ -595,6 +595,81 @@ mod tests {
     }
 
     #[test]
+    fn registry_resolves_automaton_parametric_eq() {
+        assert!(crate::create_faust_machine("Automaton Parametric EQ").is_some());
+    }
+
+    // --- Automaton Parametric EQ ---
+
+    const APEQ: (&str, &str) = ("automaton_parametric_eq", "automaton_parametric_eq.dsp");
+    const APEQ_LABELS: [&str; 9] = [
+        "LPF-Gain", "LPF-Freq.", "LPF-Shelf", "HPF-Gain", "HPF-Freq.", "HPF-Shelf", "Gain", "Freq.", "BWidth",
+    ];
+    const APEQ_INITS: [f32; 9] = [32767.0, 32767.0, 0.0, 32767.0, 32767.0, 0.0, 32767.0, 32767.0, 32767.0];
+    const APEQ_BAND_GAIN: u16 = 6;
+
+    #[test]
+    fn apeq_compiles_stereo() {
+        let dsp = load_dsp(APEQ.0, APEQ.1);
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+    }
+
+    #[test]
+    fn apeq_param_ordering_and_ranges() {
+        let expected: Vec<ExpectedParam> = APEQ_LABELS.iter().zip(APEQ_INITS)
+            .map(|(&label, init)| ExpectedParam { label, min: 0.0, max: 65534.0, init })
+            .collect();
+        assert_params_match(APEQ.0, APEQ.1, &expected);
+    }
+
+    #[test]
+    fn apeq_set_param_follows_bmx_order() {
+        assert_set_param_routes(APEQ.0, APEQ.1, &APEQ_LABELS);
+    }
+
+    /// Scale a Buzz word value (0..65534) the way the BMX loader does.
+    fn apeq_with(params: &[(u16, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp(APEQ.0, APEQ.1));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, (v as i64 * 65535 / 65534) as i32));
+        machine
+    }
+
+    fn render_blocks(machine: &mut FaustMachine, input: &[f32]) -> Vec<f32> {
+        input.chunks(256).flat_map(|c| render_left(machine, c)).collect()
+    }
+
+    fn peak(samples: &[f32]) -> f32 {
+        samples.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    #[test]
+    fn apeq_defaults_are_identity() {
+        let input = sine(1000.0, 4096);
+        let out = render_blocks(&mut apeq_with(&[]), &input);
+        let worst = out.iter().zip(&input).map(|(a, b)| (a - b).abs()).enumerate()
+            .fold((0, 0.0f32), |m, (i, d)| if d > m.1 { (i, d) } else { m });
+        assert!(worst.1 < 1e-5, "defaults should pass input through, worst {worst:?}");
+    }
+
+    #[test]
+    fn apeq_band_gain_boosts_centre_by_36_db() {
+        // Freq. 32767 = 1052.9 Hz; Gain 65534 = +36 dB
+        let out = render_blocks(&mut apeq_with(&[(APEQ_BAND_GAIN, 65534)]), &sine(1052.9, 16384));
+        let gain_db = 20.0 * (peak(&out[8192..]) / 0.5).log10();
+        assert!((gain_db - 36.0).abs() < 0.3, "expected +36 dB, got {gain_db}");
+    }
+
+    #[test]
+    fn apeq_cuts_output_on_silent_blocks() {
+        let mut input = vec![0.0; 2048];
+        input[300] = 1.0;
+        let out = render_blocks(&mut apeq_with(&[(0, 65534)]), &input);
+        assert!(peak(&out[256..512]) > 0.1, "impulse block should pass");
+        assert_eq!(peak(&out[512..]), 0.0, "shelf tail is skipped on silent blocks: {:?}", &out[510..520]);
+    }
+
+    #[test]
     fn registry_returns_none_for_unknown() {
         assert!(crate::create_faust_machine("Unknown Machine XYZ").is_none());
     }
