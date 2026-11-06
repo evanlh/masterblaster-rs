@@ -599,6 +599,68 @@ mod tests {
         assert!(crate::create_faust_machine("Unknown Machine XYZ").is_none());
     }
 
+    #[test]
+    fn registry_resolves_smootherdrive() {
+        assert!(crate::create_faust_machine("Dave's Smootherdrive").is_some());
+    }
+
+    // --- Dave's SmootherDrive ---
+
+    const SD_THRESHOLD: u16 = 0;
+    const SD_INTENSITY: u16 = 1;
+
+    #[test]
+    fn smootherdrive_param_ordering_and_ranges() {
+        assert_params_match("smootherdrive", "smootherdrive.dsp", &[
+            ExpectedParam { label: "Threshold", min: 0.0, max: 32767.0, init: 32767.0 },
+            ExpectedParam { label: "Intensity", min: 0.0, max: 100.0,   init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn smootherdrive_set_param_follows_bmx_order() {
+        assert_set_param_routes("smootherdrive", "smootherdrive.dsp", &["Threshold", "Intensity"]);
+    }
+
+    /// Set a raw Buzz value via the BMX truncating 0..65535 scaling.
+    fn set_raw_param(machine: &mut FaustMachine, param: u16, raw: i32, max: i32) {
+        machine.set_param(param, (raw as i64 * 65535 / max as i64) as i32);
+    }
+
+    fn smootherdrive_out(threshold: i32, intensity: i32, input: f32) -> f32 {
+        let mut machine = FaustMachine::new(load_dsp("smootherdrive", "smootherdrive.dsp"));
+        machine.init(44100);
+        set_raw_param(&mut machine, SD_THRESHOLD, threshold, 32767);
+        set_raw_param(&mut machine, SD_INTENSITY, intensity, 100);
+        *render_left(&mut machine, &[input; 64]).last().unwrap()
+    }
+
+    fn assert_close(got: f32, expected: f32, tol: f32) {
+        assert!((got - expected).abs() < tol, "expected ~{expected}, got {got}");
+    }
+
+    #[test]
+    fn smootherdrive_intensity_zero_is_bypass() {
+        assert_close(smootherdrive_out(4096, 0, 0.3), 0.3, 1e-7);
+    }
+
+    #[test]
+    fn smootherdrive_linear_gain_below_threshold() {
+        // Measured: T=4096, I=25 gives a small-signal gain of exactly 19/3.
+        assert_close(smootherdrive_out(4096, 25, -0.05), -0.05 * 19.0 / 3.0, 1e-5);
+    }
+
+    #[test]
+    fn smootherdrive_zero_threshold_is_quarter_sine() {
+        let x = 16000.0 / 32768.0;
+        assert_close(smootherdrive_out(0, 50, x), (std::f32::consts::FRAC_PI_2 * x).sin(), 1e-5);
+    }
+
+    #[test]
+    fn smootherdrive_full_scale_maps_to_full_scale() {
+        assert_close(smootherdrive_out(12288, 63, 1.0), 1.0, 1e-5);
+    }
+
     // --- Machine-code disk cache tests ---
 
     #[test]
