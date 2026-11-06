@@ -12,17 +12,21 @@
 //    fb = (v-512)/512 (no limiter: +-100% stays bounded as in the oracle).
 //  * LFO: period = Rate/4 ticks, phase starts at 0, Rate 0 freezes. Manual = +m/1024 cycle,
 //    Phase Sep = +p/254 cycle on the right channel. Step = sample&hold of the LFO every
-//    Step/4 ticks (held from t=0). Shapes: sin, tri (flanger +1 / phaser -1 at phase 0), square (+1 first half), saw up (-1..1),
-//    saw down; Noise is modelled statistically (smoothed random), its sequence is not
+//    Step/4 ticks (held from t=0). Shapes: sin, tri (flanger +1 / phaser -1 at phase 0),
+//    square (+1 first half), saw up (-1..1), saw down; Noise is modelled statistically (random S&H every 8 samples); its sequence is not
 //    recoverable (those renders are nondeterministic).
 //  * Tape flanger = flanger + x(t - floor(range*k)/2) - x; the tape term is not scaled by the
 //    levels and bypasses the HiPass/LoPass (fits on presets Wormhole / Spaceship Engine).
-//  * Phaser: N first-order allpasses y = c v - v' + c y' (odd N with c=1 is +1, measured), c = (1 - tan(pi f/sr))/(1 + tan(pi f/sr)),
+//  * Phaser: N first-order allpasses y = c v - v' + c y' (odd N with c=1 is +1, measured),
+//    c = (1 - tan(pi f/sr))/(1 + tan(pi f/sr)),
 //    f = floor(range*k)*(1+lfo)/2 (Min has no audible effect), feedback out->in (v-512)/512.
 //  * Routings (s = cos(pi/2*WD/254): the inner stage of a chain carries the wet gain again,
 //    fitted at WD 64/127/191 in modes 3 and 9): 3/5 s*P(F)/s*F(P), 4/6 same + tape tap, 7 P(x+sF),
 //    8 P(tap+sF), 9 F(s(x+P)), 10 9+tape, 11 F+P, 12 T+P; levels: 7/8 lP*P(.. + s*lF*F),
-//    others scale by lF*lP (fits on mode-7/9 level corners and presets).
+//    others scale by lF*lP (fits on mode-7/9 level corners and presets). In modes 9/10 both
+//    flangers are fed the LEFT phaser (stereo-matrix: right output while only left plays).
+//  * Step S&H period is Step/4 ticks + 1 sample (edges at 42001, 84002, 126003, 168004).
+//  * Noise LFO values are uniform in [-1,1] (fit per Step-held segment on preset Random5).
 //  * HiPass/LoPass: 2nd-order Butterworth on the wet path, f = 20 + 19980*(v/32768)^2.
 //  * Link bits copy flanger values to the phaser (1 min,2 range,4 fb,8 rate,16 step,32 man,
 //    64 phase, 128 all + level) — from the parameter text; measured: a linked Manual freezes
@@ -83,9 +87,11 @@ keep = select2((inertia + pmin0) < 0, 1.0, 0.0);   // Inertia, 1.Min: no static 
 QT = int(rint(ma.SR * 30.0 / 504.0));
 icount(len) = (+(2) : wrapi) ~ _ : mem with { wrapi(c) = select2(c >= len, c, c - len); };
 phase(rate) = select2(len > 0, 0, float(icount(len)) / float(max(1, len)))
-  with { len = int(r(rate)) * QT + int(rint(r(rate) * 0.125)); };
-  // the oracle's LFO runs ~5.4e-5 slow (square edges at 84005/168009 instead of 84000/168000
-  // for a 32-tick period); modelled as 8 extra samples per 32 ticks (sine fits: period 168008). Rate 0 holds phase 0.
+  with { len = int(r(rate)) * QT + int(rint(r(rate) * r(rate) / 1024.0)); };
+  // The oracle's LFO runs slightly slow: square edges at 84005/168009 instead of 84000/168000
+  // for Rate 128 (sine fits: period 168008), no measurable drift at Rate 8, and more at
+  // Rate 1024. Modelled as Rate^2/2048 extra samples per period (likely float phase
+  // accumulation in the original). Rate 0 holds phase 0.
 
 shape(t, p, tsign) = ba.selectn(6, t, sine, tri, sqr, sawu, sawd, nz) with {
   sine = sin(2.0 * ma.PI * p);
@@ -93,9 +99,9 @@ shape(t, p, tsign) = ba.selectn(6, t, sine, tri, sqr, sawu, sawd, nz) with {
   sqr  = select2(p < 0.5, -1.0, 1.0);
   sawu = 2.0 * p - 1.0;
   sawd = 1.0 - 2.0 * p;
-  nz   = no.noise : ba.sAndH(trig) : fi.lowpass(1, 2.0 / per) : *(3.0) : max(-1.0) : min(1.0);
-  trig = ((p - p') < 0.0) | (ma.frac(p * 16.0) < ma.frac(p' * 16.0));
-  per  = max(1.0, 1.0 / max(1e-9, (p - p') : abs)) / ma.SR;
+  // Noise: uniform random value held for 8 samples (the 8-sample hold matches the oracle's
+  // third-octave spectrum at Rate 128; L and R share one sequence, as in the oracle).
+  nz   = no.noise : ba.sAndH(ba.time % 8 == 0);
 };
 
 // sample & hold every step/4 ticks (0 = off), held from t=0
