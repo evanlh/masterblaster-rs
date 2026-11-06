@@ -400,6 +400,22 @@ mod tests {
     }
 
     #[test]
+    fn whitenoise_gate_param_ordering_and_ranges() {
+        assert_params_match("whitenoise_gate", "whitenoise_gate.dsp", &[
+            ExpectedParam { label: "Ratio",      min: 10.0, max: 250.0,  init: 200.0 },
+            ExpectedParam { label: "Threshold",  min: 0.0,  max: 248.0,  init: 120.0 },
+            ExpectedParam { label: "Open Rate",  min: 1.0,  max: 2000.0, init: 1.0 },
+            ExpectedParam { label: "Close Rate", min: 1.0,  max: 2000.0, init: 500.0 },
+        ]);
+    }
+
+    #[test]
+    fn whitenoise_gate_set_param_follows_bmx_order() {
+        assert_set_param_routes("whitenoise_gate", "whitenoise_gate.dsp",
+            &["Ratio", "Threshold", "Open Rate", "Close Rate"]);
+    }
+
+    #[test]
     fn filter2_set_param_follows_bmx_order() {
         assert_set_param_routes("filter2", "filter2.dsp", &["Type", "Cutoff", "Resonance"]);
     }
