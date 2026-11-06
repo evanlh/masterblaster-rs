@@ -418,6 +418,52 @@ mod tests {
         ]);
     }
 
+    // --- Rymix FlaserBox (labels as Faust reports them: leading spaces trimmed) ---
+
+    const FLASERBOX_PARAMS: &[(&str, f32, f32, f32)] = &[
+        ("Gain", 0.0, 254.0, 127.0), ("Mode", 0.0, 12.0, 0.0), ("Link", 0.0, 128.0, 0.0),
+        ("Flanger Lvl ----", 0.0, 254.0, 254.0), ("Minimum", 0.0, 1024.0, 13.0),
+        ("Range", 0.0, 1024.0, 128.0), ("Feedback", 0.0, 1024.0, 512.0),
+        ("Rate", 0.0, 2048.0, 128.0), ("Step", 0.0, 128.0, 0.0),
+        ("Manual LFO*", 0.0, 1024.0, 0.0), ("Phase Sep", 0.0, 254.0, 0.0),
+        ("Phaser Lvl ----", 0.0, 254.0, 254.0), ("Stages", 0.0, 48.0, 12.0),
+        ("1.Min", 0.0, 1024.0, 13.0), ("2.Range", 0.0, 1024.0, 128.0),
+        ("4.Feedback", 0.0, 1024.0, 512.0), ("8.Rate", 0.0, 2048.0, 128.0),
+        ("16.Step", 0.0, 128.0, 0.0), ("32.Manual*", 0.0, 1024.0, 0.0),
+        ("64.Phase", 0.0, 254.0, 0.0), ("LFO Type F:P", 0.0, 35.0, 0.0),
+        ("HiPass*", 0.0, 32768.0, 0.0), ("LoPass*", 0.0, 32768.0, 32768.0),
+        ("Inertia", 0.0, 2048.0, 0.0), ("Wet/Dry", 0.0, 254.0, 127.0),
+    ];
+
+    #[test]
+    fn flaserbox_param_ordering_and_ranges() {
+        let expected: Vec<ExpectedParam> = FLASERBOX_PARAMS.iter()
+            .map(|&(label, min, max, init)| ExpectedParam { label, min, max, init })
+            .collect();
+        assert_params_match("flaserbox", "flaserbox.dsp", &expected);
+    }
+
+    #[test]
+    fn flaserbox_set_param_follows_bmx_order() {
+        let labels: Vec<&str> = FLASERBOX_PARAMS.iter().map(|p| p.0).collect();
+        assert_set_param_routes("flaserbox", "flaserbox.dsp", &labels);
+    }
+
+    #[test]
+    fn flaserbox_full_dry_passes_input() {
+        let mut machine = FaustMachine::new(load_dsp("flaserbox", "flaserbox.dsp"));
+        machine.init(44100);
+        machine.set_param(24, 65535); // Wet/Dry = 254: dry only
+        let input = sine(440.0, 256);
+        let mut buf = AudioBuffer::new(2, 256);
+        buf.channel_mut(0).copy_from_slice(&input);
+        buf.channel_mut(1).copy_from_slice(&input);
+        machine.render(&mut buf);
+        for (i, (&y, &x)) in buf.channel(0).iter().zip(&input).enumerate() {
+            assert!((y - x).abs() < 1e-5, "sample {i}: {y} vs {x}");
+        }
+    }
+
     // --- Jeskola Reverb 2 behaviour ---
 
     const RV2_DRY_OUT: u16 = 0;
