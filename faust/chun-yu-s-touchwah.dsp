@@ -16,8 +16,14 @@
 //  * Silent input: the machine returns false from Work on blocks (256 samples, restarting each
 //    tick) whose input is entirely zero; output is 0 and all state (filter, window counters, cutoff)
 //    freezes. Emulated causally: while the current block has been silent so far, output 0 and hold state.
-//    The zeros before an onset inside a block are therefore not run through the filter (small loss).
-//  * A cutoff at Nyquist (Min 22049, Max 22050) makes the biquad pole-zero cancel: identity.
+//    At the first non-zero sample of a block the window counter and the filter state are caught up
+//    over the leading zeros (counter exactly, filter via its closed-form free response); only the
+//    machine's ringing output during those leading zeros is lost.
+//  * Remaining differences: (1) Min 22049 / Max 22050 puts the poles on z = -1 next to a double zero;
+//    the oracle (double precision state, sample-exact to ~1e-7 in the first blocks) diverges from
+//    single-precision Faust within a few thousand samples, so those corner jobs score ~0. (2) cutoffs
+//    of a few Hz (Min 1 / Max 2) give outputs about -70 dB below the input and are not matched.
+//    (3) The sin curve is an empirical fit, accurate to ~1e-3 in the target amplitude.
 // Raw parameter values are recovered by rounding (masterblaster scales raw -> 0..65535 -> slider by
 // truncation). Mono machine: both Faust inputs are summed and halved, the result goes to both outputs.
 import("stdfaust.lib");
@@ -42,13 +48,25 @@ target(rms) = lo + span * curve(rms);
 glide(fc, t) = fc + select2(t > fc, 0.5, 0.75) * (t - fc);
 rmsof(ss, cnt) = sqrt(ss / max(cnt, 1));
 
-// ---- RBJ low-pass coefficients (b0, b1, a1, a2 already divided by a0) ----
+// ---- RBJ low-pass coefficients (divided by a0) ----
 sh(fc)   = sin(ma.PI * fc / ma.SR);
 al(fc)   = sin(2 * ma.PI * fc / ma.SR) * damp / 2;
 a0(fc)   = 1 + al(fc);
 b0(fc)   = sh(fc) * sh(fc) / a0(fc);
-a1(fc)   = -2 * (1 - 2 * sh(fc) * sh(fc)) / a0(fc);
-a2(fc)   = (1 - al(fc)) / a0(fc);
+// a1 + 2 and a2 - 1 are formed directly: the poles sit near z = +-1 at extreme cutoffs, where
+// a1 = -2 and a2 = 1 would be indistinguishable in single precision.
+da1(fc)  = (2 * al(fc) + 4 * sh(fc) * sh(fc)) / a0(fc);
+da2(fc)  = -2 * al(fc) / a0(fc);
+
+// ---- free (zero-input) response of the biquad, for catching up over leading zeros ----
+// Poles: radius sqrt(a2) = sqrt((1-al)/(1+al)), angle atan2(sin(w) sqrt(1-damp^2/4), cos(w)).
+// With U(k) = r^k sin((k+1) theta) / sin(theta):  y[n+p] = U(p) y[n] - a2 U(p-1) y[n-1].
+wc(fc)      = 2 * ma.PI * fc / ma.SR;
+theta(fc)   = atan2(sin(wc(fc)) * sqrt(1 - damp * damp / 4), cos(wc(fc)));
+rad2(fc)    = (1 - al(fc)) / (1 + al(fc));
+ufun(fc, k) = pow(sqrt(rad2(fc)), k) * sin((k + 1) * theta(fc)) / sin(theta(fc));
+freey1(fc, p, ya, yb) = ufun(fc, p) * ya - rad2(fc) * ufun(fc, p - 1) * yb;
+freey2(fc, p, ya, yb) = ufun(fc, p - 1) * ya - rad2(fc) * ufun(fc, p - 2) * yb;
 
 // ---- position inside the host block (0 on its first sample) ----
 blockpos = (\(p).(select2(ma.BS != ma.BS', (p + 1) % ma.BS, 0))) ~ _;
@@ -63,7 +81,7 @@ wah(x, act) = loop ~ si.bus(7) : (!, !, !, !, !, !, !, _)
 with {
     onset = act * (1 - act');
     loop(x1, x2, y1, y2, fcoff, ss, cnt) =
-        hold(x1, x), hold(x2, x1), hold(y1, yo), hold(y2, y1), hold(fcoff, fcn - fc0),
+        hold(x1, x), hold(x2, x1e), hold(y1, yo), hold(y2, y1e), hold(fcoff, fcn - fc0),
         hold(ss, ssa + (cnta >= 0) * x * x), hold(cnt, cnta + 1), yo * act / sfac
     with {
         fc   = fcoff + fc0;
@@ -76,7 +94,11 @@ with {
         fcn  = select2(upd, fc1, glide(fc1, target(rmsof(ss1, cnt1))));
         cnta = select2(upd, cnt1, -1);
         ssa  = select2(upd, ss1, 0);
-        yo   = b0(fcn) * (x + 2 * x1 + x2) - a1(fcn) * y1 - a2(fcn) * y2;
+        y1e  = select2(onset, y1, freey1(fc, blockpos, y1, y2));   // (y1, y2) advanced over the
+        y2e  = select2(onset, y2, freey2(fc, blockpos, y1, y2));   // leading zeros of the block
+        x1e  = x1 * (1 - onset);
+        x2e  = x2 * (1 - onset);
+        yo   = 2 * y1e - y2e + b0(fcn) * (x + 2 * x1e + x2e) - da1(fcn) * y1e - da2(fcn) * y2e;
         hold(old, new) = select2(act, old, new);
     };
 };
