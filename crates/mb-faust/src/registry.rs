@@ -78,6 +78,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
             include_str!("../../../faust/whitenoise_harmonic_delay.dsp"),
         ),
         "WhiteNoise's Pixelate" => ("pixelate", include_str!("../../../faust/pixelate.dsp")),
+        "Zephod Phaser" => ("zephod_phaser", include_str!("../../../faust/zephod_phaser.dsp")),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)

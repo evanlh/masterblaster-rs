@@ -160,7 +160,8 @@ masterblaster-rs/
 │   ├── reverb2.dsp         # Jeskola Reverb 2 (Gardner medium room + Moorer ER, measured from oracles)
 │   ├── reverb.dsp          # Jeskola Freeverb (Freeverb + hi/lo cut + pre-delay)
 │   ├── wahpro.dsp          # FSM WahPro
-│   └── wahpro2.dsp         # FSM WahPro2
+│   ├── wahpro2.dsp         # FSM WahPro2
+│   └── zephod_phaser.dsp   # Zephod Phaser (clean-room, oracle-derived)
 ├── designs/                # Design documents (active + completed/)
 ├── tests/
 │   ├── fixtures/
