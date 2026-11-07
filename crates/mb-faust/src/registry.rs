@@ -14,6 +14,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "Jeskola Reverb 2" => ("reverb2", include_str!("../../../faust/reverb2.dsp")),
         "Jeskola Freeverb" => ("reverb", include_str!("../../../faust/reverb.dsp")),
         "FSM WahPro" => ("wahpro", include_str!("../../../faust/wahpro.dsp")),
+        "Geonik's Gate" => ("geonik_gate", include_str!("../../../faust/geonik_gate.dsp")),
         "FSM WahPro2" => ("wahpro2", include_str!("../../../faust/wahpro2.dsp")),
         _ => return None,
     };
