@@ -412,6 +412,22 @@ mod tests {
     }
 
     #[test]
+    fn joachims_limiter_param_ordering_and_ranges() {
+        assert_params_match("joachims_limiter", "joachims_limiter.dsp", &[
+            ExpectedParam { label: "Input",   min: 1.0, max: 128.0, init: 71.0 },
+            ExpectedParam { label: "Thresh.", min: 0.0, max: 6.0,   init: 1.0 },
+            ExpectedParam { label: "Release", min: 1.0, max: 128.0, init: 60.0 },
+        ]);
+    }
+
+    #[test]
+    fn joachims_limiter_set_param_follows_bmx_order() {
+        assert_set_param_routes("joachims_limiter", "joachims_limiter.dsp", &[
+            "Input", "Thresh.", "Release",
+        ]);
+    }
+
+    #[test]
     fn freeverb_set_param_follows_bmx_order() {
         assert_set_param_routes("freeverb", "reverb.dsp", &[
             "Rev Time", "HF Damp", "Pre Delay", "Low Cut", "High Cut", "Rev Out", "Dry Out",
