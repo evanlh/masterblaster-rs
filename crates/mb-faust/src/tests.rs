@@ -943,6 +943,13 @@ mod tests {
             ExpectedParam { label: "High Cutoff", min: 10.0, max: 16000.0, init: 5000.0 },
             // Buzz switch (declared -1..-1), delivered by masterblaster as 0/1
             ExpectedParam { label: "Dry Thru",    min: 0.0,  max: 1.0,     init: 1.0 },
+    #[test]
+    fn ryg_analog_distort_param_ordering_and_ranges() {
+        assert_params_match("ryg_analog_distort", "ryg_analog_distort.dsp", &[
+            ExpectedParam { label: "Drive",  min: 0.0, max: 32768.0, init: 128.0 },
+            ExpectedParam { label: "Clamp",  min: 0.0, max: 65534.0, init: 32767.0 },
+            ExpectedParam { label: "Amount", min: 0.0, max: 127.0,   init: 127.0 },
+            ExpectedParam { label: "Gain",   min: 0.0, max: 127.0,   init: 127.0 },
         ]);
     }
 
@@ -1161,6 +1168,12 @@ mod tests {
         let out = render_impulse_left(&mut machine, 1024);
         assert!(out[1..256].iter().any(|s| s.abs() > 1e-6), "impulse block should ring");
         assert!(out[256..].iter().all(|s| *s == 0.0), "silent blocks should be cut");
+    }
+
+    fn ryg_analog_distort_set_param_follows_bmx_order() {
+        assert_set_param_routes("ryg_analog_distort", "ryg_analog_distort.dsp", &[
+            "Drive", "Clamp", "Amount", "Gain",
+        ]);
     }
 
     // --- Jeskola Reverb 2 behaviour ---
@@ -1786,6 +1799,74 @@ mod tests {
             let got = round_trip_f32(&dsp.params[0], raw as f32);
             assert!((got.round() - raw as f32).abs() < 0.5, "raw {raw} round-trips to {got}");
         }
+    }
+
+    // --- Ryg's Analog Distort behaviour ---
+
+    const RAD_RANGES: [i64; 4] = [32768, 65534, 127, 127];
+
+    /// Scale a raw Buzz value to 0..65535 the way the BMX loader does (truncating).
+    fn bmx_scaled(raw: i64, range: i64) -> i32 {
+        (raw * 65535 / range) as i32
+    }
+
+    /// Ryg's Analog Distort with raw [Drive, Clamp, Amount, Gain].
+    fn analog_distort_with(raw: [i64; 4]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("ryg_analog_distort", "ryg_analog_distort.dsp"));
+        machine.init(44100);
+        raw.iter().zip(RAD_RANGES).enumerate()
+            .for_each(|(i, (&v, r))| machine.set_param(i as u16, bmx_scaled(v, r)));
+        machine
+    }
+
+    /// Reference shaper: Clamp*atan(G)*atan(G*X/Clamp) mixed by Amount/Gain, Buzz scale.
+    fn analog_distort_reference(raw: [i64; 4], x: f64) -> f64 {
+        let [drive, clamp, amount, gain] = raw.map(|v| v as f64);
+        let g = 10f64.powf(64.0 * drive / 32768.0 / 20.0);
+        let xs = x * 32768.0;
+        let wet = clamp * g.atan() * (g * xs / clamp).atan();
+        ((127.0 - amount) / 127.0 * xs + amount * gain / 16129.0 * wet) / 32768.0
+    }
+
+    fn assert_analog_distort_matches(raw: [i64; 4]) {
+        let input: Vec<f32> = (0..256).map(|i| (i as f32 / 128.0 - 1.0) * 0.9).collect();
+        let out = render_left(&mut analog_distort_with(raw), &input);
+        for (&x, &y) in input.iter().zip(&out) {
+            let want = analog_distort_reference(raw, x as f64);
+            assert!((y as f64 - want).abs() < 1e-4 * want.abs().max(1.0),
+                "{raw:?}: x={x} expected {want}, got {y}");
+        }
+    }
+
+    #[test]
+    fn ryg_analog_distort_matches_reference_shaper() {
+        [[128, 32767, 127, 127], [0, 65534, 127, 127], [16384, 16384, 64, 95],
+         [32768, 49151, 127, 32], [8192, 1, 100, 127]]
+            .into_iter().for_each(assert_analog_distort_matches);
+    }
+
+    #[test]
+    fn ryg_analog_distort_amount_zero_is_identity() {
+        let input = [0.5, -0.25, 0.0, 0.9];
+        assert_eq!(render_left(&mut analog_distort_with([32768, 100, 0, 0]), &input), input);
+    }
+
+    #[test]
+    fn ryg_analog_distort_clamp_zero_full_amount_is_silent() {
+        let out = render_left(&mut analog_distort_with([16384, 0, 127, 127]), &[0.5, 0.0, -0.3]);
+        assert_eq!(out, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn ryg_analog_distort_saturates_at_clamp_times_pi_squared_over_4() {
+        let out = render_left(&mut analog_distort_with([32768, 32767, 127, 127]), &[0.9]);
+        let asymptote = 32767.0 / 32768.0 * std::f32::consts::PI.powi(2) / 4.0;
+        assert!((out[0] - asymptote).abs() < 0.01, "expected ~{asymptote}, got {}", out[0]);
+    }
+
+    #[test]
+    fn registry_resolves_ryg_analog_distort() {
+        assert!(crate::create_faust_machine("ryg's analog distort").is_some());
     }
 
     // --- Registry tests ---

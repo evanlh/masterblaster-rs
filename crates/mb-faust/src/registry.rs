@@ -60,6 +60,10 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         ),
         "Muon Delay" => ("muon_delay", include_str!("../../../faust/muon_delay.dsp")),
         "Rout EQ-10" => ("routeq10", include_str!("../../../faust/routeq10.dsp")),
+        "ryg's analog distort" => (
+            "ryg_analog_distort",
+            include_str!("../../../faust/ryg_analog_distort.dsp"),
+        ),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
