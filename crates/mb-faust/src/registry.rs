@@ -38,6 +38,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "FSM PanzerDelay" => ("panzerdelay", include_str!("../../../faust/panzerdelay.dsp")),
         "FSM PhatMan" => ("phatman", include_str!("../../../faust/phatman.dsp")),
         "FSM ScrapMan" => ("scrapman", include_str!("../../../faust/scrapman.dsp")),
+        "FSM SprayMan" => ("sprayman", include_str!("../../../faust/sprayman.dsp")),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
