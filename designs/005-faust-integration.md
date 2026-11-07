@@ -2,7 +2,6 @@
 
 Created: 20260213
 Updated: 20261106
-Updated: 20261103
 
 
 ## Status
@@ -823,7 +822,6 @@ standing in for a Buzz machine must match it on three things:
 | FSM WahPro / WahPro2 | Cutoff, Resonance, Filter, LFO rate, LFO mod, LFO Shape, Inertia, Set phase (track params) | BMX PARA |
 | Jeskola Filter 2 | Type, Cutoff, Resonance | BMX PARA |
 | Jeskola Reverb 2 | Dry Out 0..4096 (4096), Rev Out 0..4096 (768), ER Out 0..4096 (0), Rev Time 1..64 (10), Pre-Delay 0..100 ms (0), High Cutoff 100..16384 Hz (5000) | BMX PARA; DSP measured from oracle impulse responses (see `faust/reverb2.dsp` header) |
-| Jeskola Reverb 2 | Dry Out 0..4096 (4096), Rev Out 0..4096 (768), ER Out 0..4096 (0), Rev Time 1..64 (10), Pre-Delay 0..100 ms (0), High Cutoff 100..16384 Hz (5000) | BMX PARA; DSP mapping is guessed |
 | Jeskola Stereo Reverb | Same schema as Jeskola Reverb 2 | BMX PARA; DSP mapping measured against buzz-machines-oracles (clean room, see `faust/stereoreverb.dsp`) |
 | Jeskola Freeverb | Rev Time, HF Damp, Pre Delay, Low Cut, High Cut, Rev Out, Dry Out (all 0..127) | C++ `Jeskola/Freeverb` |
 | Jeskola Chorus | freq 0..4096 (100), depth 0..127 (64), feedback 0..128 (64), min. delay 0..50 (25), dry out 0..128 (128), wet out 0..128 (128) | info.json; DSP recovered clean-room from oracle measurements |
