@@ -27,6 +27,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
             "automaton_compressor_mkii",
             include_str!("../../../faust/automaton_compressor_mkii.dsp"),
         ),
+        "Automaton EQ-10" => ("automaton_eq10", include_str!("../../../faust/automaton_eq10.dsp")),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
