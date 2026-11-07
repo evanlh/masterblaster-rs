@@ -15,6 +15,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "Jeskola Freeverb" => ("reverb", include_str!("../../../faust/reverb.dsp")),
         "FSM WahPro" => ("wahpro", include_str!("../../../faust/wahpro.dsp")),
         "FSM WahPro2" => ("wahpro2", include_str!("../../../faust/wahpro2.dsp")),
+        "11-Lofi v1.0" => ("lofi", include_str!("../../../faust/lofi.dsp")),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
