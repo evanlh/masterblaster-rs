@@ -755,6 +755,19 @@ mod tests {
             ExpectedParam { label: "Flanger Mode", min: 0.0, max: 1.0,     init: 0.0 },
             ExpectedParam { label: "Sweep Speed",  min: 0.0, max: 254.0,   init: 1.0 },
             ExpectedParam { label: "Feedback",     min: 0.0, max: 65534.0, init: 32767.0 },
+    // --- Automaton Compressor ---
+
+    const AC_THRESHOLD: u16 = 0;
+    const AC_RATIO: u16 = 1;
+
+    #[test]
+    fn automaton_compressor_param_ordering_and_ranges() {
+        assert_params_match("automaton_compressor", "automaton_compressor.dsp", &[
+            ExpectedParam { label: "Threshold", min: 0.0, max: 65534.0, init: 47512.0 },
+            ExpectedParam { label: "Ratio",     min: 0.0, max: 65534.0, init: 0.0 },
+            ExpectedParam { label: "Attack",    min: 0.0, max: 65534.0, init: 12577.0 },
+            ExpectedParam { label: "Release",   min: 0.0, max: 65534.0, init: 7452.0 },
+            ExpectedParam { label: "Gain",      min: 0.0, max: 65534.0, init: 0.0 },
         ]);
     }
 
@@ -819,5 +832,31 @@ mod tests {
         let silent = render_left(&mut machine, &[0.0; 256]);
         assert!(first[20].abs() > 0.1, "feedback should ring inside the input block");
         assert!(silent.iter().all(|y| *y == 0.0), "silent block must be cut to zero");
+    fn automaton_compressor_set_param_follows_bmx_order() {
+        assert_set_param_routes("automaton_compressor", "automaton_compressor.dsp", &[
+            "Threshold", "Ratio", "Attack", "Release", "Gain",
+        ]);
+    }
+
+    /// Steady-state output/input peak ratio for a 1 kHz, 0.5-amplitude sine.
+    fn automaton_compressor_sine_gain(params: &[(u16, i32)]) -> f32 {
+        let mut machine = FaustMachine::new(load_dsp("automaton_compressor", "automaton_compressor.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, v));
+        let out: Vec<f32> = sine(1000.0, 44100).chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
+        out[33075..].iter().fold(0.0f32, |m, s| m.max(s.abs())) / 0.5
+    }
+
+    #[test]
+    fn automaton_compressor_defaults_are_unity() {
+        let g = automaton_compressor_sine_gain(&[]);
+        assert!((g - 1.0).abs() < 1e-3, "1:1 ratio should pass through, gain={g}");
+    }
+
+    #[test]
+    fn automaton_compressor_gain_reduction_saturates_at_one_over_ratio() {
+        // Threshold -64 dB, ratio 25:1: linear-amplitude law gives ~1/25 for loud input.
+        let g = automaton_compressor_sine_gain(&[(AC_THRESHOLD, 0), (AC_RATIO, 65535)]);
+        assert!(g > 0.035 && g < 0.05, "expected gain near 1/25, got {g}");
     }
 }
