@@ -369,6 +369,18 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn fsm_chorus_param_ordering_and_ranges() {
+        assert_params_match("fsm_chorus", "fsm_chorus.dsp", &[
+            ExpectedParam { label: "Dry out",       min: 0.0, max: 240.0, init: 240.0 },
+            ExpectedParam { label: "Minimum delay", min: 1.0, max: 100.0, init: 20.0 },
+            ExpectedParam { label: "Modulation",    min: 1.0, max: 100.0, init: 10.0 },
+            ExpectedParam { label: "LFO rate",      min: 0.0, max: 240.0, init: 10.0 },
+            ExpectedParam { label: "Wet out",       min: 0.0, max: 240.0, init: 240.0 },
+            ExpectedParam { label: "Feedback",      min: 0.0, max: 128.0, init: 64.0 },
+        ]);
+    }
+
     /// Set each BMX param index to max and check it lands on the
     /// identically-labelled Faust param (C++ pParameters[] order).
     fn assert_set_param_routes(dsp_name: &str, dsp_file: &str, bmx_order: &[&str]) {
@@ -615,5 +627,17 @@ mod tests {
         let factory = crate::cache::try_load(name, source)
             .expect("factory should be cached after compile_cached");
         unsafe { crate::ffi::deleteCDSPFactory(factory); }
+    }
+
+    #[test]
+    fn fsm_chorus_set_param_follows_bmx_order() {
+        assert_set_param_routes("fsm_chorus", "fsm_chorus.dsp", &[
+            "Dry out", "Minimum delay", "Modulation", "LFO rate", "Wet out", "Feedback",
+        ]);
+    }
+
+    #[test]
+    fn fsm_chorus_is_registered() {
+        assert!(crate::registry::create_faust_machine("FSM Chorus").is_some());
     }
 }
