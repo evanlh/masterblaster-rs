@@ -2128,6 +2128,14 @@ mod tests {
     #[test]
     fn geonik_am_compiles_two_in_two_out() {
         let dsp = load_dsp("geonik_am", "geonik_am.dsp");
+    // --- smartelectronix tubescreamer (clean-room port) ---
+
+    const TUBESCREAMER: (&str, &str) =
+        ("smartelectronix_tubescreamer", "smartelectronix_tubescreamer.dsp");
+
+    #[test]
+    fn tubescreamer_is_stereo() {
+        let dsp = load_dsp(TUBESCREAMER.0, TUBESCREAMER.1);
         assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
     }
 
@@ -2256,6 +2264,12 @@ mod tests {
     fn jeskola_reverb_set_param_follows_bmx_order() {
         assert_set_param_routes("jeskola_reverb", "jeskola_reverb.dsp", &[
             "Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay", "High Cutoff",
+    fn tubescreamer_param_ordering_and_ranges() {
+        assert_params_match(TUBESCREAMER.0, TUBESCREAMER.1, &[
+            ExpectedParam { label: "PreGain",  min: 0.0, max: 240.0, init: 220.0 },
+            ExpectedParam { label: "Drive",    min: 0.0, max: 254.0, init: 0.0 },
+            ExpectedParam { label: "Tone",     min: 0.0, max: 254.0, init: 254.0 },
+            ExpectedParam { label: "PostGain", min: 0.0, max: 240.0, init: 131.0 },
         ]);
     }
 
@@ -2263,6 +2277,9 @@ mod tests {
     fn geonik_am_set_param_follows_bmx_order() {
         assert_set_param_routes("geonik_am", "geonik_am.dsp", &[
             "Frequency", "LfoType", "Floor", "StereoPhase", "Restart",
+    fn tubescreamer_set_param_follows_bmx_order() {
+        assert_set_param_routes(TUBESCREAMER.0, TUBESCREAMER.1, &[
+            "PreGain", "Drive", "Tone", "PostGain",
         ]);
     }
 
@@ -2453,6 +2470,8 @@ mod tests {
     #[test]
     fn registry_resolves_routeq10() {
         assert!(crate::create_faust_machine("Rout EQ-10").is_some());
+    fn registry_resolves_tubescreamer() {
+        assert!(crate::create_faust_machine("smartelectronix tubescreamer").is_some());
     }
 
     #[test]
