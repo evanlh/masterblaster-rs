@@ -418,6 +418,96 @@ mod tests {
         ]);
     }
 
+    // --- FSM PanzerDelay ---
+
+    const PANZER_LABELS: [&str; 15] = [
+        "Dry amp", "Dry L Pan", "Dry R Pan", "Delay unit", "Filter type", "Cutoff", "Resonance",
+        "L Delay Len", "R Delay Len", "Tap Amp", "Wet L Pan", "Wet R Pan", "FB Amp",
+        "FB PingPong", "FB Spread",
+    ];
+
+    #[test]
+    fn panzerdelay_param_ordering_and_ranges() {
+        let spec = |label, min, max, init| ExpectedParam { label, min, max, init };
+        assert_params_match("panzerdelay", "panzerdelay.dsp", &[
+            spec("Dry amp", 0.0, 240.0, 240.0),
+            spec("Dry L Pan", 0.0, 240.0, 0.0),
+            spec("Dry R Pan", 0.0, 240.0, 240.0),
+            spec("Delay unit", 0.0, 3.0, 0.0),
+            spec("Filter type", 0.0, 3.0, 0.0),
+            spec("Cutoff", 0.0, 240.0, 120.0),
+            spec("Resonance", 0.0, 240.0, 120.0),
+            spec("L Delay Len", 1.0, 20000.0, 3.0),
+            spec("R Delay Len", 1.0, 20000.0, 3.0),
+            spec("Tap Amp", 0.0, 240.0, 240.0),
+            spec("Wet L Pan", 0.0, 240.0, 240.0),
+            spec("Wet R Pan", 0.0, 240.0, 0.0),
+            spec("FB Amp", 0.0, 239.0, 150.0),
+            spec("FB PingPong", 0.0, 1.0, 0.0),
+            spec("FB Spread", 0.0, 240.0, 120.0),
+        ]);
+    }
+
+    #[test]
+    fn panzerdelay_set_param_follows_bmx_order() {
+        assert_set_param_routes("panzerdelay", "panzerdelay.dsp", &PANZER_LABELS);
+    }
+
+    #[test]
+    fn registry_resolves_panzerdelay() {
+        assert!(crate::create_faust_machine("FSM PanzerDelay").is_some());
+    }
+
+    /// Normalised 0..65535 value for a raw Buzz value in `min..=max`.
+    fn normalised(raw: u32, min: u32, max: u32) -> i32 {
+        ((raw - min) as f64 / (max - min) as f64 * 65535.0) as i32
+    }
+
+    /// A PanzerDelay with a 100-sample delay on both lines and no feedback.
+    fn panzer_100_samples(fb_raw: u32) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("panzerdelay", "panzerdelay.dsp"));
+        machine.init(44100);
+        machine.set_param(3, normalised(2, 0, 3));
+        machine.set_param(7, normalised(100, 1, 20000));
+        machine.set_param(8, normalised(100, 1, 20000));
+        machine.set_param(12, normalised(fb_raw, 0, 239));
+        machine
+    }
+
+    /// Render `frames` of stereo silence with a unit impulse at `at`.
+    fn render_impulse(machine: &mut FaustMachine, frames: u16, at: usize) -> AudioBuffer {
+        let mut buf = AudioBuffer::new(2, frames);
+        buf.channel_mut(0)[at] = 1.0;
+        buf.channel_mut(1)[at] = 1.0;
+        machine.render(&mut buf);
+        buf
+    }
+
+    #[test]
+    fn panzerdelay_echo_arrives_after_exact_delay() {
+        let mut machine = panzer_100_samples(0);
+        let buf = render_impulse(&mut machine, 6000, 5400);
+        let echo = &buf.channel(0)[5400..5520];
+        assert!(echo[0] > 0.99, "dry impulse missing: {}", echo[0]);
+        assert!(echo[99].abs() < 1e-6 && (echo[100] - 1.0).abs() < 1e-4,
+            "echo should land exactly 100 samples later: {} {}", echo[99], echo[100]);
+    }
+
+    #[test]
+    fn panzerdelay_wet_is_silent_during_first_tick() {
+        let mut machine = panzer_100_samples(0);
+        let buf = render_impulse(&mut machine, 6000, 1000);
+        assert!(buf.channel(0)[1100].abs() < 1e-6, "first tick must not be read back");
+    }
+
+    #[test]
+    fn panzerdelay_feedback_decays_by_fb_gain() {
+        let mut machine = panzer_100_samples(120);
+        let buf = render_impulse(&mut machine, 6000, 5400);
+        let (first, second) = (buf.channel(0)[5500], buf.channel(0)[5600]);
+        assert!((second / first - 0.25).abs() < 1e-3, "fb 120 is 2^-2: {first} {second}");
+    }
+
     // --- Jeskola Reverb 2 behaviour ---
 
     const RV2_DRY_OUT: u16 = 0;
