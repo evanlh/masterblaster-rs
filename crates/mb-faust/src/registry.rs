@@ -45,6 +45,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "Geonik's Compressor" => ("geonik_compressor", include_str!("../../../faust/geonik_compressor.dsp")),
         "Geonik's Overdrive 2" => ("overdrive2", include_str!("../../../faust/overdrive2.dsp")),
         "Geonik's Saturator" => ("geonik-s-saturator", include_str!("../../../faust/geonik-s-saturator.dsp")),
+        "Jeskola Chorus" => ("chorus", include_str!("../../../faust/chorus.dsp")),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
