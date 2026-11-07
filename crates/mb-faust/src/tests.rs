@@ -594,6 +594,90 @@ mod tests {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
     }
 
+    // --- Muon SmootherDrive ---
+
+    const SD_THRESHOLD: u16 = 0;
+    const SD_INTENSITY: u16 = 1;
+
+    #[test]
+    fn smootherdrive_param_ordering_and_ranges() {
+        assert_params_match("smootherdrive", "smootherdrive.dsp", &[
+            ExpectedParam { label: "Threshold", min: 0.0, max: 32767.0, init: 32767.0 },
+            ExpectedParam { label: "Intensity", min: 0.0, max: 100.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn smootherdrive_set_param_follows_bmx_order() {
+        assert_set_param_routes("smootherdrive", "smootherdrive.dsp", &["Threshold", "Intensity"]);
+    }
+
+    /// Every raw Buzz value must survive the BMX 0..65535 round trip.
+    fn assert_all_values_round_trip(dsp_name: &str, dsp_file: &str) {
+        let dsp = load_dsp(dsp_name, dsp_file);
+        for p in &dsp.params {
+            for raw in (p.min as i32)..=(p.max as i32) {
+                let got = round_trip_f32(p, raw as f32);
+                assert!((got - raw as f32).abs() < 0.5, "{}: {raw} round-trips to {got}", p.label);
+            }
+        }
+    }
+
+    #[test]
+    fn smootherdrive_values_round_trip() {
+        assert_all_values_round_trip("smootherdrive", "smootherdrive.dsp");
+    }
+
+    /// Raw Buzz value → BMX 0..65535 (ceiling, so truncation lands on `raw`).
+    fn raw_to_scaled(raw: i32, max: i32) -> i32 {
+        (raw * 65535 + max - 1) / max
+    }
+
+    fn smootherdrive_with(threshold: i32, intensity: i32) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("smootherdrive", "smootherdrive.dsp"));
+        machine.init(44100);
+        machine.set_param(SD_THRESHOLD, raw_to_scaled(threshold, 32767));
+        machine.set_param(SD_INTENSITY, raw_to_scaled(intensity, 100));
+        machine
+    }
+
+    fn render_value(machine: &mut FaustMachine, x: f32) -> f32 {
+        *render_left(machine, &[x; 64]).last().unwrap()
+    }
+
+    #[test]
+    fn smootherdrive_intensity_zero_is_bypass() {
+        let mut machine = smootherdrive_with(4096, 0);
+        assert_eq!(render_value(&mut machine, 0.7), 0.7);
+    }
+
+    #[test]
+    fn smootherdrive_small_signal_gain_matches_oracle() {
+        // Measured: 1/G = t + (1-t)/(I+1.6), t = Threshold/32768
+        let mut machine = smootherdrive_with(4096, 50);
+        let gain = render_value(&mut machine, 0.01) / 0.01;
+        assert!((gain - 7.04437).abs() < 1e-3, "gain {gain}");
+    }
+
+    #[test]
+    fn smootherdrive_zero_threshold_is_quarter_sine() {
+        let mut machine = smootherdrive_with(0, 100);
+        let got = render_value(&mut machine, -0.5);
+        let expected = -(std::f32::consts::FRAC_PI_4).sin();
+        assert!((got - expected).abs() < 1e-5, "got {got}, expected {expected}");
+    }
+
+    #[test]
+    fn smootherdrive_full_scale_maps_to_one() {
+        let mut machine = smootherdrive_with(12288, 75);
+        assert!((render_value(&mut machine, 1.0) - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn registry_resolves_smootherdrive() {
+        assert!(crate::create_faust_machine("Muon SmootherDrive").is_some());
+    }
+
     #[test]
     fn registry_returns_none_for_unknown() {
         assert!(crate::create_faust_machine("Unknown Machine XYZ").is_none());
