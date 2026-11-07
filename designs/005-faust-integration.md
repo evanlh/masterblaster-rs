@@ -35,7 +35,7 @@ Updated: 20261103
   - [x] `[N]` label prefixes so Faust param order matches C++ `pParameters[]`
   - [x] Slider ranges/defaults match the BMX PARA section
   - [x] Per-DSP tests: param order/ranges, `set_param` routing by BMX index
-- [ ] Jeskola Reverb 2 DSP is an approximation — revisit if C++ source turns up
+- [x] Jeskola Reverb 2 DSP derived from oracle measurements (buzz-machines-oracles grade A 99.9)
 - [ ] Startup JIT pause — see [024](024-eager-faust-compilation.md)
 - [ ] Approach B — AOT C codegen via cc crate (fallback for Rust backend issues)
 
@@ -822,7 +822,7 @@ standing in for a Buzz machine must match it on three things:
 |---|---|---|
 | FSM WahPro / WahPro2 | Cutoff, Resonance, Filter, LFO rate, LFO mod, LFO Shape, Inertia, Set phase (track params) | BMX PARA |
 | Jeskola Filter 2 | Type, Cutoff, Resonance | BMX PARA |
-| Jeskola Reverb 2 | Dry Out 0..4096 (4096), Rev Out 0..4096 (768), ER Out 0..4096 (0), Rev Time 1..64 (10), Pre-Delay 0..100 ms (0), High Cutoff 100..16384 Hz (5000) | BMX PARA; DSP mapping is guessed |
+| Jeskola Reverb 2 | Dry Out 0..4096 (4096), Rev Out 0..4096 (768), ER Out 0..4096 (0), Rev Time 1..64 (10), Pre-Delay 0..100 ms (0), High Cutoff 100..16384 Hz (5000) | BMX PARA; DSP measured from oracle impulse responses (see `faust/reverb2.dsp` header) |
 | Jeskola Freeverb | Rev Time, HF Damp, Pre Delay, Low Cut, High Cut, Rev Out, Dry Out (all 0..127) | C++ `Jeskola/Freeverb` |
 | Jeskola Chorus | freq 0..4096 (100), depth 0..127 (64), feedback 0..128 (64), min. delay 0..50 (25), dry out 0..128 (128), wet out 0..128 (128) | info.json; DSP recovered clean-room from oracle measurements |
 | Jeskola Cross Delay | Dry thru (switch 0..1, 1), L. Length, R. Length 1..32768 (3), Length unit 0..3 (0), Feedback 0..128 (96), Wet out 0..128 (48) | info.json + oracle measurements (clean room); tick fixed at 126 BPM / 4 TPB |

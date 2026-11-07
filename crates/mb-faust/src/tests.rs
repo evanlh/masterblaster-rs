@@ -1120,6 +1120,50 @@ mod tests {
             "High Cutoff at 100Hz should cut an 8kHz wet signal: open={open}, closed={closed}");
     }
 
+    const RV2_REV_OUT: u16 = 1;
+    const RV2_ER_OUT: u16 = 2;
+    const RV2_REV_TIME: u16 = 3;
+    const RV2_PRE_DELAY: u16 = 4;
+
+    /// Scale a raw Buzz value into the 0..65535 BMX range for a param `min..max`.
+    fn bmx_scaled(raw: i32, min: i32, max: i32) -> i32 {
+        (raw - min) * 65535 / (max - min)
+    }
+
+    fn reverb2_impulse(params: &[(u16, i32)], frames: usize) -> Vec<f32> {
+        render_impulse_left(&mut reverb2_with(params), frames)
+    }
+
+    #[test]
+    fn reverb2_rev_tank_starts_with_0_3_transient() {
+        // Wet = LP(0.3 * x + ...) at t=0; High Cutoff max keeps the LP nearly flat at DC.
+        let out = reverb2_impulse(&[(RV2_DRY_OUT, 0), (RV2_REV_OUT, 65535)], 256);
+        let early: f32 = out[..64].iter().sum();
+        assert!((early - 0.3).abs() < 0.01, "tank transient should sum to 0.3, got {early}");
+    }
+
+    #[test]
+    fn reverb2_early_reflections_start_at_877_samples() {
+        let out = reverb2_impulse(&[(RV2_DRY_OUT, 0), (RV2_REV_OUT, 0), (RV2_ER_OUT, 65535)], 4096);
+        assert_eq!(first_audible(&out), Some(877));
+    }
+
+    #[test]
+    fn reverb2_pre_delay_has_no_effect() {
+        let base = [(RV2_DRY_OUT, 0), (RV2_REV_OUT, 65535)];
+        let delayed = [(RV2_DRY_OUT, 0), (RV2_REV_OUT, 65535), (RV2_PRE_DELAY, 65535)];
+        assert_eq!(reverb2_impulse(&base, 8192), reverb2_impulse(&delayed, 8192));
+    }
+
+    #[test]
+    fn reverb2_rev_time_gates_tail_after_silence() {
+        // Rev Time 1 => wet path cleared after 0.2 s (8820 samples) of silent 256-sample chunks.
+        let params = [(RV2_DRY_OUT, 0), (RV2_REV_OUT, 65535), (RV2_REV_TIME, bmx_scaled(1, 1, 64))];
+        let out = reverb2_impulse(&params, 16384);
+        assert!(out[8000..8700].iter().any(|s| s.abs() > 1e-5), "tail should ring before the gate");
+        assert!(out[9300..].iter().all(|&s| s == 0.0), "tail should be silent after the gate");
+    }
+
     // --- Jeskola Freeverb behaviour ---
 
     const FV_PRE_DELAY: u16 = 2;
