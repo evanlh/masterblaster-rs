@@ -59,6 +59,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
             include_str!("../../../faust/joachims_limiter.dsp"),
         ),
         "Muon Delay" => ("muon_delay", include_str!("../../../faust/muon_delay.dsp")),
+        "Muon SmootherDrive" => ("muon_smootherdrive", include_str!("../../../faust/muon_smootherdrive.dsp")),
         "Rout EQ-10" => ("routeq10", include_str!("../../../faust/routeq10.dsp")),
         "ryg's analog distort" => (
             "ryg_analog_distort",
@@ -73,6 +74,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "WhiteNoise's Fuzzbox" => (
             "whitenoise_fuzzbox",
             include_str!("../../../faust/whitenoise_fuzzbox.dsp"),
+        ),
         "WhiteNoise's Harmonic Delay" => (
             "whitenoise_harmonic_delay",
             include_str!("../../../faust/whitenoise_harmonic_delay.dsp"),

@@ -582,6 +582,10 @@ mod tests {
             ExpectedParam { label: "LFO rate",      min: 0.0, max: 240.0, init: 10.0 },
             ExpectedParam { label: "Wet out",       min: 0.0, max: 240.0, init: 240.0 },
             ExpectedParam { label: "Feedback",      min: 0.0, max: 128.0, init: 64.0 },
+        ]);
+    }
+
+    #[test]
     fn delay_param_ordering_and_ranges() {
         assert_params_match("delay", "delay.dsp", &[
             // Dry thru is a switch (Buzz declares -1/-1); masterblaster maps
@@ -591,6 +595,10 @@ mod tests {
             ExpectedParam { label: "Length unit", min: 0.0,  max: 3.0,     init: 0.0 },
             ExpectedParam { label: "Feedback",    min: 0.0,  max: 128.0,   init: 96.0 },
             ExpectedParam { label: "Wet out",     min: 0.0,  max: 128.0,   init: 48.0 },
+        ]);
+    }
+
+    #[test]
     fn flanger_param_ordering_and_ranges() {
         assert_params_match("flanger", "flanger.dsp", &[
             ExpectedParam { label: "freq",       min: 0.0, max: 4096.0, init: 100.0 },
@@ -599,6 +607,9 @@ mod tests {
             ExpectedParam { label: "min. delay", min: 0.0, max: 50.0,   init: 0.0 },
             ExpectedParam { label: "dry out",    min: 0.0, max: 128.0,  init: 128.0 },
             ExpectedParam { label: "wet out",    min: 0.0, max: 128.0,  init: 0.0 },
+        ]);
+    }
+
     const MUON_DELAY_PARAMS: [&str; 7] =
         ["Delay", "Feedback", "Cutoff", "LFO Depth", "LFO Freq", "Wet", "Dry"];
 
@@ -613,6 +624,10 @@ mod tests {
             ExpectedParam { label: "LFO Freq",  min: 0.0, max: 127.0,  init: 0.0 },
             ExpectedParam { label: "Wet",       min: 0.0, max: 255.0,  init: 128.0 },
             ExpectedParam { label: "Dry",       min: 0.0, max: 255.0,  init: 128.0 },
+        ]);
+    }
+
+    #[test]
     fn zephod_phaser_param_ordering_and_ranges() {
         // Buzz reports default 0 for the 1.. params (their no_value); Faust
         // rejects an init outside the range, so those start at their minimum.
@@ -693,17 +708,6 @@ mod tests {
             ExpectedParam { label: "Hold",       min: 0.0, max: 127.0, init: 0.0 },
             ExpectedParam { label: "Resolution", min: 0.0, max: 127.0, init: 0.0 },
             ExpectedParam { label: "Mode",       min: 0.0, max: 8.0,   init: 0.0 },
-    fn whitenoise_gate_param_ordering_and_ranges() {
-        assert_params_match("whitenoise_gate", "whitenoise_gate.dsp", &[
-            ExpectedParam { label: "Ratio",      min: 10.0, max: 250.0,  init: 200.0 },
-            ExpectedParam { label: "Threshold",  min: 0.0,  max: 248.0,  init: 120.0 },
-            ExpectedParam { label: "Open Rate",  min: 1.0,  max: 2000.0, init: 1.0 },
-            ExpectedParam { label: "Close Rate", min: 1.0,  max: 2000.0, init: 500.0 },
-    fn whitenoise_fuzzbox_param_ordering_and_ranges() {
-        assert_params_match("whitenoise_fuzzbox", "whitenoise_fuzzbox.dsp", &[
-            ExpectedParam { label: "Mode",  min: 1.0, max: 4.0,     init: 1.0 },
-            ExpectedParam { label: "Q",     min: 0.0, max: 254.0,   init: 0.0 },
-            ExpectedParam { label: "Level", min: 0.0, max: 65534.0, init: 0.0 },
         ]);
     }
 
@@ -735,9 +739,34 @@ mod tests {
         let mut buf = AudioBuffer::new(2, 256);
         machine.render(&mut buf);
         assert!(buf.channel(0).iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn whitenoise_gate_param_ordering_and_ranges() {
+        assert_params_match("whitenoise_gate", "whitenoise_gate.dsp", &[
+            ExpectedParam { label: "Ratio",      min: 10.0, max: 250.0,  init: 200.0 },
+            ExpectedParam { label: "Threshold",  min: 0.0,  max: 248.0,  init: 120.0 },
+            ExpectedParam { label: "Open Rate",  min: 1.0,  max: 2000.0, init: 1.0 },
+            ExpectedParam { label: "Close Rate", min: 1.0,  max: 2000.0, init: 500.0 },
+        ]);
+    }
+
+    #[test]
     fn whitenoise_gate_set_param_follows_bmx_order() {
         assert_set_param_routes("whitenoise_gate", "whitenoise_gate.dsp",
             &["Ratio", "Threshold", "Open Rate", "Close Rate"]);
+    }
+
+    #[test]
+    fn whitenoise_fuzzbox_param_ordering_and_ranges() {
+        assert_params_match("whitenoise_fuzzbox", "whitenoise_fuzzbox.dsp", &[
+            ExpectedParam { label: "Mode",  min: 1.0, max: 4.0,     init: 1.0 },
+            ExpectedParam { label: "Q",     min: 0.0, max: 254.0,   init: 0.0 },
+            ExpectedParam { label: "Level", min: 0.0, max: 65534.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
     fn whitenoise_fuzzbox_set_param_follows_bmx_order() {
         assert_set_param_routes("whitenoise_fuzzbox", "whitenoise_fuzzbox.dsp", &["Mode", "Q", "Level"]);
     }
@@ -770,6 +799,43 @@ mod tests {
         assert_set_param_routes("stereoreverb", "stereoreverb.dsp", &JESKOLA_REVERB_BMX_ORDER);
     }
 
+    #[test]
+    fn psycho01_param_ordering_and_ranges() {
+        assert_params_match("psycho01", "psycho01.dsp", &[
+            ExpectedParam { label: "Room", min: 0.0, max: 128.0, init: 128.0 },
+        ]);
+    }
+
+    #[test]
+    fn psycho01_set_param_follows_bmx_order() {
+        assert_set_param_routes("psycho01", "psycho01.dsp", &["Room"]);
+    }
+
+    /// Render a constant mono 1.0 through Psycho01 at the given BMX value.
+    fn render_psycho01(bmx_room: i32) -> AudioBuffer {
+        let mut machine = FaustMachine::new(load_dsp("psycho01", "psycho01.dsp"));
+        machine.init(44100);
+        machine.set_param(0, bmx_room);
+        let mut buf = AudioBuffer::new(2, 4);
+        buf.channel_mut(0).fill(1.0);
+        buf.channel_mut(1).fill(1.0);
+        machine.render(&mut buf);
+        buf
+    }
+
+    #[test]
+    fn psycho01_room_zero_alternates_channels_per_sample() {
+        let buf = render_psycho01(0);
+        assert_eq!(buf.channel(0), &[0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(buf.channel(1), &[1.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn psycho01_room_max_is_centred() {
+        let buf = render_psycho01(65535);
+        assert!(buf.channel(0).iter().chain(buf.channel(1)).all(|&v| (v - 0.5).abs() < 1e-6));
+    }
+
     // --- Jeskola Chorus tests ---
 
     const CHORUS_ORDER: [&str; 6] = ["freq", "depth", "feedback", "min. delay", "dry out", "wet out"];
@@ -783,11 +849,6 @@ mod tests {
             ExpectedParam { label: "min. delay", min: 0.0, max: 50.0,   init: 25.0 },
             ExpectedParam { label: "dry out",    min: 0.0, max: 128.0,  init: 128.0 },
             ExpectedParam { label: "wet out",    min: 0.0, max: 128.0,  init: 128.0 },
-    fn joachims_limiter_param_ordering_and_ranges() {
-        assert_params_match("joachims_limiter", "joachims_limiter.dsp", &[
-            ExpectedParam { label: "Input",   min: 1.0, max: 128.0, init: 71.0 },
-            ExpectedParam { label: "Thresh.", min: 0.0, max: 6.0,   init: 1.0 },
-            ExpectedParam { label: "Release", min: 1.0, max: 128.0, init: 60.0 },
         ]);
     }
 
@@ -825,46 +886,6 @@ mod tests {
             out.extend_from_slice(buf.channel(0));
         }
         out
-    }
-
-    #[test]
-    fn psycho01_param_ordering_and_ranges() {
-        assert_params_match("psycho01", "psycho01.dsp", &[
-            ExpectedParam { label: "Room", min: 0.0, max: 128.0, init: 128.0 },
-    fn joachims_limiter_set_param_follows_bmx_order() {
-        assert_set_param_routes("joachims_limiter", "joachims_limiter.dsp", &[
-            "Input", "Thresh.", "Release",
-        ]);
-    }
-
-    #[test]
-    fn psycho01_set_param_follows_bmx_order() {
-        assert_set_param_routes("psycho01", "psycho01.dsp", &["Room"]);
-    }
-
-    /// Render a constant mono 1.0 through Psycho01 at the given BMX value.
-    fn render_psycho01(bmx_room: i32) -> AudioBuffer {
-        let mut machine = FaustMachine::new(load_dsp("psycho01", "psycho01.dsp"));
-        machine.init(44100);
-        machine.set_param(0, bmx_room);
-        let mut buf = AudioBuffer::new(2, 4);
-        buf.channel_mut(0).fill(1.0);
-        buf.channel_mut(1).fill(1.0);
-        machine.render(&mut buf);
-        buf
-    }
-
-    #[test]
-    fn psycho01_room_zero_alternates_channels_per_sample() {
-        let buf = render_psycho01(0);
-        assert_eq!(buf.channel(0), &[0.0, 1.0, 0.0, 1.0]);
-        assert_eq!(buf.channel(1), &[1.0, 0.0, 1.0, 0.0]);
-    }
-
-    #[test]
-    fn psycho01_room_max_is_centred() {
-        let buf = render_psycho01(65535);
-        assert!(buf.channel(0).iter().chain(buf.channel(1)).all(|&v| (v - 0.5).abs() < 1e-6));
     }
 
     #[test]
@@ -911,6 +932,22 @@ mod tests {
     }
 
     #[test]
+    fn joachims_limiter_param_ordering_and_ranges() {
+        assert_params_match("joachims_limiter", "joachims_limiter.dsp", &[
+            ExpectedParam { label: "Input",   min: 1.0, max: 128.0, init: 71.0 },
+            ExpectedParam { label: "Thresh.", min: 0.0, max: 6.0,   init: 1.0 },
+            ExpectedParam { label: "Release", min: 1.0, max: 128.0, init: 60.0 },
+        ]);
+    }
+
+    #[test]
+    fn joachims_limiter_set_param_follows_bmx_order() {
+        assert_set_param_routes("joachims_limiter", "joachims_limiter.dsp", &[
+            "Input", "Thresh.", "Release",
+        ]);
+    }
+
+    #[test]
     fn freeverb_set_param_follows_bmx_order() {
         assert_set_param_routes("freeverb", "reverb.dsp", &[
             "Rev Time", "HF Damp", "Pre Delay", "Low Cut", "High Cut", "Rev Out", "Dry Out",
@@ -932,50 +969,6 @@ mod tests {
             ExpectedParam { label: "Attack",    min: 0.0, max: 65534.0, init: 12577.0 },
             ExpectedParam { label: "Release",   min: 0.0, max: 65534.0, init: 7452.0 },
             ExpectedParam { label: "Gain",      min: 0.0, max: 65534.0, init: 0.0 },
-    // --- FSM PanzerDelay ---
-
-    const PANZER_LABELS: [&str; 15] = [
-        "Dry amp", "Dry L Pan", "Dry R Pan", "Delay unit", "Filter type", "Cutoff", "Resonance",
-        "L Delay Len", "R Delay Len", "Tap Amp", "Wet L Pan", "Wet R Pan", "FB Amp",
-        "FB PingPong", "FB Spread",
-    ];
-
-    #[test]
-    fn panzerdelay_param_ordering_and_ranges() {
-        let spec = |label, min, max, init| ExpectedParam { label, min, max, init };
-        assert_params_match("panzerdelay", "panzerdelay.dsp", &[
-            spec("Dry amp", 0.0, 240.0, 240.0),
-            spec("Dry L Pan", 0.0, 240.0, 0.0),
-            spec("Dry R Pan", 0.0, 240.0, 240.0),
-            spec("Delay unit", 0.0, 3.0, 0.0),
-            spec("Filter type", 0.0, 3.0, 0.0),
-            spec("Cutoff", 0.0, 240.0, 120.0),
-            spec("Resonance", 0.0, 240.0, 120.0),
-            spec("L Delay Len", 1.0, 20000.0, 3.0),
-            spec("R Delay Len", 1.0, 20000.0, 3.0),
-            spec("Tap Amp", 0.0, 240.0, 240.0),
-            spec("Wet L Pan", 0.0, 240.0, 240.0),
-            spec("Wet R Pan", 0.0, 240.0, 0.0),
-            spec("FB Amp", 0.0, 239.0, 150.0),
-            spec("FB PingPong", 0.0, 1.0, 0.0),
-            spec("FB Spread", 0.0, 240.0, 120.0),
-    #[test]
-    fn eq3_param_ordering_and_ranges() {
-        assert_params_match("eq3", "eq3.dsp", &[
-            ExpectedParam { label: "Low Gain",    min: 0.0,  max: 8192.0,  init: 4096.0 },
-            ExpectedParam { label: "Mid Gain",    min: 0.0,  max: 8192.0,  init: 4096.0 },
-            ExpectedParam { label: "High Gain",   min: 0.0,  max: 8192.0,  init: 4096.0 },
-            ExpectedParam { label: "Low Cutoff",  min: 10.0, max: 16000.0, init: 400.0 },
-            ExpectedParam { label: "High Cutoff", min: 10.0, max: 16000.0, init: 5000.0 },
-            // Buzz switch (declared -1..-1), delivered by masterblaster as 0/1
-            ExpectedParam { label: "Dry Thru",    min: 0.0,  max: 1.0,     init: 1.0 },
-    #[test]
-    fn ryg_analog_distort_param_ordering_and_ranges() {
-        assert_params_match("ryg_analog_distort", "ryg_analog_distort.dsp", &[
-            ExpectedParam { label: "Drive",  min: 0.0, max: 32768.0, init: 128.0 },
-            ExpectedParam { label: "Clamp",  min: 0.0, max: 65534.0, init: 32767.0 },
-            ExpectedParam { label: "Amount", min: 0.0, max: 127.0,   init: 127.0 },
-            ExpectedParam { label: "Gain",   min: 0.0, max: 127.0,   init: 127.0 },
         ]);
     }
 
@@ -1033,6 +1026,8 @@ mod tests {
     #[test]
     fn registry_resolves_automaton_compressor_mkii() {
         assert!(crate::create_faust_machine("Automaton Compressor mkII").is_some());
+    }
+
     // --- Jon Pak EQ-10 ---
 
     const EQ10_BANDS: [&str; 10] = [
@@ -1088,6 +1083,39 @@ mod tests {
     fn eq10_16k_control_boosts_8k_by_12_db() {
         let gain = eq10_rms_gain(&[(9, 65535)], 8000.0) / eq10_rms_gain(&[], 8000.0);
         assert!((20.0 * gain.log10() - 12.0).abs() < 0.1, "gain {gain}");
+    }
+
+    // --- FSM PanzerDelay ---
+
+    const PANZER_LABELS: [&str; 15] = [
+        "Dry amp", "Dry L Pan", "Dry R Pan", "Delay unit", "Filter type", "Cutoff", "Resonance",
+        "L Delay Len", "R Delay Len", "Tap Amp", "Wet L Pan", "Wet R Pan", "FB Amp",
+        "FB PingPong", "FB Spread",
+    ];
+
+    #[test]
+    fn panzerdelay_param_ordering_and_ranges() {
+        let spec = |label, min, max, init| ExpectedParam { label, min, max, init };
+        assert_params_match("panzerdelay", "panzerdelay.dsp", &[
+            spec("Dry amp", 0.0, 240.0, 240.0),
+            spec("Dry L Pan", 0.0, 240.0, 0.0),
+            spec("Dry R Pan", 0.0, 240.0, 240.0),
+            spec("Delay unit", 0.0, 3.0, 0.0),
+            spec("Filter type", 0.0, 3.0, 0.0),
+            spec("Cutoff", 0.0, 240.0, 120.0),
+            spec("Resonance", 0.0, 240.0, 120.0),
+            spec("L Delay Len", 1.0, 20000.0, 3.0),
+            spec("R Delay Len", 1.0, 20000.0, 3.0),
+            spec("Tap Amp", 0.0, 240.0, 240.0),
+            spec("Wet L Pan", 0.0, 240.0, 240.0),
+            spec("Wet R Pan", 0.0, 240.0, 0.0),
+            spec("FB Amp", 0.0, 239.0, 150.0),
+            spec("FB PingPong", 0.0, 1.0, 0.0),
+            spec("FB Spread", 0.0, 240.0, 120.0),
+        ]);
+    }
+
+    #[test]
     fn panzerdelay_set_param_follows_bmx_order() {
         assert_set_param_routes("panzerdelay", "panzerdelay.dsp", &PANZER_LABELS);
     }
@@ -1145,6 +1173,22 @@ mod tests {
         let buf = render_impulse(&mut machine, 6000, 5400);
         let (first, second) = (buf.channel(0)[5500], buf.channel(0)[5600]);
         assert!((second / first - 0.25).abs() < 1e-3, "fb 120 is 2^-2: {first} {second}");
+    }
+
+    #[test]
+    fn eq3_param_ordering_and_ranges() {
+        assert_params_match("eq3", "eq3.dsp", &[
+            ExpectedParam { label: "Low Gain",    min: 0.0,  max: 8192.0,  init: 4096.0 },
+            ExpectedParam { label: "Mid Gain",    min: 0.0,  max: 8192.0,  init: 4096.0 },
+            ExpectedParam { label: "High Gain",   min: 0.0,  max: 8192.0,  init: 4096.0 },
+            ExpectedParam { label: "Low Cutoff",  min: 10.0, max: 16000.0, init: 400.0 },
+            ExpectedParam { label: "High Cutoff", min: 10.0, max: 16000.0, init: 5000.0 },
+            // Buzz switch (declared -1..-1), delivered by masterblaster as 0/1
+            ExpectedParam { label: "Dry Thru",    min: 0.0,  max: 1.0,     init: 1.0 },
+        ]);
+    }
+
+    #[test]
     fn eq3_set_param_follows_bmx_order() {
         assert_set_param_routes("eq3", "eq3.dsp", &[
             "Low Gain", "Mid Gain", "High Gain", "Low Cutoff", "High Cutoff", "Dry Thru",
@@ -1196,10 +1240,23 @@ mod tests {
         assert!(out[256..].iter().all(|s| *s == 0.0), "silent blocks should be cut");
     }
 
+    #[test]
+    fn ryg_analog_distort_param_ordering_and_ranges() {
+        assert_params_match("ryg_analog_distort", "ryg_analog_distort.dsp", &[
+            ExpectedParam { label: "Drive",  min: 0.0, max: 32768.0, init: 128.0 },
+            ExpectedParam { label: "Clamp",  min: 0.0, max: 65534.0, init: 32767.0 },
+            ExpectedParam { label: "Amount", min: 0.0, max: 127.0,   init: 127.0 },
+            ExpectedParam { label: "Gain",   min: 0.0, max: 127.0,   init: 127.0 },
+        ]);
+    }
+
+    #[test]
     fn ryg_analog_distort_set_param_follows_bmx_order() {
         assert_set_param_routes("ryg_analog_distort", "ryg_analog_distort.dsp", &[
             "Drive", "Clamp", "Amount", "Gain",
         ]);
+    }
+
     // --- Rymix FlaserBox (labels as Faust reports them: leading spaces trimmed) ---
 
     const FLASERBOX_PARAMS: &[(&str, f32, f32, f32)] = &[
@@ -1244,6 +1301,8 @@ mod tests {
         for (i, (&y, &x)) in buf.channel(0).iter().zip(&input).enumerate() {
             assert!((y - x).abs() < 1e-5, "sample {i}: {y} vs {x}");
         }
+    }
+
     #[test]
     fn zephod_phaser_set_param_follows_bmx_order() {
         assert_set_param_routes("zephod_phaser", "zephod_phaser.dsp", &[
@@ -1429,42 +1488,6 @@ mod tests {
             ExpectedParam { label: "Attack",    min: 5.0,  max: 8000.0, init: 10.0 },
             ExpectedParam { label: "Release",   min: 30.0, max: 8000.0, init: 2000.0 },
             ExpectedParam { label: "Gain",      min: 0.0,  max: 128.0,  init: 6.0 },
-    // --- Jeskola Cross Delay ---
-
-    #[test]
-    fn cross_delay_param_ordering_and_ranges() {
-        assert_params_match("crossdelay", "crossdelay.dsp", &[
-            // Dry thru is a Buzz switch: 0 = off, 1 = on (delivered as 0 / 65535)
-            ExpectedParam { label: "Dry thru",    min: 0.0, max: 1.0,     init: 1.0 },
-            ExpectedParam { label: "L. Length",   min: 1.0, max: 32768.0, init: 3.0 },
-            ExpectedParam { label: "R. Length",   min: 1.0, max: 32768.0, init: 3.0 },
-            ExpectedParam { label: "Length unit", min: 0.0, max: 3.0,     init: 0.0 },
-            ExpectedParam { label: "Feedback",    min: 0.0, max: 128.0,   init: 96.0 },
-            ExpectedParam { label: "Wet out",     min: 0.0, max: 128.0,   init: 48.0 },
-    // --- Jeskola NiNjA dElaY ---
-
-    const NINJA_ORDER: [&str; 8] = [
-        "Dry thru", "Length", "Length unit", "Feedback", "f. type", "f. cutoff", "f. bandwidth", "Wet out",
-    ];
-
-    #[test]
-    fn ninja_delay_param_ordering_and_ranges() {
-        // Buzz order: global Dry thru (switch, delivered as 0/1), then track 0
-        assert_params_match("ninja_delay", "ninja_delay.dsp", &[
-            ExpectedParam { label: "Dry thru",     min: 0.0,  max: 1.0,     init: 1.0 },
-            ExpectedParam { label: "Length",       min: 1.0,  max: 32768.0, init: 3.0 },
-            ExpectedParam { label: "Length unit",  min: 0.0,  max: 3.0,     init: 0.0 },
-            ExpectedParam { label: "Feedback",     min: 0.0,  max: 128.0,   init: 112.0 },
-            ExpectedParam { label: "f. type",      min: 0.0,  max: 3.0,     init: 1.0 },
-            ExpectedParam { label: "f. cutoff",    min: 10.0, max: 20000.0, init: 550.0 },
-            ExpectedParam { label: "f. bandwidth", min: 1.0,  max: 10000.0, init: 100.0 },
-            ExpectedParam { label: "Wet out",      min: 0.0,  max: 128.0,   init: 96.0 },
-    // --- WhiteNoise's Pixelate ---
-
-    #[test]
-    fn pixelate_param_ordering_and_ranges() {
-        assert_params_match("pixelate", "pixelate.dsp", &[
-            ExpectedParam { label: "Amount", min: 0.0, max: 24576.0, init: 0.0 },
         ]);
     }
 
@@ -1483,10 +1506,6 @@ mod tests {
         rms(&out[out.len() - 4410..]) / rms(&input[input.len() - 4410..])
     }
 
-    fn rms(x: &[f32]) -> f32 {
-        (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt()
-    }
-
     #[test]
     fn geonik_compressor_compresses_linearly_above_threshold() {
         // Defaults: threshold 2^-3 (-18 dB), 3:1, gain 2^0.5 (+3 dB), release 30 ms
@@ -1501,6 +1520,24 @@ mod tests {
     fn geonik_compressor_passes_quiet_signals_with_output_gain() {
         let got = geonik_compressor_steady_gain(&[(3, 0)], 0.01);
         assert!((got - 2f32.sqrt()).abs() < 0.01, "expected sqrt(2), got {got}");
+    }
+
+    // --- Jeskola Cross Delay ---
+
+    #[test]
+    fn cross_delay_param_ordering_and_ranges() {
+        assert_params_match("crossdelay", "crossdelay.dsp", &[
+            // Dry thru is a Buzz switch: 0 = off, 1 = on (delivered as 0 / 65535)
+            ExpectedParam { label: "Dry thru",    min: 0.0, max: 1.0,     init: 1.0 },
+            ExpectedParam { label: "L. Length",   min: 1.0, max: 32768.0, init: 3.0 },
+            ExpectedParam { label: "R. Length",   min: 1.0, max: 32768.0, init: 3.0 },
+            ExpectedParam { label: "Length unit", min: 0.0, max: 3.0,     init: 0.0 },
+            ExpectedParam { label: "Feedback",    min: 0.0, max: 128.0,   init: 96.0 },
+            ExpectedParam { label: "Wet out",     min: 0.0, max: 128.0,   init: 48.0 },
+        ]);
+    }
+
+    #[test]
     fn cross_delay_set_param_follows_bmx_order() {
         assert_set_param_routes("crossdelay", "crossdelay.dsp", &[
             "Dry thru", "L. Length", "R. Length", "Length unit", "Feedback", "Wet out",
@@ -1569,6 +1606,30 @@ mod tests {
         let (l, _) = render_impulse_stereo(&mut cross_delay_samples(100, 100), 4096);
         assert!(l[2048..].iter().all(|&s| s == 0.0), "output should stop after the tail");
         assert!(l[1500].abs() > 0.0, "tail should still ring before the cut");
+    }
+
+    // --- Jeskola NiNjA dElaY ---
+
+    const NINJA_ORDER: [&str; 8] = [
+        "Dry thru", "Length", "Length unit", "Feedback", "f. type", "f. cutoff", "f. bandwidth", "Wet out",
+    ];
+
+    #[test]
+    fn ninja_delay_param_ordering_and_ranges() {
+        // Buzz order: global Dry thru (switch, delivered as 0/1), then track 0
+        assert_params_match("ninja_delay", "ninja_delay.dsp", &[
+            ExpectedParam { label: "Dry thru",     min: 0.0,  max: 1.0,     init: 1.0 },
+            ExpectedParam { label: "Length",       min: 1.0,  max: 32768.0, init: 3.0 },
+            ExpectedParam { label: "Length unit",  min: 0.0,  max: 3.0,     init: 0.0 },
+            ExpectedParam { label: "Feedback",     min: 0.0,  max: 128.0,   init: 112.0 },
+            ExpectedParam { label: "f. type",      min: 0.0,  max: 3.0,     init: 1.0 },
+            ExpectedParam { label: "f. cutoff",    min: 10.0, max: 20000.0, init: 550.0 },
+            ExpectedParam { label: "f. bandwidth", min: 1.0,  max: 10000.0, init: 100.0 },
+            ExpectedParam { label: "Wet out",      min: 0.0,  max: 128.0,   init: 96.0 },
+        ]);
+    }
+
+    #[test]
     fn ninja_delay_set_param_follows_bmx_order() {
         assert_set_param_routes("ninja_delay", "ninja_delay.dsp", &NINJA_ORDER);
     }
@@ -1579,7 +1640,7 @@ mod tests {
     ];
 
     /// Set a raw Buzz value through the BMX scaling (truncating, like bmx_format).
-    fn set_raw_param(machine: &mut FaustMachine, param: u16, raw: i32) {
+    fn set_ninja_raw_param(machine: &mut FaustMachine, param: u16, raw: i32) {
         let (min, max) = NINJA_RANGES[param as usize];
         machine.set_param(param, ((raw as i64 - min) * 65535 / (max - min)) as i32);
     }
@@ -1587,7 +1648,7 @@ mod tests {
     fn ninja_with(params: &[(u16, i32)]) -> FaustMachine {
         let mut machine = FaustMachine::new(load_dsp("ninja_delay", "ninja_delay.dsp"));
         machine.init(44100);
-        params.iter().for_each(|&(p, v)| set_raw_param(&mut machine, p, v));
+        params.iter().for_each(|&(p, v)| set_ninja_raw_param(&mut machine, p, v));
         machine
     }
 
@@ -1618,6 +1679,18 @@ mod tests {
         let out = render_impulse_left(&mut ninja_with(&params), 4096);
         assert!(out[300..400].iter().any(|s| s.abs() > 1e-3), "tail should ring first");
         assert!(out[1024..].iter().all(|&s| s == 0.0), "tail should be cut by sample 1024");
+    }
+
+    // --- WhiteNoise's Pixelate ---
+
+    #[test]
+    fn pixelate_param_ordering_and_ranges() {
+        assert_params_match("pixelate", "pixelate.dsp", &[
+            ExpectedParam { label: "Amount", min: 0.0, max: 24576.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
     fn pixelate_set_param_follows_bmx_order() {
         assert_set_param_routes("pixelate", "pixelate.dsp", &["Amount"]);
     }
@@ -1734,20 +1807,13 @@ mod tests {
     }
 
     #[test]
-    fn eq10_is_stereo() {
+    fn automaton_eq10_is_stereo() {
         let dsp = eq10_dsp();
-    // --- WhiteNoise's Harmonic Delay tests ---
-
-    const HARMONIC_DELAY: &str = "whitenoise_harmonic_delay.dsp";
-
-    #[test]
-    fn harmonic_delay_is_stereo() {
-        let dsp = load_dsp("whitenoise_harmonic_delay", HARMONIC_DELAY);
         assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
     }
 
     #[test]
-    fn eq10_param_ordering_and_ranges() {
+    fn automaton_eq10_param_ordering_and_ranges() {
         let expected: Vec<ExpectedParam> = EQ10_LABELS.iter()
             .map(|&label| ExpectedParam { label, min: 0.0, max: 65534.0, init: 32767.0 })
             .collect();
@@ -1755,7 +1821,7 @@ mod tests {
     }
 
     #[test]
-    fn eq10_set_param_follows_bmx_order() {
+    fn automaton_eq10_set_param_follows_bmx_order() {
         assert_set_param_routes("automaton_eq10", "automaton_eq10.dsp", &EQ10_LABELS);
     }
 
@@ -1773,47 +1839,6 @@ mod tests {
                 let scaled = (raw * 65535 / 65534) as i32;
                 let got = eq10_recover_word(crate::ui_visitor::scaled_to_f32(p, scaled)) as i64;
                 assert_eq!(got, raw, "{}: raw {raw} round-trips to {got}", p.label);
-    // --- FSM PhatMan ---
-
-    const PHATMAN_ORDER: [&str; 8] = [
-        "Dry out", "Reset Phase", "Minimum delay", "Modulation",
-        "LFO rate", "Wet out", "Feedback", "Phasing",
-    ];
-
-    #[test]
-    fn phatman_param_ordering_and_ranges() {
-        assert_params_match("phatman", "phatman.dsp", &[
-            ExpectedParam { label: "Dry out",       min: 0.0, max: 240.0, init: 240.0 },
-            ExpectedParam { label: "Reset Phase",   min: 0.0, max: 240.0, init: 0.0 },
-            ExpectedParam { label: "Minimum delay", min: 1.0, max: 100.0, init: 20.0 },
-            ExpectedParam { label: "Modulation",    min: 1.0, max: 100.0, init: 10.0 },
-            ExpectedParam { label: "LFO rate",      min: 0.0, max: 254.0, init: 10.0 },
-            ExpectedParam { label: "Wet out",       min: 0.0, max: 240.0, init: 240.0 },
-            ExpectedParam { label: "Feedback",      min: 0.0, max: 128.0, init: 64.0 },
-            ExpectedParam { label: "Phasing",       min: 0.0, max: 128.0, init: 32.0 },
-    fn harmonic_delay_param_ordering_and_ranges() {
-        assert_params_match("whitenoise_harmonic_delay", HARMONIC_DELAY, &[
-            ExpectedParam { label: "Dry thru", min: 0.0, max: 1.0,   init: 1.0 },
-            ExpectedParam { label: "Note",     min: 1.0, max: 156.0, init: 1.0 },
-            ExpectedParam { label: "Feedback", min: 0.0, max: 128.0, init: 96.0 },
-            ExpectedParam { label: "Wet out",  min: 0.0, max: 128.0, init: 48.0 },
-        ]);
-    }
-
-    #[test]
-    fn phatman_set_param_follows_bmx_order() {
-        assert_set_param_routes("phatman", "phatman.dsp", &PHATMAN_ORDER);
-    }
-
-    #[test]
-    fn phatman_integer_values_round_trip_to_nearest_raw() {
-        // The DSP recovers raw values with floor(s + 0.5); truncating BMX
-        // scaling must never land more than half a step away.
-        let dsp = load_dsp("phatman", "phatman.dsp");
-        for p in &dsp.params {
-            for raw in (p.min as i32)..=(p.max as i32) {
-                let got = round_trip_f32(p, raw as f32);
-                assert_eq!((got + 0.5).floor() as i32, raw, "{}: raw {raw} -> {got}", p.label);
             }
         }
     }
@@ -1862,6 +1887,47 @@ mod tests {
     #[test]
     fn registry_resolves_automaton_eq10() {
         assert!(crate::create_faust_machine("Automaton EQ-10").is_some());
+    }
+
+    // --- FSM PhatMan ---
+
+    const PHATMAN_ORDER: [&str; 8] = [
+        "Dry out", "Reset Phase", "Minimum delay", "Modulation",
+        "LFO rate", "Wet out", "Feedback", "Phasing",
+    ];
+
+    #[test]
+    fn phatman_param_ordering_and_ranges() {
+        assert_params_match("phatman", "phatman.dsp", &[
+            ExpectedParam { label: "Dry out",       min: 0.0, max: 240.0, init: 240.0 },
+            ExpectedParam { label: "Reset Phase",   min: 0.0, max: 240.0, init: 0.0 },
+            ExpectedParam { label: "Minimum delay", min: 1.0, max: 100.0, init: 20.0 },
+            ExpectedParam { label: "Modulation",    min: 1.0, max: 100.0, init: 10.0 },
+            ExpectedParam { label: "LFO rate",      min: 0.0, max: 254.0, init: 10.0 },
+            ExpectedParam { label: "Wet out",       min: 0.0, max: 240.0, init: 240.0 },
+            ExpectedParam { label: "Feedback",      min: 0.0, max: 128.0, init: 64.0 },
+            ExpectedParam { label: "Phasing",       min: 0.0, max: 128.0, init: 32.0 },
+        ]);
+    }
+
+    #[test]
+    fn phatman_set_param_follows_bmx_order() {
+        assert_set_param_routes("phatman", "phatman.dsp", &PHATMAN_ORDER);
+    }
+
+    #[test]
+    fn phatman_integer_values_round_trip_to_nearest_raw() {
+        // The DSP recovers raw values with floor(s + 0.5); truncating BMX
+        // scaling must never land more than half a step away.
+        let dsp = load_dsp("phatman", "phatman.dsp");
+        for p in &dsp.params {
+            for raw in (p.min as i32)..=(p.max as i32) {
+                let got = round_trip_f32(p, raw as f32);
+                assert_eq!((got + 0.5).floor() as i32, raw, "{}: raw {raw} -> {got}", p.label);
+            }
+        }
+    }
+
     fn phatman_with(params: &[(u16, f32)]) -> FaustMachine {
         let dsp = load_dsp("phatman", "phatman.dsp");
         let scaled: Vec<(u16, i32)> = params.iter().map(|&(i, raw)| {
@@ -1894,15 +1960,17 @@ mod tests {
         let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
         let peak = out.iter().enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())).unwrap().0;
         assert!((30088..30133).contains(&peak), "wet peak at {peak}");
+    }
+
     // --- Rout EQ-10 ---
 
-    const EQ10_BANDS: [&str; 10] = [
+    const ROUTEQ10_BANDS: [&str; 10] = [
         "31 Hz", "62 Hz", "125 Hz", "250 Hz", "500 Hz", "1 kHz", "2 kHz", "4 kHz", "8 kHz", "16 kHz",
     ];
 
     #[test]
     fn routeq10_param_ordering_and_ranges() {
-        let expected: Vec<_> = EQ10_BANDS.iter()
+        let expected: Vec<_> = ROUTEQ10_BANDS.iter()
             .map(|&label| ExpectedParam { label, min: 0.0, max: 254.0, init: 127.0 })
             .collect();
         assert_params_match("routeq10", "routeq10.dsp", &expected);
@@ -1910,7 +1978,7 @@ mod tests {
 
     #[test]
     fn routeq10_set_param_follows_bmx_order() {
-        assert_set_param_routes("routeq10", "routeq10.dsp", &EQ10_BANDS);
+        assert_set_param_routes("routeq10", "routeq10.dsp", &ROUTEQ10_BANDS);
     }
 
     /// Rout EQ-10 with every band at raw byte value `level(band)`.
@@ -1976,7 +2044,7 @@ mod tests {
     const RAD_RANGES: [i64; 4] = [32768, 65534, 127, 127];
 
     /// Scale a raw Buzz value to 0..65535 the way the BMX loader does (truncating).
-    fn bmx_scaled(raw: i64, range: i64) -> i32 {
+    fn rad_bmx_scaled(raw: i64, range: i64) -> i32 {
         (raw * 65535 / range) as i32
     }
 
@@ -1985,7 +2053,7 @@ mod tests {
         let mut machine = FaustMachine::new(load_dsp("ryg_analog_distort", "ryg_analog_distort.dsp"));
         machine.init(44100);
         raw.iter().zip(RAD_RANGES).enumerate()
-            .for_each(|(i, (&v, r))| machine.set_param(i as u16, bmx_scaled(v, r)));
+            .for_each(|(i, (&v, r))| machine.set_param(i as u16, rad_bmx_scaled(v, r)));
         machine
     }
 
@@ -2037,6 +2105,29 @@ mod tests {
     #[test]
     fn registry_resolves_ryg_analog_distort() {
         assert!(crate::create_faust_machine("ryg's analog distort").is_some());
+    }
+
+    // --- WhiteNoise's Harmonic Delay tests ---
+
+    const HARMONIC_DELAY: &str = "whitenoise_harmonic_delay.dsp";
+
+    #[test]
+    fn harmonic_delay_is_stereo() {
+        let dsp = load_dsp("whitenoise_harmonic_delay", HARMONIC_DELAY);
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+    }
+
+    #[test]
+    fn harmonic_delay_param_ordering_and_ranges() {
+        assert_params_match("whitenoise_harmonic_delay", HARMONIC_DELAY, &[
+            ExpectedParam { label: "Dry thru", min: 0.0, max: 1.0,   init: 1.0 },
+            ExpectedParam { label: "Note",     min: 1.0, max: 156.0, init: 1.0 },
+            ExpectedParam { label: "Feedback", min: 0.0, max: 128.0, init: 96.0 },
+            ExpectedParam { label: "Wet out",  min: 0.0, max: 128.0, init: 48.0 },
+        ]);
+    }
+
+    #[test]
     fn harmonic_delay_set_param_follows_bmx_order() {
         assert_set_param_routes("whitenoise_harmonic_delay", HARMONIC_DELAY, &[
             "Dry thru", "Note", "Feedback", "Wet out",
@@ -2048,6 +2139,9 @@ mod tests {
     #[test]
     fn registry_resolves_filter() {
         assert!(crate::create_faust_machine("Jeskola Filter").is_some());
+    }
+
+    #[test]
     fn registry_resolves_harmonic_delay() {
         assert!(crate::create_faust_machine("WhiteNoise's Harmonic Delay").is_some());
     }
@@ -2077,6 +2171,125 @@ mod tests {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
     }
 
+    #[test]
+    fn registry_resolves_degrader() {
+        assert!(crate::create_faust_machine("Arguelles Degrader").is_some());
+    }
+
+    fn render_degrader(params: &[(u16, i32)], input: &[f32]) -> Vec<f32> {
+        let source = std::fs::read_to_string(
+            format!("{}/../../faust/degrader.dsp", env!("CARGO_MANIFEST_DIR"))
+        ).unwrap();
+        let mut machine = FaustMachine::from_source("degrader", &source).unwrap();
+        machine.init(44100);
+        params.iter().for_each(|&(i, v)| machine.set_param(i, v));
+        let mut buf = AudioBuffer::new(2, input.len() as u16);
+        buf.channel_mut(0).copy_from_slice(input);
+        buf.channel_mut(1).copy_from_slice(input);
+        machine.render(&mut buf);
+        buf.channel(0).to_vec()
+    }
+
+    #[test]
+    fn degrader_holds_for_rate_plus_one_samples() {
+        // Smp. Rate 5 (65535 * 4 / 31): captures at n = 4, 10, 16, ...
+        let input: Vec<f32> = (0..32).map(|n| (n + 1) as f32 / 64.0).collect();
+        let out = render_degrader(&[(0, 8456)], &input);
+        assert_eq!(&out[..4], &[0.0; 4]);
+        assert!(out[4..10].iter().all(|&y| y == input[4]));
+        assert!(out[10..16].iter().all(|&y| y == input[10]));
+    }
+
+    #[test]
+    fn degrader_truncates_toward_zero() {
+        // Bit Depth 6 (65535 * 4 / 14): grid of 1024 / 32768. Smp. Rate 1
+        // holds each capture for two samples (captures at n = 0, 2).
+        let (a, b) = (-3194.0 / 32768.0, 3194.0 / 32768.0);
+        let out = render_degrader(&[(1, 18724)], &[a, a, b, b]);
+        let (qa, qb) = (-3072.0 / 32768.0, 3072.0 / 32768.0);
+        assert_eq!(out, vec![qa, qa, qb, qb]);
+    }
+
+    #[test]
+    fn registry_resolves_automaton_eq7() {
+        assert!(crate::create_faust_machine("Automaton EQ-7").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_automaton_parametric_eq() {
+        assert!(crate::create_faust_machine("Automaton Parametric EQ").is_some());
+    }
+
+    // --- Automaton Parametric EQ ---
+
+    const APEQ: (&str, &str) = ("automaton_parametric_eq", "automaton_parametric_eq.dsp");
+    const APEQ_LABELS: [&str; 9] = [
+        "LPF-Gain", "LPF-Freq.", "LPF-Shelf", "HPF-Gain", "HPF-Freq.", "HPF-Shelf", "Gain", "Freq.", "BWidth",
+    ];
+    const APEQ_INITS: [f32; 9] = [32767.0, 32767.0, 0.0, 32767.0, 32767.0, 0.0, 32767.0, 32767.0, 32767.0];
+    const APEQ_BAND_GAIN: u16 = 6;
+
+    #[test]
+    fn apeq_compiles_stereo() {
+        let dsp = load_dsp(APEQ.0, APEQ.1);
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+    }
+
+    #[test]
+    fn apeq_param_ordering_and_ranges() {
+        let expected: Vec<ExpectedParam> = APEQ_LABELS.iter().zip(APEQ_INITS)
+            .map(|(&label, init)| ExpectedParam { label, min: 0.0, max: 65534.0, init })
+            .collect();
+        assert_params_match(APEQ.0, APEQ.1, &expected);
+    }
+
+    #[test]
+    fn apeq_set_param_follows_bmx_order() {
+        assert_set_param_routes(APEQ.0, APEQ.1, &APEQ_LABELS);
+    }
+
+    /// Scale a Buzz word value (0..65534) the way the BMX loader does.
+    fn apeq_with(params: &[(u16, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp(APEQ.0, APEQ.1));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, (v as i64 * 65535 / 65534) as i32));
+        machine
+    }
+
+    fn render_blocks(machine: &mut FaustMachine, input: &[f32]) -> Vec<f32> {
+        input.chunks(256).flat_map(|c| render_left(machine, c)).collect()
+    }
+
+    fn peak(samples: &[f32]) -> f32 {
+        samples.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    #[test]
+    fn apeq_defaults_are_identity() {
+        let input = sine(1000.0, 4096);
+        let out = render_blocks(&mut apeq_with(&[]), &input);
+        let worst = out.iter().zip(&input).map(|(a, b)| (a - b).abs()).enumerate()
+            .fold((0, 0.0f32), |m, (i, d)| if d > m.1 { (i, d) } else { m });
+        assert!(worst.1 < 1e-5, "defaults should pass input through, worst {worst:?}");
+    }
+
+    #[test]
+    fn apeq_band_gain_boosts_centre_by_36_db() {
+        // Freq. 32767 = 1052.9 Hz; Gain 65534 = +36 dB
+        let out = render_blocks(&mut apeq_with(&[(APEQ_BAND_GAIN, 65534)]), &sine(1052.9, 16384));
+        let gain_db = 20.0 * (peak(&out[8192..]) / 0.5).log10();
+        assert!((gain_db - 36.0).abs() < 0.3, "expected +36 dB, got {gain_db}");
+    }
+
+    #[test]
+    fn apeq_cuts_output_on_silent_blocks() {
+        let mut input = vec![0.0; 2048];
+        input[300] = 1.0;
+        let out = render_blocks(&mut apeq_with(&[(0, 65534)]), &input);
+        assert!(peak(&out[256..512]) > 0.1, "impulse block should pass");
+        assert_eq!(peak(&out[512..]), 0.0, "shelf tail is skipped on silent blocks: {:?}", &out[510..520]);
+    }
+
 
     // --- Chimp's PitchShifter ---
 
@@ -2092,37 +2305,6 @@ mod tests {
             ExpectedParam { label: "Direction", min: 0.0, max: 1.0,    init: 0.0 },
             ExpectedParam { label: "Dry out",   min: 0.0, max: 128.0,  init: 128.0 },
             ExpectedParam { label: "Wet out",   min: 0.0, max: 128.0,  init: 128.0 },
-    // --- Geonik's Overdrive 2 ---
-
-    const OD2_ORDER: [&str; 5] = ["Drive", "Assymetry", "CutOff", "Emphasis", "Volume"];
-
-    #[test]
-    fn overdrive2_param_ordering_and_ranges() {
-        assert_params_match("overdrive2", "overdrive2.dsp", &[
-            ExpectedParam { label: "Drive",     min: 48.0, max: 128.0, init: 80.0 },
-            ExpectedParam { label: "Assymetry", min: 0.0,  max: 128.0, init: 44.0 },
-            ExpectedParam { label: "CutOff",    min: 0.0,  max: 128.0, init: 108.0 },
-            ExpectedParam { label: "Emphasis",  min: 0.0,  max: 128.0, init: 95.0 },
-            ExpectedParam { label: "Volume",    min: 0.0,  max: 128.0, init: 124.0 },
-    // --- Geonik's Saturator ---
-
-    const SATURATOR: (&str, &str) = ("geonik-s-saturator", "geonik-s-saturator.dsp");
-
-    #[test]
-    fn saturator_param_ordering_and_ranges() {
-        assert_params_match(SATURATOR.0, SATURATOR.1, &[
-            ExpectedParam { label: "Drive", min: 48.0, max: 128.0, init: 64.0 },
-    // --- Jeskola Reverb (clean-room port) ---
-
-    #[test]
-    fn jeskola_reverb_param_ordering_and_ranges() {
-        assert_params_match("jeskola_reverb", "jeskola_reverb.dsp", &[
-            ExpectedParam { label: "Dry Out",     min: 0.0,   max: 4096.0,  init: 4096.0 },
-            ExpectedParam { label: "Rev Out",     min: 0.0,   max: 4096.0,  init: 768.0 },
-            ExpectedParam { label: "ER Out",      min: 0.0,   max: 4096.0,  init: 0.0 },
-            ExpectedParam { label: "Rev Time",    min: 1.0,   max: 64.0,    init: 10.0 },
-            ExpectedParam { label: "Pre-Delay",   min: 0.0,   max: 100.0,   init: 0.0 },
-            ExpectedParam { label: "High Cutoff", min: 100.0, max: 16384.0, init: 5000.0 },
         ]);
     }
 
@@ -2197,138 +2379,10 @@ mod tests {
     }
 
     #[test]
-    fn registry_resolves_degrader() {
-        assert!(crate::create_faust_machine("Arguelles Degrader").is_some());
-    }
-
-    fn render_degrader(params: &[(u16, i32)], input: &[f32]) -> Vec<f32> {
-        let source = std::fs::read_to_string(
-            format!("{}/../../faust/degrader.dsp", env!("CARGO_MANIFEST_DIR"))
-        ).unwrap();
-        let mut machine = FaustMachine::from_source("degrader", &source).unwrap();
-        machine.init(44100);
-        params.iter().for_each(|&(i, v)| machine.set_param(i, v));
-        let mut buf = AudioBuffer::new(2, input.len() as u16);
-        buf.channel_mut(0).copy_from_slice(input);
-        buf.channel_mut(1).copy_from_slice(input);
-        machine.render(&mut buf);
-        buf.channel(0).to_vec()
-    }
-
-    #[test]
-    fn degrader_holds_for_rate_plus_one_samples() {
-        // Smp. Rate 5 (65535 * 4 / 31): captures at n = 4, 10, 16, ...
-        let input: Vec<f32> = (0..32).map(|n| (n + 1) as f32 / 64.0).collect();
-        let out = render_degrader(&[(0, 8456)], &input);
-        assert_eq!(&out[..4], &[0.0; 4]);
-        assert!(out[4..10].iter().all(|&y| y == input[4]));
-        assert!(out[10..16].iter().all(|&y| y == input[10]));
-    }
-
-    #[test]
-    fn degrader_truncates_toward_zero() {
-        // Bit Depth 6 (65535 * 4 / 14): grid of 1024 / 32768. Smp. Rate 1
-        // holds each capture for two samples (captures at n = 0, 2).
-        let (a, b) = (-3194.0 / 32768.0, 3194.0 / 32768.0);
-        let out = render_degrader(&[(1, 18724)], &[a, a, b, b]);
-        let (qa, qb) = (-3072.0 / 32768.0, 3072.0 / 32768.0);
-        assert_eq!(out, vec![qa, qa, qb, qb]);
-    fn registry_resolves_automaton_eq7() {
-        assert!(crate::create_faust_machine("Automaton EQ-7").is_some());
-    fn registry_resolves_automaton_parametric_eq() {
-        assert!(crate::create_faust_machine("Automaton Parametric EQ").is_some());
-    }
-
-    // --- Automaton Parametric EQ ---
-
-    const APEQ: (&str, &str) = ("automaton_parametric_eq", "automaton_parametric_eq.dsp");
-    const APEQ_LABELS: [&str; 9] = [
-        "LPF-Gain", "LPF-Freq.", "LPF-Shelf", "HPF-Gain", "HPF-Freq.", "HPF-Shelf", "Gain", "Freq.", "BWidth",
-    ];
-    const APEQ_INITS: [f32; 9] = [32767.0, 32767.0, 0.0, 32767.0, 32767.0, 0.0, 32767.0, 32767.0, 32767.0];
-    const APEQ_BAND_GAIN: u16 = 6;
-
-    #[test]
-    fn apeq_compiles_stereo() {
-        let dsp = load_dsp(APEQ.0, APEQ.1);
-    // --- Geonik's Amplitude Modulation ---
-
-    const GAM_FREQUENCY: u16 = 0;
-    const GAM_FLOOR: u16 = 2;
-    const GAM_STEREO_PHASE: u16 = 3;
-
-    #[test]
-    fn geonik_am_compiles_two_in_two_out() {
-        let dsp = load_dsp("geonik_am", "geonik_am.dsp");
-    // --- smartelectronix tubescreamer (clean-room port) ---
-
-    const TUBESCREAMER: (&str, &str) =
-        ("smartelectronix_tubescreamer", "smartelectronix_tubescreamer.dsp");
-
-    #[test]
-    fn tubescreamer_is_stereo() {
-        let dsp = load_dsp(TUBESCREAMER.0, TUBESCREAMER.1);
-        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
-    }
-
-    #[test]
-    fn apeq_param_ordering_and_ranges() {
-        let expected: Vec<ExpectedParam> = APEQ_LABELS.iter().zip(APEQ_INITS)
-            .map(|(&label, init)| ExpectedParam { label, min: 0.0, max: 65534.0, init })
-            .collect();
-        assert_params_match(APEQ.0, APEQ.1, &expected);
-    }
-
-    #[test]
-    fn apeq_set_param_follows_bmx_order() {
-        assert_set_param_routes(APEQ.0, APEQ.1, &APEQ_LABELS);
-    }
-
-    /// Scale a Buzz word value (0..65534) the way the BMX loader does.
-    fn apeq_with(params: &[(u16, i32)]) -> FaustMachine {
-        let mut machine = FaustMachine::new(load_dsp(APEQ.0, APEQ.1));
-        machine.init(44100);
-        params.iter().for_each(|&(p, v)| machine.set_param(p, (v as i64 * 65535 / 65534) as i32));
-        machine
-    }
-
-    fn render_blocks(machine: &mut FaustMachine, input: &[f32]) -> Vec<f32> {
-        input.chunks(256).flat_map(|c| render_left(machine, c)).collect()
-    }
-
-    fn peak(samples: &[f32]) -> f32 {
-        samples.iter().fold(0.0f32, |m, s| m.max(s.abs()))
-    }
-
-    #[test]
-    fn apeq_defaults_are_identity() {
-        let input = sine(1000.0, 4096);
-        let out = render_blocks(&mut apeq_with(&[]), &input);
-        let worst = out.iter().zip(&input).map(|(a, b)| (a - b).abs()).enumerate()
-            .fold((0, 0.0f32), |m, (i, d)| if d > m.1 { (i, d) } else { m });
-        assert!(worst.1 < 1e-5, "defaults should pass input through, worst {worst:?}");
-    }
-
-    #[test]
-    fn apeq_band_gain_boosts_centre_by_36_db() {
-        // Freq. 32767 = 1052.9 Hz; Gain 65534 = +36 dB
-        let out = render_blocks(&mut apeq_with(&[(APEQ_BAND_GAIN, 65534)]), &sine(1052.9, 16384));
-        let gain_db = 20.0 * (peak(&out[8192..]) / 0.5).log10();
-        assert!((gain_db - 36.0).abs() < 0.3, "expected +36 dB, got {gain_db}");
-    }
-
-    #[test]
-    fn apeq_cuts_output_on_silent_blocks() {
-        let mut input = vec![0.0; 2048];
-        input[300] = 1.0;
-        let out = render_blocks(&mut apeq_with(&[(0, 65534)]), &input);
-        assert!(peak(&out[256..512]) > 0.1, "impulse block should pass");
-        assert_eq!(peak(&out[512..]), 0.0, "shelf tail is skipped on silent blocks: {:?}", &out[510..520]);
-    }
-
-    #[test]
     fn registry_resolves_phatman() {
         assert!(crate::create_faust_machine("FSM PhatMan").is_some());
+    }
+
     // --- FSM SprayMan ---
 
     const SPRAYMAN_LABELS: [&str; 13] = [
@@ -2360,7 +2414,7 @@ mod tests {
         machine
     }
 
-    fn render_blocks(machine: &mut FaustMachine, input: &[f32], blocks: usize) -> Vec<f32> {
+    fn sprayman_render_blocks(machine: &mut FaustMachine, input: &[f32], blocks: usize) -> Vec<f32> {
         (0..blocks).flat_map(|_| render_left(machine, input)).collect()
     }
 
@@ -2368,7 +2422,7 @@ mod tests {
     fn sprayman_wet_off_passes_dry() {
         // Wet out = 0 (raw 0 -> BMX 0): output is exactly the dry input at 0 dB.
         let mut machine = sprayman_with(&[(10, 0)]);
-        let out = render_blocks(&mut machine, &[0.25; 256], 4);
+        let out = sprayman_render_blocks(&mut machine, &[0.25; 256], 4);
         assert!(out.iter().all(|s| (s - 0.25).abs() < 1e-6));
     }
 
@@ -2377,7 +2431,7 @@ mod tests {
         // Dry out = 0: silence until the first grain (~5800 samples or later), then output.
         let mut machine = sprayman_with(&[(0, 0)]);
         let input: Vec<f32> = (0..256).map(|i| (i as f32 * 0.3).sin() * 0.5).collect();
-        let out = render_blocks(&mut machine, &input, 160);
+        let out = sprayman_render_blocks(&mut machine, &input, 160);
         let first = first_audible(&out).expect("grains should sound");
         assert!(first >= 5800, "first grain at {first}");
     }
@@ -2385,6 +2439,21 @@ mod tests {
     #[test]
     fn registry_resolves_sprayman() {
         assert!(crate::create_faust_machine("FSM SprayMan").is_some());
+    }
+
+    // --- Geonik's Amplitude Modulation ---
+
+    const GAM_FREQUENCY: u16 = 0;
+    const GAM_FLOOR: u16 = 2;
+    const GAM_STEREO_PHASE: u16 = 3;
+
+    #[test]
+    fn geonik_am_compiles_two_in_two_out() {
+        let dsp = load_dsp("geonik_am", "geonik_am.dsp");
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+    }
+
+    #[test]
     fn geonik_am_param_ordering_and_ranges() {
         assert_params_match("geonik_am", "geonik_am.dsp", &[
             ExpectedParam { label: "Frequency",   min: 0.0, max: 65534.0, init: 1000.0 },
@@ -2393,15 +2462,6 @@ mod tests {
             ExpectedParam { label: "StereoPhase", min: 0.0, max: 128.0,   init: 64.0 },
             // Switch: masterblaster delivers it as 0/1 whatever range it declares.
             ExpectedParam { label: "Restart",     min: 0.0, max: 1.0,     init: 0.0 },
-    fn jeskola_reverb_set_param_follows_bmx_order() {
-        assert_set_param_routes("jeskola_reverb", "jeskola_reverb.dsp", &[
-            "Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay", "High Cutoff",
-    fn tubescreamer_param_ordering_and_ranges() {
-        assert_params_match(TUBESCREAMER.0, TUBESCREAMER.1, &[
-            ExpectedParam { label: "PreGain",  min: 0.0, max: 240.0, init: 220.0 },
-            ExpectedParam { label: "Drive",    min: 0.0, max: 254.0, init: 0.0 },
-            ExpectedParam { label: "Tone",     min: 0.0, max: 254.0, init: 254.0 },
-            ExpectedParam { label: "PostGain", min: 0.0, max: 240.0, init: 131.0 },
         ]);
     }
 
@@ -2409,9 +2469,6 @@ mod tests {
     fn geonik_am_set_param_follows_bmx_order() {
         assert_set_param_routes("geonik_am", "geonik_am.dsp", &[
             "Frequency", "LfoType", "Floor", "StereoPhase", "Restart",
-    fn tubescreamer_set_param_follows_bmx_order() {
-        assert_set_param_routes(TUBESCREAMER.0, TUBESCREAMER.1, &[
-            "PreGain", "Drive", "Tone", "PostGain",
         ]);
     }
 
@@ -2421,14 +2478,14 @@ mod tests {
     }
 
     /// BMX scaling of a raw Buzz value over `min..max` (bmx_format::scale_param_value).
-    fn bmx_scaled(raw: i32, min: i32, max: i32) -> i32 {
+    fn geonik_am_bmx_scaled(raw: i32, min: i32, max: i32) -> i32 {
         ((raw - min) as i64 * 65535 / (max - min) as i64) as i32
     }
 
     fn geonik_am_with(params: &[(u16, i32, i32)]) -> FaustMachine {
         let mut machine = FaustMachine::new(load_dsp("geonik_am", "geonik_am.dsp"));
         machine.init(44100);
-        params.iter().for_each(|&(p, raw, max)| machine.set_param(p, bmx_scaled(raw, 0, max)));
+        params.iter().for_each(|&(p, raw, max)| machine.set_param(p, geonik_am_bmx_scaled(raw, 0, max)));
         machine
     }
 
@@ -2476,6 +2533,24 @@ mod tests {
     #[test]
     fn registry_resolves_geonik_compressor() {
         assert!(crate::create_faust_machine("Geonik's Compressor").is_some());
+    }
+
+    // --- Geonik's Overdrive 2 ---
+
+    const OD2_ORDER: [&str; 5] = ["Drive", "Assymetry", "CutOff", "Emphasis", "Volume"];
+
+    #[test]
+    fn overdrive2_param_ordering_and_ranges() {
+        assert_params_match("overdrive2", "overdrive2.dsp", &[
+            ExpectedParam { label: "Drive",     min: 48.0, max: 128.0, init: 80.0 },
+            ExpectedParam { label: "Assymetry", min: 0.0,  max: 128.0, init: 44.0 },
+            ExpectedParam { label: "CutOff",    min: 0.0,  max: 128.0, init: 108.0 },
+            ExpectedParam { label: "Emphasis",  min: 0.0,  max: 128.0, init: 95.0 },
+            ExpectedParam { label: "Volume",    min: 0.0,  max: 128.0, init: 124.0 },
+        ]);
+    }
+
+    #[test]
     fn overdrive2_set_param_follows_bmx_order() {
         assert_set_param_routes("overdrive2", "overdrive2.dsp", &OD2_ORDER);
     }
@@ -2531,6 +2606,20 @@ mod tests {
     #[test]
     fn registry_resolves_overdrive2() {
         assert!(crate::create_faust_machine("Geonik's Overdrive 2").is_some());
+    }
+
+    // --- Geonik's Saturator ---
+
+    const SATURATOR: (&str, &str) = ("geonik-s-saturator", "geonik-s-saturator.dsp");
+
+    #[test]
+    fn saturator_param_ordering_and_ranges() {
+        assert_params_match(SATURATOR.0, SATURATOR.1, &[
+            ExpectedParam { label: "Drive", min: 48.0, max: 128.0, init: 64.0 },
+        ]);
+    }
+
+    #[test]
     fn saturator_set_param_follows_bmx_order() {
         assert_set_param_routes(SATURATOR.0, SATURATOR.1, &["Drive"]);
     }
@@ -2586,6 +2675,30 @@ mod tests {
     #[test]
     fn registry_resolves_eq3() {
         assert!(crate::create_faust_machine("Jeskola EQ-3").is_some());
+    }
+
+    // --- Jeskola Reverb (clean-room port) ---
+
+    #[test]
+    fn jeskola_reverb_param_ordering_and_ranges() {
+        assert_params_match("jeskola_reverb", "jeskola_reverb.dsp", &[
+            ExpectedParam { label: "Dry Out",     min: 0.0,   max: 4096.0,  init: 4096.0 },
+            ExpectedParam { label: "Rev Out",     min: 0.0,   max: 4096.0,  init: 768.0 },
+            ExpectedParam { label: "ER Out",      min: 0.0,   max: 4096.0,  init: 0.0 },
+            ExpectedParam { label: "Rev Time",    min: 1.0,   max: 64.0,    init: 10.0 },
+            ExpectedParam { label: "Pre-Delay",   min: 0.0,   max: 100.0,   init: 0.0 },
+            ExpectedParam { label: "High Cutoff", min: 100.0, max: 16384.0, init: 5000.0 },
+        ]);
+    }
+
+    #[test]
+    fn jeskola_reverb_set_param_follows_bmx_order() {
+        assert_set_param_routes("jeskola_reverb", "jeskola_reverb.dsp", &[
+            "Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay", "High Cutoff",
+        ]);
+    }
+
+    #[test]
     fn jeskola_reverb_defaults_round_trip() {
         let dsp = load_dsp("jeskola_reverb", "jeskola_reverb.dsp");
         for p in &dsp.params {
@@ -2599,9 +2712,124 @@ mod tests {
         assert!(crate::create_faust_machine("Jeskola Reverb").is_some());
     }
 
+    // --- Muon SmootherDrive ---
+
+    const MUON_SD_THRESHOLD: u16 = 0;
+    const MUON_SD_INTENSITY: u16 = 1;
+
+    #[test]
+    fn muon_smootherdrive_param_ordering_and_ranges() {
+        assert_params_match("muon_smootherdrive", "muon_smootherdrive.dsp", &[
+            ExpectedParam { label: "Threshold", min: 0.0, max: 32767.0, init: 32767.0 },
+            ExpectedParam { label: "Intensity", min: 0.0, max: 100.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn muon_smootherdrive_set_param_follows_bmx_order() {
+        assert_set_param_routes("muon_smootherdrive", "muon_smootherdrive.dsp", &["Threshold", "Intensity"]);
+    }
+
+    /// Every raw Buzz value must survive the BMX 0..65535 round trip.
+    fn assert_all_values_round_trip(dsp_name: &str, dsp_file: &str) {
+        let dsp = load_dsp(dsp_name, dsp_file);
+        for p in &dsp.params {
+            for raw in (p.min as i32)..=(p.max as i32) {
+                let got = round_trip_f32(p, raw as f32);
+                assert!((got - raw as f32).abs() < 0.5, "{}: {raw} round-trips to {got}", p.label);
+            }
+        }
+    }
+
+    #[test]
+    fn muon_smootherdrive_values_round_trip() {
+        assert_all_values_round_trip("muon_smootherdrive", "muon_smootherdrive.dsp");
+    }
+
+    /// Raw Buzz value → BMX 0..65535 (ceiling, so truncation lands on `raw`).
+    fn raw_to_scaled(raw: i32, max: i32) -> i32 {
+        (raw * 65535 + max - 1) / max
+    }
+
+    fn muon_smootherdrive_with(threshold: i32, intensity: i32) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("muon_smootherdrive", "muon_smootherdrive.dsp"));
+        machine.init(44100);
+        machine.set_param(MUON_SD_THRESHOLD, raw_to_scaled(threshold, 32767));
+        machine.set_param(MUON_SD_INTENSITY, raw_to_scaled(intensity, 100));
+        machine
+    }
+
+    fn render_value(machine: &mut FaustMachine, x: f32) -> f32 {
+        *render_left(machine, &[x; 64]).last().unwrap()
+    }
+
+    #[test]
+    fn muon_smootherdrive_intensity_zero_is_bypass() {
+        let mut machine = muon_smootherdrive_with(4096, 0);
+        assert_eq!(render_value(&mut machine, 0.7), 0.7);
+    }
+
+    #[test]
+    fn muon_smootherdrive_small_signal_gain_matches_oracle() {
+        // Measured: 1/G = t + (1-t)/(I+1.6), t = Threshold/32768
+        let mut machine = muon_smootherdrive_with(4096, 50);
+        let gain = render_value(&mut machine, 0.01) / 0.01;
+        assert!((gain - 7.04437).abs() < 1e-3, "gain {gain}");
+    }
+
+    #[test]
+    fn muon_smootherdrive_zero_threshold_is_quarter_sine() {
+        let mut machine = muon_smootherdrive_with(0, 100);
+        let got = render_value(&mut machine, -0.5);
+        let expected = -(std::f32::consts::FRAC_PI_4).sin();
+        assert!((got - expected).abs() < 1e-5, "got {got}, expected {expected}");
+    }
+
+    #[test]
+    fn muon_smootherdrive_full_scale_maps_to_one() {
+        let mut machine = muon_smootherdrive_with(12288, 75);
+        assert!((render_value(&mut machine, 1.0) - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn registry_resolves_muon_smootherdrive() {
+        assert!(crate::create_faust_machine("Muon SmootherDrive").is_some());
+    }
+
     #[test]
     fn registry_resolves_routeq10() {
         assert!(crate::create_faust_machine("Rout EQ-10").is_some());
+    }
+
+    // --- smartelectronix tubescreamer (clean-room port) ---
+
+    const TUBESCREAMER: (&str, &str) =
+        ("smartelectronix_tubescreamer", "smartelectronix_tubescreamer.dsp");
+
+    #[test]
+    fn tubescreamer_is_stereo() {
+        let dsp = load_dsp(TUBESCREAMER.0, TUBESCREAMER.1);
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+    }
+
+    #[test]
+    fn tubescreamer_param_ordering_and_ranges() {
+        assert_params_match(TUBESCREAMER.0, TUBESCREAMER.1, &[
+            ExpectedParam { label: "PreGain",  min: 0.0, max: 240.0, init: 220.0 },
+            ExpectedParam { label: "Drive",    min: 0.0, max: 254.0, init: 0.0 },
+            ExpectedParam { label: "Tone",     min: 0.0, max: 254.0, init: 254.0 },
+            ExpectedParam { label: "PostGain", min: 0.0, max: 240.0, init: 131.0 },
+        ]);
+    }
+
+    #[test]
+    fn tubescreamer_set_param_follows_bmx_order() {
+        assert_set_param_routes(TUBESCREAMER.0, TUBESCREAMER.1, &[
+            "PreGain", "Drive", "Tone", "PostGain",
+        ]);
+    }
+
+    #[test]
     fn registry_resolves_tubescreamer() {
         assert!(crate::create_faust_machine("smartelectronix tubescreamer").is_some());
     }
@@ -2650,10 +2878,6 @@ mod tests {
     /// Render `input` through `machine` in 256-frame blocks (the Buzz work size).
     fn render_blocks_left(machine: &mut FaustMachine, input: &[f32]) -> Vec<f32> {
         input.chunks(256).flat_map(|c| render_left(machine, c)).collect()
-    }
-
-    fn rms(samples: &[f32]) -> f32 {
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
     }
 
     /// Steady-state gain (dB) of a sine at `freq` with the given BMX-scaled params.
@@ -2710,6 +2934,8 @@ mod tests {
         let out = render_blocks_left(&mut machine, &input);
         assert!(out[255].abs() > 1e-4, "tail should ring inside the impulse block");
         assert!(out[256..].iter().all(|s| *s == 0.0), "silent blocks must be cut");
+    }
+
     #[test]
     fn registry_resolves_smootherdrive() {
         assert!(crate::create_faust_machine("Dave's Smootherdrive").is_some());
@@ -2734,42 +2960,42 @@ mod tests {
     }
 
     /// Set a raw Buzz value via the BMX truncating 0..65535 scaling.
-    fn set_raw_param(machine: &mut FaustMachine, param: u16, raw: i32, max: i32) {
+    fn set_smootherdrive_raw_param(machine: &mut FaustMachine, param: u16, raw: i32, max: i32) {
         machine.set_param(param, (raw as i64 * 65535 / max as i64) as i32);
     }
 
     fn smootherdrive_out(threshold: i32, intensity: i32, input: f32) -> f32 {
         let mut machine = FaustMachine::new(load_dsp("smootherdrive", "smootherdrive.dsp"));
         machine.init(44100);
-        set_raw_param(&mut machine, SD_THRESHOLD, threshold, 32767);
-        set_raw_param(&mut machine, SD_INTENSITY, intensity, 100);
+        set_smootherdrive_raw_param(&mut machine, SD_THRESHOLD, threshold, 32767);
+        set_smootherdrive_raw_param(&mut machine, SD_INTENSITY, intensity, 100);
         *render_left(&mut machine, &[input; 64]).last().unwrap()
     }
 
-    fn assert_close(got: f32, expected: f32, tol: f32) {
+    fn assert_smootherdrive_close(got: f32, expected: f32, tol: f32) {
         assert!((got - expected).abs() < tol, "expected ~{expected}, got {got}");
     }
 
     #[test]
     fn smootherdrive_intensity_zero_is_bypass() {
-        assert_close(smootherdrive_out(4096, 0, 0.3), 0.3, 1e-7);
+        assert_smootherdrive_close(smootherdrive_out(4096, 0, 0.3), 0.3, 1e-7);
     }
 
     #[test]
     fn smootherdrive_linear_gain_below_threshold() {
         // Measured: T=4096, I=25 gives a small-signal gain of exactly 19/3.
-        assert_close(smootherdrive_out(4096, 25, -0.05), -0.05 * 19.0 / 3.0, 1e-5);
+        assert_smootherdrive_close(smootherdrive_out(4096, 25, -0.05), -0.05 * 19.0 / 3.0, 1e-5);
     }
 
     #[test]
     fn smootherdrive_zero_threshold_is_quarter_sine() {
         let x = 16000.0 / 32768.0;
-        assert_close(smootherdrive_out(0, 50, x), (std::f32::consts::FRAC_PI_2 * x).sin(), 1e-5);
+        assert_smootherdrive_close(smootherdrive_out(0, 50, x), (std::f32::consts::FRAC_PI_2 * x).sin(), 1e-5);
     }
 
     #[test]
     fn smootherdrive_full_scale_maps_to_full_scale() {
-        assert_close(smootherdrive_out(12288, 63, 1.0), 1.0, 1e-5);
+        assert_smootherdrive_close(smootherdrive_out(12288, 63, 1.0), 1.0, 1e-5);
     }
 
     // --- Machine-code disk cache tests ---
@@ -2800,47 +3026,6 @@ mod tests {
             ExpectedParam { label: "Flanger Mode", min: 0.0, max: 1.0,     init: 0.0 },
             ExpectedParam { label: "Sweep Speed",  min: 0.0, max: 254.0,   init: 1.0 },
             ExpectedParam { label: "Feedback",     min: 0.0, max: 65534.0, init: 32767.0 },
-    // --- Automaton Compressor ---
-
-    const AC_THRESHOLD: u16 = 0;
-    const AC_RATIO: u16 = 1;
-
-    #[test]
-    fn automaton_compressor_param_ordering_and_ranges() {
-        assert_params_match("automaton_compressor", "automaton_compressor.dsp", &[
-            ExpectedParam { label: "Threshold", min: 0.0, max: 65534.0, init: 47512.0 },
-            ExpectedParam { label: "Ratio",     min: 0.0, max: 65534.0, init: 0.0 },
-            ExpectedParam { label: "Attack",    min: 0.0, max: 65534.0, init: 12577.0 },
-            ExpectedParam { label: "Release",   min: 0.0, max: 65534.0, init: 7452.0 },
-            ExpectedParam { label: "Gain",      min: 0.0, max: 65534.0, init: 0.0 },
-    // --- Chun-Yu's TouchWah ---
-
-    const TOUCHWAH_PARAMS: [&str; 6] = [
-        "Resonance", "Min Cutoff (Hz)", "Max Cutoff (Hz)", "Changes/Sec", "In->SinCurve?", "ScaleFactor",
-    ];
-
-    #[test]
-    fn touchwah_param_ordering_and_ranges() {
-        assert_params_match("touchwah", "chun-yu-s-touchwah.dsp", &[
-            ExpectedParam { label: "Resonance",       min: 10.0, max: 141.0,   init: 129.0 },
-            ExpectedParam { label: "Min Cutoff (Hz)", min: 1.0,  max: 22049.0, init: 256.0 },
-            ExpectedParam { label: "Max Cutoff (Hz)", min: 2.0,  max: 22050.0, init: 11025.0 },
-            ExpectedParam { label: "Changes/Sec",     min: 1.0,  max: 128.0,   init: 32.0 },
-            ExpectedParam { label: "In->SinCurve?",   min: 0.0,  max: 1.0,     init: 0.0 },
-            ExpectedParam { label: "ScaleFactor",     min: 1.0,  max: 16.0,    init: 1.0 },
-    #[test]
-    fn fsm_chorus_set_param_follows_bmx_order() {
-        assert_set_param_routes("fsm_chorus", "fsm_chorus.dsp", &[
-            "Dry out", "Minimum delay", "Modulation", "LFO rate", "Wet out", "Feedback",
-    // --- Geonik's Gate ---
-
-    #[test]
-    fn geonik_gate_param_ordering_and_ranges() {
-        assert_params_match("geonik_gate", "geonik_gate.dsp", &[
-            ExpectedParam { label: "Threshold", min: 0.0,  max: 128.0,  init: 92.0 },
-            ExpectedParam { label: "Ratio",     min: 0.0,  max: 240.0,  init: 20.0 },
-            ExpectedParam { label: "Attack",    min: 5.0,  max: 8000.0, init: 10.0 },
-            ExpectedParam { label: "Release",   min: 30.0, max: 8000.0, init: 2000.0 },
         ]);
     }
 
@@ -2905,6 +3090,25 @@ mod tests {
         let silent = render_left(&mut machine, &[0.0; 256]);
         assert!(first[20].abs() > 0.1, "feedback should ring inside the input block");
         assert!(silent.iter().all(|y| *y == 0.0), "silent block must be cut to zero");
+    }
+
+    // --- Automaton Compressor ---
+
+    const AC_THRESHOLD: u16 = 0;
+    const AC_RATIO: u16 = 1;
+
+    #[test]
+    fn automaton_compressor_param_ordering_and_ranges() {
+        assert_params_match("automaton_compressor", "automaton_compressor.dsp", &[
+            ExpectedParam { label: "Threshold", min: 0.0, max: 65534.0, init: 47512.0 },
+            ExpectedParam { label: "Ratio",     min: 0.0, max: 65534.0, init: 0.0 },
+            ExpectedParam { label: "Attack",    min: 0.0, max: 65534.0, init: 12577.0 },
+            ExpectedParam { label: "Release",   min: 0.0, max: 65534.0, init: 7452.0 },
+            ExpectedParam { label: "Gain",      min: 0.0, max: 65534.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
     fn automaton_compressor_set_param_follows_bmx_order() {
         assert_set_param_routes("automaton_compressor", "automaton_compressor.dsp", &[
             "Threshold", "Ratio", "Attack", "Release", "Gain",
@@ -2931,6 +3135,27 @@ mod tests {
         // Threshold -64 dB, ratio 25:1: linear-amplitude law gives ~1/25 for loud input.
         let g = automaton_compressor_sine_gain(&[(AC_THRESHOLD, 0), (AC_RATIO, 65535)]);
         assert!(g > 0.035 && g < 0.05, "expected gain near 1/25, got {g}");
+    }
+
+    // --- Chun-Yu's TouchWah ---
+
+    const TOUCHWAH_PARAMS: [&str; 6] = [
+        "Resonance", "Min Cutoff (Hz)", "Max Cutoff (Hz)", "Changes/Sec", "In->SinCurve?", "ScaleFactor",
+    ];
+
+    #[test]
+    fn touchwah_param_ordering_and_ranges() {
+        assert_params_match("touchwah", "chun-yu-s-touchwah.dsp", &[
+            ExpectedParam { label: "Resonance",       min: 10.0, max: 141.0,   init: 129.0 },
+            ExpectedParam { label: "Min Cutoff (Hz)", min: 1.0,  max: 22049.0, init: 256.0 },
+            ExpectedParam { label: "Max Cutoff (Hz)", min: 2.0,  max: 22050.0, init: 11025.0 },
+            ExpectedParam { label: "Changes/Sec",     min: 1.0,  max: 128.0,   init: 32.0 },
+            ExpectedParam { label: "In->SinCurve?",   min: 0.0,  max: 1.0,     init: 0.0 },
+            ExpectedParam { label: "ScaleFactor",     min: 1.0,  max: 16.0,    init: 1.0 },
+        ]);
+    }
+
+    #[test]
     fn touchwah_set_param_follows_bmx_order() {
         assert_set_param_routes("touchwah", "chun-yu-s-touchwah.dsp", &TOUCHWAH_PARAMS);
     }
@@ -2947,10 +3172,6 @@ mod tests {
         });
         machine.render(&mut buf);
         buf.channel(0)[..frames as usize].to_vec()
-    }
-
-    fn rms(samples: &[f32]) -> f32 {
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
     }
 
     fn sine_1k(n: usize) -> f32 {
@@ -2980,8 +3201,33 @@ mod tests {
         let loud = touchwah_render(8192, tone(0.8), &params);
         let (gq, gl) = (rms(&quiet[4096..]) / 0.01, rms(&loud[4096..]) / 0.8);
         assert!(gl > 4.0 * gq, "loud input should open the low-pass: gain quiet={gq}, loud={gl}");
+    }
+
+    #[test]
+    fn fsm_chorus_set_param_follows_bmx_order() {
+        assert_set_param_routes("fsm_chorus", "fsm_chorus.dsp", &[
+            "Dry out", "Minimum delay", "Modulation", "LFO rate", "Wet out", "Feedback",
+        ]);
+    }
+
+    #[test]
     fn fsm_chorus_is_registered() {
         assert!(crate::registry::create_faust_machine("FSM Chorus").is_some());
+    }
+
+    // --- Geonik's Gate ---
+
+    #[test]
+    fn geonik_gate_param_ordering_and_ranges() {
+        assert_params_match("geonik_gate", "geonik_gate.dsp", &[
+            ExpectedParam { label: "Threshold", min: 0.0,  max: 128.0,  init: 92.0 },
+            ExpectedParam { label: "Ratio",     min: 0.0,  max: 240.0,  init: 20.0 },
+            ExpectedParam { label: "Attack",    min: 5.0,  max: 8000.0, init: 10.0 },
+            ExpectedParam { label: "Release",   min: 30.0, max: 8000.0, init: 2000.0 },
+        ]);
+    }
+
+    #[test]
     fn geonik_gate_set_param_follows_bmx_order() {
         assert_set_param_routes("geonik_gate", "geonik_gate.dsp", &[
             "Threshold", "Ratio", "Attack", "Release",
@@ -3007,6 +3253,8 @@ mod tests {
     fn geonik_gate_passes_above_threshold() {
         let rms = geonik_gate_tail_rms(0.5);
         assert!((rms - 0.5 / 2f32.sqrt()).abs() < 0.01, "loud sine should pass, rms={rms}");
+    }
+
     #[test]
     fn flanger_set_param_follows_bmx_order() {
         assert_set_param_routes("flanger", "flanger.dsp", &[
@@ -3051,6 +3299,8 @@ mod tests {
         assert!(held.iter().any(|&s| s != 0.0), "first silent block is still processed");
         let out = flanger_render(&mut machine, &[0.0; 256]);
         assert!(out.iter().all(|&s| s == 0.0), "silent input block must be cut");
+    }
+
     #[test]
     fn muon_delay_set_param_follows_bmx_order() {
         assert_set_param_routes("muon_delay", "muon_delay.dsp", &MUON_DELAY_PARAMS);
