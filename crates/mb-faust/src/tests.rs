@@ -369,6 +369,18 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn fsm_chorus_param_ordering_and_ranges() {
+        assert_params_match("fsm_chorus", "fsm_chorus.dsp", &[
+            ExpectedParam { label: "Dry out",       min: 0.0, max: 240.0, init: 240.0 },
+            ExpectedParam { label: "Minimum delay", min: 1.0, max: 100.0, init: 20.0 },
+            ExpectedParam { label: "Modulation",    min: 1.0, max: 100.0, init: 10.0 },
+            ExpectedParam { label: "LFO rate",      min: 0.0, max: 240.0, init: 10.0 },
+            ExpectedParam { label: "Wet out",       min: 0.0, max: 240.0, init: 240.0 },
+            ExpectedParam { label: "Feedback",      min: 0.0, max: 128.0, init: 64.0 },
+        ]);
+    }
+
     /// Set each BMX param index to max and check it lands on the
     /// identically-labelled Faust param (C++ pParameters[] order).
     fn assert_set_param_routes(dsp_name: &str, dsp_file: &str, bmx_order: &[&str]) {
@@ -1318,6 +1330,10 @@ mod tests {
             ExpectedParam { label: "Changes/Sec",     min: 1.0,  max: 128.0,   init: 32.0 },
             ExpectedParam { label: "In->SinCurve?",   min: 0.0,  max: 1.0,     init: 0.0 },
             ExpectedParam { label: "ScaleFactor",     min: 1.0,  max: 16.0,    init: 1.0 },
+    #[test]
+    fn fsm_chorus_set_param_follows_bmx_order() {
+        assert_set_param_routes("fsm_chorus", "fsm_chorus.dsp", &[
+            "Dry out", "Minimum delay", "Modulation", "LFO rate", "Wet out", "Feedback",
         ]);
     }
 
@@ -1457,5 +1473,7 @@ mod tests {
         let loud = touchwah_render(8192, tone(0.8), &params);
         let (gq, gl) = (rms(&quiet[4096..]) / 0.01, rms(&loud[4096..]) / 0.8);
         assert!(gl > 4.0 * gq, "loud input should open the low-pass: gain quiet={gq}, loud={gl}");
+    fn fsm_chorus_is_registered() {
+        assert!(crate::registry::create_faust_machine("FSM Chorus").is_some());
     }
 }

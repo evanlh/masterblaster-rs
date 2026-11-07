@@ -34,6 +34,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "Chimp's PitchShifter" => ("chimp_pitchshifter", include_str!("../../../faust/chimp_pitchshifter.dsp")),
         "Dave's Smootherdrive" => ("smootherdrive", include_str!("../../../faust/smootherdrive.dsp")),
         "EQ-10" => ("eq10", include_str!("../../../faust/eq10.dsp")),
+        "FSM Chorus" => ("fsm_chorus", include_str!("../../../faust/fsm_chorus.dsp")),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
