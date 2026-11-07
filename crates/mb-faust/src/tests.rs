@@ -464,6 +464,43 @@ mod tests {
     }
 
     #[test]
+    fn psycho01_param_ordering_and_ranges() {
+        assert_params_match("psycho01", "psycho01.dsp", &[
+            ExpectedParam { label: "Room", min: 0.0, max: 128.0, init: 128.0 },
+        ]);
+    }
+
+    #[test]
+    fn psycho01_set_param_follows_bmx_order() {
+        assert_set_param_routes("psycho01", "psycho01.dsp", &["Room"]);
+    }
+
+    /// Render a constant mono 1.0 through Psycho01 at the given BMX value.
+    fn render_psycho01(bmx_room: i32) -> AudioBuffer {
+        let mut machine = FaustMachine::new(load_dsp("psycho01", "psycho01.dsp"));
+        machine.init(44100);
+        machine.set_param(0, bmx_room);
+        let mut buf = AudioBuffer::new(2, 4);
+        buf.channel_mut(0).fill(1.0);
+        buf.channel_mut(1).fill(1.0);
+        machine.render(&mut buf);
+        buf
+    }
+
+    #[test]
+    fn psycho01_room_zero_alternates_channels_per_sample() {
+        let buf = render_psycho01(0);
+        assert_eq!(buf.channel(0), &[0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(buf.channel(1), &[1.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn psycho01_room_max_is_centred() {
+        let buf = render_psycho01(65535);
+        assert!(buf.channel(0).iter().chain(buf.channel(1)).all(|&v| (v - 0.5).abs() < 1e-6));
+    }
+
+    #[test]
     fn freeverb_set_param_follows_bmx_order() {
         assert_set_param_routes("freeverb", "reverb.dsp", &[
             "Rev Time", "HF Damp", "Pre Delay", "Low Cut", "High Cut", "Rev Out", "Dry Out",
