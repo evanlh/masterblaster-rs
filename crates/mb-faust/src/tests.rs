@@ -743,6 +743,11 @@ mod tests {
             ExpectedParam { label: "min. delay", min: 0.0, max: 50.0,   init: 25.0 },
             ExpectedParam { label: "dry out",    min: 0.0, max: 128.0,  init: 128.0 },
             ExpectedParam { label: "wet out",    min: 0.0, max: 128.0,  init: 128.0 },
+    fn joachims_limiter_param_ordering_and_ranges() {
+        assert_params_match("joachims_limiter", "joachims_limiter.dsp", &[
+            ExpectedParam { label: "Input",   min: 1.0, max: 128.0, init: 71.0 },
+            ExpectedParam { label: "Thresh.", min: 0.0, max: 6.0,   init: 1.0 },
+            ExpectedParam { label: "Release", min: 1.0, max: 128.0, init: 60.0 },
         ]);
     }
 
@@ -786,6 +791,9 @@ mod tests {
     fn psycho01_param_ordering_and_ranges() {
         assert_params_match("psycho01", "psycho01.dsp", &[
             ExpectedParam { label: "Room", min: 0.0, max: 128.0, init: 128.0 },
+    fn joachims_limiter_set_param_follows_bmx_order() {
+        assert_set_param_routes("joachims_limiter", "joachims_limiter.dsp", &[
+            "Input", "Thresh.", "Release",
         ]);
     }
 

@@ -54,6 +54,10 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "Geonik's Saturator" => ("geonik-s-saturator", include_str!("../../../faust/geonik-s-saturator.dsp")),
         "Jeskola Chorus" => ("chorus", include_str!("../../../faust/chorus.dsp")),
         "Jeskola Delay" => ("delay", include_str!("../../../faust/delay.dsp")),
+        "Joachims Limiter" => (
+            "joachims_limiter",
+            include_str!("../../../faust/joachims_limiter.dsp"),
+        ),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
