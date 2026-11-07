@@ -1239,6 +1239,14 @@ mod tests {
             ExpectedParam { label: "CutOff",    min: 0.0,  max: 128.0, init: 108.0 },
             ExpectedParam { label: "Emphasis",  min: 0.0,  max: 128.0, init: 95.0 },
             ExpectedParam { label: "Volume",    min: 0.0,  max: 128.0, init: 124.0 },
+    // --- Geonik's Saturator ---
+
+    const SATURATOR: (&str, &str) = ("geonik-s-saturator", "geonik-s-saturator.dsp");
+
+    #[test]
+    fn saturator_param_ordering_and_ranges() {
+        assert_params_match(SATURATOR.0, SATURATOR.1, &[
+            ExpectedParam { label: "Drive", min: 48.0, max: 128.0, init: 64.0 },
         ]);
     }
 
@@ -1627,6 +1635,46 @@ mod tests {
     #[test]
     fn registry_resolves_overdrive2() {
         assert!(crate::create_faust_machine("Geonik's Overdrive 2").is_some());
+    fn saturator_set_param_follows_bmx_order() {
+        assert_set_param_routes(SATURATOR.0, SATURATOR.1, &["Drive"]);
+    }
+
+    #[test]
+    fn saturator_drive_round_trips() {
+        let dsp = load_dsp(SATURATOR.0, SATURATOR.1);
+        let drive = find_param(dsp.params(), "Drive");
+        assert!((round_trip_f32(drive, 64.0) - 64.0).abs() < 0.01);
+    }
+
+    fn saturator_at(drive_raw: i32, input: &[f32]) -> Vec<f32> {
+        let mut machine = FaustMachine::new(load_dsp(SATURATOR.0, SATURATOR.1));
+        machine.init(44100);
+        machine.set_param(0, ((drive_raw - 48) * 65535 + 40) / 80);
+        render_left(&mut machine, input)
+    }
+
+    #[test]
+    fn saturator_default_small_signal_slope_is_0_908() {
+        let out = saturator_at(64, &[0.01; 64]);
+        assert!((out[63] / 0.01 - 0.908).abs() < 0.002, "slope {}", out[63] / 0.01);
+    }
+
+    #[test]
+    fn saturator_clips_at_unity_and_is_odd() {
+        let out = saturator_at(128, &[0.3, -0.3, 0.0]);
+        assert!((out[0] - 1.0).abs() < 1e-5 && (out[1] + 1.0).abs() < 1e-5 && out[2] == 0.0);
+    }
+
+    #[test]
+    fn saturator_gain_is_six_db_per_octave() {
+        let low = saturator_at(70, &[0.001; 64])[63];
+        let high = saturator_at(76, &[0.001; 64])[63];
+        assert!((high / low - 2.0).abs() < 0.01, "ratio {}", high / low);
+    }
+
+    #[test]
+    fn registry_resolves_saturator() {
+        assert!(crate::create_faust_machine("Geonik's Saturator").is_some());
     }
 
     #[test]
