@@ -579,6 +579,61 @@ mod tests {
     #[test]
     fn registry_resolves_automaton_compressor_mkii() {
         assert!(crate::create_faust_machine("Automaton Compressor mkII").is_some());
+    // --- Jon Pak EQ-10 ---
+
+    const EQ10_BANDS: [&str; 10] = [
+        "31 Hz", "62 Hz", "125 Hz", "250 Hz", "500 Hz",
+        "1 kHz", "2 kHz", "4 kHz", "8 kHz", "16 kHz",
+    ];
+
+    fn eq10_band(label: &'static str) -> ExpectedParam {
+        ExpectedParam { label, min: 0.0, max: 65534.0, init: 32767.0 }
+    }
+
+    #[test]
+    fn eq10_param_ordering_and_ranges() {
+        let expected: Vec<_> = EQ10_BANDS.iter().map(|l| eq10_band(l)).collect();
+        assert_params_match("eq10", "eq10.dsp", &expected);
+    }
+
+    #[test]
+    fn eq10_set_param_follows_bmx_order() {
+        assert_set_param_routes("eq10", "eq10.dsp", &EQ10_BANDS);
+    }
+
+    #[test]
+    fn eq10_is_stereo() {
+        let dsp = load_dsp("eq10", "eq10.dsp");
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+    }
+
+    #[test]
+    fn eq10_registry_entry_exists() {
+        assert!(crate::registry::create_faust_machine("EQ-10").is_some());
+    }
+
+    fn eq10_rms_gain(params: &[(u16, i32)], freq: f32) -> f32 {
+        let mut machine = FaustMachine::new(load_dsp("eq10", "eq10.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(i, v)| machine.set_param(i, v));
+        let input = sine(freq, 22050);
+        let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
+        rms(&out[11025..]) / rms(&input[11025..])
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn eq10_defaults_are_flat_below_the_fixed_16k_shelf() {
+        assert!((eq10_rms_gain(&[], 1000.0) - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn eq10_16k_control_boosts_8k_by_12_db() {
+        let gain = eq10_rms_gain(&[(9, 65535)], 8000.0) / eq10_rms_gain(&[], 8000.0);
+        assert!((20.0 * gain.log10() - 12.0).abs() < 0.1, "gain {gain}");
     }
 
     // --- Jeskola Reverb 2 behaviour ---
