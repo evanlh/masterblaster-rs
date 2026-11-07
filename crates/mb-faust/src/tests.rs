@@ -398,6 +398,41 @@ mod tests {
     }
 
     #[test]
+    fn filter_param_ordering_and_ranges() {
+        assert_params_match("filter", "filter.dsp", &[
+            ExpectedParam { label: "Type",      min: 0.0, max: 2.0,   init: 0.0 },
+            ExpectedParam { label: "Cutoff",    min: 0.0, max: 128.0, init: 128.0 },
+            ExpectedParam { label: "Resonance", min: 0.0, max: 128.0, init: 0.0 },
+            ExpectedParam { label: "Bandwidth", min: 0.0, max: 128.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn filter_set_param_follows_bmx_order() {
+        assert_set_param_routes("filter", "filter.dsp", &["Type", "Cutoff", "Resonance", "Bandwidth"]);
+    }
+
+    fn filter_with(cutoff_scaled: i32) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("filter", "filter.dsp"));
+        machine.init(44100);
+        machine.set_param(1, cutoff_scaled);
+        machine
+    }
+
+    #[test]
+    fn filter_default_lowpass_is_one_sample_delay() {
+        let out = render_impulse_left(&mut filter_with(65535), 8);
+        assert_eq!(first_audible(&out), Some(1));
+        assert!((out[1] - 1.0).abs() < 1e-5, "got {}", out[1]);
+    }
+
+    #[test]
+    fn filter_cutoff_zero_is_silent() {
+        let out = render_impulse_left(&mut filter_with(0), 64);
+        assert_eq!(first_audible(&out), None);
+    }
+
+    #[test]
     fn filter2_param_ordering_and_ranges() {
         assert_params_match("filter2", "filter2.dsp", &[
             ExpectedParam { label: "Type",      min: 0.0, max: 3.0,   init: 0.0 },
@@ -1429,6 +1464,11 @@ mod tests {
     }
 
     // --- Registry tests ---
+
+    #[test]
+    fn registry_resolves_filter() {
+        assert!(crate::create_faust_machine("Jeskola Filter").is_some());
+    }
 
     #[test]
     fn registry_resolves_filter2() {

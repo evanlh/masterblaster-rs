@@ -10,6 +10,7 @@ use crate::faust_machine::FaustMachine;
 /// Returns `None` if no Faust implementation exists for the given name.
 pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
     let (dsp_name, source) = match name {
+        "Jeskola Filter" => ("filter", include_str!("../../../faust/filter.dsp")),
         "Jeskola Filter 2" => ("filter2", include_str!("../../../faust/filter2.dsp")),
         "Jeskola Reverb 2" => ("reverb2", include_str!("../../../faust/reverb2.dsp")),
         "Jeskola EQ-3" => ("eq3", include_str!("../../../faust/eq3.dsp")),
