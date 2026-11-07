@@ -29,6 +29,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         ),
         "Automaton EQ-10" => ("automaton_eq10", include_str!("../../../faust/automaton_eq10.dsp")),
         "Automaton EQ-7" => ("automaton_eq7", include_str!("../../../faust/automaton_eq7.dsp")),
+        "Automaton Parametric EQ" => ("automaton_parametric_eq", include_str!("../../../faust/automaton_parametric_eq.dsp")),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
