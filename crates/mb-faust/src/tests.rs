@@ -512,6 +512,66 @@ mod tests {
         assert!(peak < 0.01, "both outputs at 0 should be near-silent, peak={peak}");
     }
 
+    // --- WhiteNoise's Pixelate ---
+
+    #[test]
+    fn pixelate_param_ordering_and_ranges() {
+        assert_params_match("pixelate", "pixelate.dsp", &[
+            ExpectedParam { label: "Amount", min: 0.0, max: 24576.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn pixelate_set_param_follows_bmx_order() {
+        assert_set_param_routes("pixelate", "pixelate.dsp", &["Amount"]);
+    }
+
+    /// Set the Amount word (0..24576) via the BMX raw -> 0..65535 truncating scaling.
+    fn pixelate_with(amount: i64) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("pixelate", "pixelate.dsp"));
+        machine.init(44100);
+        machine.set_param(0, (amount * 65535 / 24576) as i32);
+        machine
+    }
+
+    /// One 256-sample block of a constant level, left channel.
+    fn pixelate_block(amount: i64, level: f32) -> Vec<f32> {
+        render_left(&mut pixelate_with(amount), &[level; 256])
+    }
+
+    fn assert_all_near(samples: &[f32], expected: f32) {
+        samples.iter().enumerate().for_each(|(i, s)| {
+            assert!((s - expected).abs() < 1e-6, "sample {i}: expected {expected}, got {s}");
+        });
+    }
+
+    #[test]
+    fn pixelate_quantizes_toward_zero_in_16bit_steps() {
+        // 0.3 * 32768 = 9830.4 -> trunc(9830.4 / 6144) * 6144 = 6144
+        let out = pixelate_block(6144, -0.3);
+        assert_all_near(&out[..255], -6144.0 / 32768.0);
+    }
+
+    #[test]
+    fn pixelate_odd_amount_survives_param_scaling() {
+        // 12988 is not a multiple of 24576/65535; the step must still be exactly 12988.
+        let out = pixelate_block(12988, 0.5);
+        assert_all_near(&out[..255], 12988.0 / 32768.0);
+    }
+
+    #[test]
+    fn pixelate_last_sample_of_block_passes_through() {
+        let out = pixelate_block(24576, 0.3);
+        assert_all_near(&out[..255], 0.0);
+        assert_all_near(&out[255..], 0.3);
+    }
+
+    #[test]
+    fn pixelate_small_amounts_bypass() {
+        assert_all_near(&pixelate_block(3511, 0.3), 0.3);
+        assert_all_near(&pixelate_block(0, 0.3), 0.3);
+    }
+
     // --- Round-trip scaling tests ---
 
     fn round_trip_f32(param: &crate::ui_visitor::FaustParam, raw: f32) -> f32 {
@@ -592,6 +652,11 @@ mod tests {
     #[test]
     fn registry_resolves_wahpro2() {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_pixelate() {
+        assert!(crate::create_faust_machine("WhiteNoise's Pixelate").is_some());
     }
 
     #[test]
