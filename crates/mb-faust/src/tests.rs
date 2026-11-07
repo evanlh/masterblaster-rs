@@ -1227,6 +1227,18 @@ mod tests {
             ExpectedParam { label: "Direction", min: 0.0, max: 1.0,    init: 0.0 },
             ExpectedParam { label: "Dry out",   min: 0.0, max: 128.0,  init: 128.0 },
             ExpectedParam { label: "Wet out",   min: 0.0, max: 128.0,  init: 128.0 },
+    // --- Geonik's Overdrive 2 ---
+
+    const OD2_ORDER: [&str; 5] = ["Drive", "Assymetry", "CutOff", "Emphasis", "Volume"];
+
+    #[test]
+    fn overdrive2_param_ordering_and_ranges() {
+        assert_params_match("overdrive2", "overdrive2.dsp", &[
+            ExpectedParam { label: "Drive",     min: 48.0, max: 128.0, init: 80.0 },
+            ExpectedParam { label: "Assymetry", min: 0.0,  max: 128.0, init: 44.0 },
+            ExpectedParam { label: "CutOff",    min: 0.0,  max: 128.0, init: 108.0 },
+            ExpectedParam { label: "Emphasis",  min: 0.0,  max: 128.0, init: 95.0 },
+            ExpectedParam { label: "Volume",    min: 0.0,  max: 128.0, init: 124.0 },
         ]);
     }
 
@@ -1560,6 +1572,61 @@ mod tests {
     #[test]
     fn registry_resolves_geonik_compressor() {
         assert!(crate::create_faust_machine("Geonik's Compressor").is_some());
+    fn overdrive2_set_param_follows_bmx_order() {
+        assert_set_param_routes("overdrive2", "overdrive2.dsp", &OD2_ORDER);
+    }
+
+    #[test]
+    fn overdrive2_defaults_round_trip() {
+        let dsp = load_dsp("overdrive2", "overdrive2.dsp");
+        for p in &dsp.params {
+            let result = round_trip_f32(p, p.init);
+            assert!((result - p.init).abs() < 0.5,
+                "{}: init {}, round-tripped to {result}", p.label, p.init);
+        }
+    }
+
+    fn overdrive2_rms(params: &[(u16, f32)]) -> f32 {
+        let dsp = load_dsp("overdrive2", "overdrive2.dsp");
+        let zones: Vec<_> = params.iter()
+            .map(|&(i, v)| (find_param(dsp.params(), OD2_ORDER[i as usize]).zone, v))
+            .collect();
+        let mut machine = FaustMachine::new(dsp);
+        machine.init(44100);
+        zones.iter().for_each(|&(zone, v)| unsafe { *zone = v });
+        let out: Vec<f32> = sine(1000.0, 8192).chunks(256)
+            .flat_map(|c| render_left(&mut machine, &c.iter().map(|s| s * 0.01).collect::<Vec<_>>()))
+            .collect();
+        (out[4096..].iter().map(|s| s * s).sum::<f32>() / 4096.0).sqrt()
+    }
+
+    #[test]
+    fn overdrive2_volume_steps_are_2_pow_v_over_12() {
+        // Measured: Volume 128 -> 116 is one octave of gain (2^(dV/12)).
+        let ratio = overdrive2_rms(&[(4, 128.0)]) / overdrive2_rms(&[(4, 116.0)]);
+        assert!((ratio - 2.0).abs() < 1e-3, "Volume 12 steps should double the gain, got {ratio}");
+    }
+
+    #[test]
+    fn overdrive2_cutoff_zero_is_silent() {
+        let rms = overdrive2_rms(&[(2, 0.0)]);
+        assert!(rms < 1e-9, "CutOff 0 should block everything, rms={rms}");
+    }
+
+    #[test]
+    fn overdrive2_silent_input_gives_exact_zero() {
+        let mut machine = FaustMachine::new(load_dsp("overdrive2", "overdrive2.dsp"));
+        machine.init(44100);
+        let tone = sine(1000.0, 5250);
+        tone.chunks(256).for_each(|c| { render_left(&mut machine, c); });
+        let tail: Vec<f32> = vec![0.0; 5250].chunks(256)
+            .flat_map(|c| render_left(&mut machine, c)).collect();
+        assert!(tail.iter().all(|&s| s == 0.0), "silent blocks should output exact zeros");
+    }
+
+    #[test]
+    fn registry_resolves_overdrive2() {
+        assert!(crate::create_faust_machine("Geonik's Overdrive 2").is_some());
     }
 
     #[test]
