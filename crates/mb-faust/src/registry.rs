@@ -41,6 +41,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "FSM SprayMan" => ("sprayman", include_str!("../../../faust/sprayman.dsp")),
         "FSM WahManPro" => ("wahmanpro", include_str!("../../../faust/wahmanpro.dsp")),
         "Geonik's Amplitude Modulation" => ("geonik_am", include_str!("../../../faust/geonik_am.dsp")),
+        "Geonik's Compressor" => ("geonik_compressor", include_str!("../../../faust/geonik_compressor.dsp")),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
