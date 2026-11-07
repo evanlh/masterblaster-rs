@@ -1711,6 +1711,81 @@ mod tests {
         let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
         let peak = out.iter().enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())).unwrap().0;
         assert!((30088..30133).contains(&peak), "wet peak at {peak}");
+    // --- Rout EQ-10 ---
+
+    const EQ10_BANDS: [&str; 10] = [
+        "31 Hz", "62 Hz", "125 Hz", "250 Hz", "500 Hz", "1 kHz", "2 kHz", "4 kHz", "8 kHz", "16 kHz",
+    ];
+
+    #[test]
+    fn routeq10_param_ordering_and_ranges() {
+        let expected: Vec<_> = EQ10_BANDS.iter()
+            .map(|&label| ExpectedParam { label, min: 0.0, max: 254.0, init: 127.0 })
+            .collect();
+        assert_params_match("routeq10", "routeq10.dsp", &expected);
+    }
+
+    #[test]
+    fn routeq10_set_param_follows_bmx_order() {
+        assert_set_param_routes("routeq10", "routeq10.dsp", &EQ10_BANDS);
+    }
+
+    /// Rout EQ-10 with every band at raw byte value `level(band)`.
+    fn routeq10_with(level: impl Fn(usize) -> i32) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("routeq10", "routeq10.dsp"));
+        machine.init(44100);
+        (0..10).for_each(|b| machine.set_param(b as u16, (level(b) * 65535 + 127) / 254));
+        machine
+    }
+
+    fn sine_gain(machine: &mut FaustMachine, freq: f32) -> f32 {
+        let input = sine(freq, 44100);
+        let rms = |s: &[f32]| (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt();
+        let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(machine, c)).collect();
+        rms(&out[22050..]) / rms(&input[22050..])
+    }
+
+    #[test]
+    fn routeq10_all_bands_zero_is_silent() {
+        let peak = render_impulse_left(&mut routeq10_with(|_| 0), 4096)
+            .iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak < 1e-6, "all bands at 0 should be silent, peak={peak}");
+    }
+
+    #[test]
+    fn routeq10_single_band_has_unity_peak_at_centre() {
+        // 1 kHz band alone at 127 (100 %): constant-peak bandpass, 0 dB at 1 kHz
+        let gain = sine_gain(&mut routeq10_with(|b| if b == 5 { 127 } else { 0 }), 1000.0);
+        assert!((gain - 1.0).abs() < 0.02, "1 kHz band gain at centre should be ~1, got {gain}");
+    }
+
+    #[test]
+    fn routeq10_band_value_scales_linearly() {
+        // 254 = 200 %: output doubles relative to 127
+        let full = sine_gain(&mut routeq10_with(|b| if b == 5 { 254 } else { 0 }), 1000.0);
+        assert!((full - 2.0).abs() < 0.04, "1 kHz band at 254 should give ~2x, got {full}");
+    }
+
+    #[test]
+    fn routeq10_output_stops_on_silent_block() {
+        // Impulse at 441 (block 256..512): rings to 511, then the all-silent
+        // block 512..768 is cut, as the DLL's Work returns false.
+        let mut machine = routeq10_with(|_| 127);
+        let mut input = vec![0.0; 1024];
+        input[441] = 0.5;
+        let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
+        assert!(out[..441].iter().all(|s| *s == 0.0), "no output before the impulse");
+        assert!(out[500].abs() > 1e-4, "rings within the impulse's block");
+        assert!(out[512..].iter().all(|s| *s == 0.0), "silent block after the impulse is cut");
+    }
+
+    #[test]
+    fn routeq10_raw_values_round_trip_to_integers() {
+        let dsp = load_dsp("routeq10", "routeq10.dsp");
+        for raw in 0..=254 {
+            let got = round_trip_f32(&dsp.params[0], raw as f32);
+            assert!((got.round() - raw as f32).abs() < 0.5, "raw {raw} round-trips to {got}");
+        }
     }
 
     // --- Registry tests ---
@@ -2248,6 +2323,11 @@ mod tests {
     #[test]
     fn registry_resolves_jeskola_reverb() {
         assert!(crate::create_faust_machine("Jeskola Reverb").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_routeq10() {
+        assert!(crate::create_faust_machine("Rout EQ-10").is_some());
     }
 
     #[test]
