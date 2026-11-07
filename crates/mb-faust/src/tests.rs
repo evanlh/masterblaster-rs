@@ -1778,6 +1778,15 @@ mod tests {
     fn fsm_chorus_set_param_follows_bmx_order() {
         assert_set_param_routes("fsm_chorus", "fsm_chorus.dsp", &[
             "Dry out", "Minimum delay", "Modulation", "LFO rate", "Wet out", "Feedback",
+    // --- Geonik's Gate ---
+
+    #[test]
+    fn geonik_gate_param_ordering_and_ranges() {
+        assert_params_match("geonik_gate", "geonik_gate.dsp", &[
+            ExpectedParam { label: "Threshold", min: 0.0,  max: 128.0,  init: 92.0 },
+            ExpectedParam { label: "Ratio",     min: 0.0,  max: 240.0,  init: 20.0 },
+            ExpectedParam { label: "Attack",    min: 5.0,  max: 8000.0, init: 10.0 },
+            ExpectedParam { label: "Release",   min: 30.0, max: 8000.0, init: 2000.0 },
         ]);
     }
 
@@ -1919,5 +1928,30 @@ mod tests {
         assert!(gl > 4.0 * gq, "loud input should open the low-pass: gain quiet={gq}, loud={gl}");
     fn fsm_chorus_is_registered() {
         assert!(crate::registry::create_faust_machine("FSM Chorus").is_some());
+    fn geonik_gate_set_param_follows_bmx_order() {
+        assert_set_param_routes("geonik_gate", "geonik_gate.dsp", &[
+            "Threshold", "Ratio", "Attack", "Release",
+        ]);
+    }
+
+    /// RMS of the last 4096 samples of the gate's response to a 1 kHz sine of `amp`.
+    fn geonik_gate_tail_rms(amp: f32) -> f32 {
+        let mut machine = FaustMachine::new(load_dsp("geonik_gate", "geonik_gate.dsp"));
+        machine.init(44100);
+        let input: Vec<f32> = sine(1000.0, 22050).iter().map(|s| s * 2.0 * amp).collect();
+        let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
+        (out[out.len() - 4096..].iter().map(|s| s * s).sum::<f32>() / 4096.0).sqrt()
+    }
+
+    #[test]
+    fn geonik_gate_closes_below_threshold() {
+        // Default threshold is -18 dB (6 dB per doubling): a -40 dB sine is gated out.
+        assert!(geonik_gate_tail_rms(0.01) < 1e-6);
+    }
+
+    #[test]
+    fn geonik_gate_passes_above_threshold() {
+        let rms = geonik_gate_tail_rms(0.5);
+        assert!((rms - 0.5 / 2f32.sqrt()).abs() < 0.01, "loud sine should pass, rms={rms}");
     }
 }
