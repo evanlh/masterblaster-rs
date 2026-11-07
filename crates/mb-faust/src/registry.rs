@@ -73,6 +73,9 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "WhiteNoise's Fuzzbox" => (
             "whitenoise_fuzzbox",
             include_str!("../../../faust/whitenoise_fuzzbox.dsp"),
+        "WhiteNoise's Harmonic Delay" => (
+            "whitenoise_harmonic_delay",
+            include_str!("../../../faust/whitenoise_harmonic_delay.dsp"),
         ),
         _ => return None,
     };
