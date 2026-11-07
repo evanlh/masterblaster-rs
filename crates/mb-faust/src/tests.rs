@@ -689,6 +689,11 @@ mod tests {
             ExpectedParam { label: "Threshold",  min: 0.0,  max: 248.0,  init: 120.0 },
             ExpectedParam { label: "Open Rate",  min: 1.0,  max: 2000.0, init: 1.0 },
             ExpectedParam { label: "Close Rate", min: 1.0,  max: 2000.0, init: 500.0 },
+    fn whitenoise_fuzzbox_param_ordering_and_ranges() {
+        assert_params_match("whitenoise_fuzzbox", "whitenoise_fuzzbox.dsp", &[
+            ExpectedParam { label: "Mode",  min: 1.0, max: 4.0,     init: 1.0 },
+            ExpectedParam { label: "Q",     min: 0.0, max: 254.0,   init: 0.0 },
+            ExpectedParam { label: "Level", min: 0.0, max: 65534.0, init: 0.0 },
         ]);
     }
 
@@ -723,6 +728,8 @@ mod tests {
     fn whitenoise_gate_set_param_follows_bmx_order() {
         assert_set_param_routes("whitenoise_gate", "whitenoise_gate.dsp",
             &["Ratio", "Threshold", "Open Rate", "Close Rate"]);
+    fn whitenoise_fuzzbox_set_param_follows_bmx_order() {
+        assert_set_param_routes("whitenoise_fuzzbox", "whitenoise_fuzzbox.dsp", &["Mode", "Q", "Level"]);
     }
 
     #[test]

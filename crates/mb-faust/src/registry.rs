@@ -70,6 +70,10 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
             include_str!("../../../faust/smartelectronix_tubescreamer.dsp"),
         ),
         "whitenoise gate" => ("whitenoise_gate", include_str!("../../../faust/whitenoise_gate.dsp")),
+        "WhiteNoise's Fuzzbox" => (
+            "whitenoise_fuzzbox",
+            include_str!("../../../faust/whitenoise_fuzzbox.dsp"),
+        ),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
