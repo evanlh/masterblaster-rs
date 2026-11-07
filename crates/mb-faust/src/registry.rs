@@ -23,6 +23,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         ),
         "Chun-Yu's TouchWah" => ("touchwah", include_str!("../../../faust/chun-yu-s-touchwah.dsp")),
         "Geonik's Gate" => ("geonik_gate", include_str!("../../../faust/geonik_gate.dsp")),
+        "Jeskola Flanger" => ("flanger", include_str!("../../../faust/flanger.dsp")),
         "FSM WahPro2" => ("wahpro2", include_str!("../../../faust/wahpro2.dsp")),
         "11-Lofi v1.0" => ("lofi", include_str!("../../../faust/lofi.dsp")),
         "Arguelles Degrader" => ("degrader", include_str!("../../../faust/degrader.dsp")),
