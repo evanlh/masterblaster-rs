@@ -444,6 +444,19 @@ mod tests {
     }
 
     #[test]
+    fn degrader_param_ordering_and_ranges() {
+        assert_params_match("degrader", "degrader.dsp", &[
+            ExpectedParam { label: "Smp. Rate", min: 1.0, max: 32.0, init: 1.0 },
+            ExpectedParam { label: "Bit Depth", min: 2.0, max: 16.0, init: 16.0 },
+        ]);
+    }
+
+    #[test]
+    fn degrader_set_param_follows_bmx_order() {
+        assert_set_param_routes("degrader", "degrader.dsp", &["Smp. Rate", "Bit Depth"]);
+    }
+
+    #[test]
     fn reverb2_set_param_follows_bmx_order() {
         assert_set_param_routes("reverb2", "reverb2.dsp", &[
             "Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay", "High Cutoff",
@@ -631,6 +644,45 @@ mod tests {
     #[test]
     fn registry_resolves_wahpro2() {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_degrader() {
+        assert!(crate::create_faust_machine("Arguelles Degrader").is_some());
+    }
+
+    fn render_degrader(params: &[(u16, i32)], input: &[f32]) -> Vec<f32> {
+        let source = std::fs::read_to_string(
+            format!("{}/../../faust/degrader.dsp", env!("CARGO_MANIFEST_DIR"))
+        ).unwrap();
+        let mut machine = FaustMachine::from_source("degrader", &source).unwrap();
+        machine.init(44100);
+        params.iter().for_each(|&(i, v)| machine.set_param(i, v));
+        let mut buf = AudioBuffer::new(2, input.len() as u16);
+        buf.channel_mut(0).copy_from_slice(input);
+        buf.channel_mut(1).copy_from_slice(input);
+        machine.render(&mut buf);
+        buf.channel(0).to_vec()
+    }
+
+    #[test]
+    fn degrader_holds_for_rate_plus_one_samples() {
+        // Smp. Rate 5 (65535 * 4 / 31): captures at n = 4, 10, 16, ...
+        let input: Vec<f32> = (0..32).map(|n| (n + 1) as f32 / 64.0).collect();
+        let out = render_degrader(&[(0, 8456)], &input);
+        assert_eq!(&out[..4], &[0.0; 4]);
+        assert!(out[4..10].iter().all(|&y| y == input[4]));
+        assert!(out[10..16].iter().all(|&y| y == input[10]));
+    }
+
+    #[test]
+    fn degrader_truncates_toward_zero() {
+        // Bit Depth 6 (65535 * 4 / 14): grid of 1024 / 32768. Smp. Rate 1
+        // holds each capture for two samples (captures at n = 0, 2).
+        let (a, b) = (-3194.0 / 32768.0, 3194.0 / 32768.0);
+        let out = render_degrader(&[(1, 18724)], &[a, a, b, b]);
+        let (qa, qb) = (-3072.0 / 32768.0, 3072.0 / 32768.0);
+        assert_eq!(out, vec![qa, qa, qb, qb]);
     }
 
     #[test]
