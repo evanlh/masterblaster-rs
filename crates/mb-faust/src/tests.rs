@@ -887,11 +887,104 @@ mod tests {
         let out = render_degrader(&[(1, 18724)], &[a, a, b, b]);
         let (qa, qb) = (-3072.0 / 32768.0, 3072.0 / 32768.0);
         assert_eq!(out, vec![qa, qa, qb, qb]);
+    fn registry_resolves_automaton_eq7() {
+        assert!(crate::create_faust_machine("Automaton EQ-7").is_some());
     }
 
     #[test]
     fn registry_returns_none_for_unknown() {
         assert!(crate::create_faust_machine("Unknown Machine XYZ").is_none());
+    }
+
+    // --- Automaton EQ-7 ---
+
+    const EQ7_BANDS: [&str; 7] = ["63 Hz", "160 Hz", "400 Hz", "1 kHz", "2.5 kHz", "6.3 kHz", "16 kHz"];
+
+    fn eq7_band(label: &'static str) -> ExpectedParam {
+        ExpectedParam { label, min: 0.0, max: 65534.0, init: 32767.0 }
+    }
+
+    #[test]
+    fn eq7_param_ordering_and_ranges() {
+        let expected: Vec<_> = EQ7_BANDS.iter().map(|l| eq7_band(l)).collect();
+        assert_params_match("automaton_eq7", "automaton_eq7.dsp", &expected);
+    }
+
+    #[test]
+    fn eq7_set_param_follows_bmx_order() {
+        assert_set_param_routes("automaton_eq7", "automaton_eq7.dsp", &EQ7_BANDS);
+    }
+
+    fn eq7_with(params: &[(u16, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("automaton_eq7", "automaton_eq7.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, v));
+        machine
+    }
+
+    /// Render `input` through `machine` in 256-frame blocks (the Buzz work size).
+    fn render_blocks_left(machine: &mut FaustMachine, input: &[f32]) -> Vec<f32> {
+        input.chunks(256).flat_map(|c| render_left(machine, c)).collect()
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    /// Steady-state gain (dB) of a sine at `freq` with the given BMX-scaled params.
+    fn eq7_gain_db(params: &[(u16, i32)], freq: f32) -> f32 {
+        let input = sine(freq, 32768);
+        let out = render_blocks_left(&mut eq7_with(params), &input);
+        20.0 * (rms(&out[16384..]) / rms(&input[16384..])).log10()
+    }
+
+    /// BMX-scaled value (0..65535) for a raw Buzz word in 0..65534.
+    fn eq7_scaled(raw: i32) -> i32 {
+        (raw as i64 * 65535 / 65534) as i32
+    }
+
+    #[test]
+    fn eq7_defaults_are_identity() {
+        let input = sine(1000.0, 1024);
+        let out = render_blocks_left(&mut eq7_with(&[]), &input);
+        let err = out.iter().zip(&input).map(|(o, i)| (o - i).abs()).fold(0.0f32, f32::max);
+        assert!(err < 1e-6, "max deviation from identity {err}");
+    }
+
+    #[test]
+    fn eq7_band_max_boosts_36db_at_centre() {
+        // 160 Hz band is centred at 125 Hz (measured), the others at their label.
+        let centres = [(2u16, 400.0), (3, 1000.0), (4, 2500.0), (1, 125.0)];
+        for (band, freq) in centres {
+            let g = eq7_gain_db(&[(band, eq7_scaled(65534))], freq);
+            assert!((g - 36.0).abs() < 0.3, "band {band} at {freq} Hz: {g} dB");
+        }
+    }
+
+    #[test]
+    fn eq7_quarter_word_cuts_18db() {
+        let g = eq7_gain_db(&[(3, eq7_scaled(16384))], 1000.0);
+        assert!((g + 18.0).abs() < 0.2, "1 kHz at 16384: {g} dB");
+    }
+
+    #[test]
+    fn eq7_shelves_reach_half_gain_at_corner() {
+        let low = eq7_gain_db(&[(0, eq7_scaled(65534))], 63.0);
+        let high = eq7_gain_db(&[(6, eq7_scaled(0))], 16000.0);
+        assert!((low - 18.0).abs() < 0.3, "63 Hz shelf at 63 Hz: {low} dB");
+        assert!((high + 18.0).abs() < 0.3, "16 kHz shelf at 16 kHz: {high} dB");
+    }
+
+    #[test]
+    fn eq7_silent_block_cuts_tail() {
+        // work_returns_false: a block of all-zero input yields silence even
+        // while the 1 kHz peaking filter is still ringing.
+        let mut machine = eq7_with(&[(3, eq7_scaled(65534))]);
+        let mut input = vec![0.0; 1024];
+        input[200] = 1.0;
+        let out = render_blocks_left(&mut machine, &input);
+        assert!(out[255].abs() > 1e-4, "tail should ring inside the impulse block");
+        assert!(out[256..].iter().all(|s| *s == 0.0), "silent blocks must be cut");
     }
 
     // --- Machine-code disk cache tests ---
