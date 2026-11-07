@@ -599,6 +599,20 @@ mod tests {
             ExpectedParam { label: "min. delay", min: 0.0, max: 50.0,   init: 0.0 },
             ExpectedParam { label: "dry out",    min: 0.0, max: 128.0,  init: 128.0 },
             ExpectedParam { label: "wet out",    min: 0.0, max: 128.0,  init: 0.0 },
+    const MUON_DELAY_PARAMS: [&str; 7] =
+        ["Delay", "Feedback", "Cutoff", "LFO Depth", "LFO Freq", "Wet", "Dry"];
+
+    #[test]
+    fn muon_delay_param_ordering_and_ranges() {
+        // From buzz-machines-oracles info.json (Muon Delay, variant 41be35ce028d)
+        assert_params_match("muon_delay", "muon_delay.dsp", &[
+            ExpectedParam { label: "Delay",     min: 1.0, max: 2000.0, init: 480.0 },
+            ExpectedParam { label: "Feedback",  min: 0.0, max: 255.0,  init: 128.0 },
+            ExpectedParam { label: "Cutoff",    min: 0.0, max: 127.0,  init: 16.0 },
+            ExpectedParam { label: "LFO Depth", min: 0.0, max: 127.0,  init: 0.0 },
+            ExpectedParam { label: "LFO Freq",  min: 0.0, max: 127.0,  init: 0.0 },
+            ExpectedParam { label: "Wet",       min: 0.0, max: 255.0,  init: 128.0 },
+            ExpectedParam { label: "Dry",       min: 0.0, max: 255.0,  init: 128.0 },
         ]);
     }
 
@@ -2671,5 +2685,8 @@ mod tests {
         assert!(held.iter().any(|&s| s != 0.0), "first silent block is still processed");
         let out = flanger_render(&mut machine, &[0.0; 256]);
         assert!(out.iter().all(|&s| s == 0.0), "silent input block must be cut");
+    #[test]
+    fn muon_delay_set_param_follows_bmx_order() {
+        assert_set_param_routes("muon_delay", "muon_delay.dsp", &MUON_DELAY_PARAMS);
     }
 }

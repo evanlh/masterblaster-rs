@@ -58,6 +58,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
             "joachims_limiter",
             include_str!("../../../faust/joachims_limiter.dsp"),
         ),
+        "Muon Delay" => ("muon_delay", include_str!("../../../faust/muon_delay.dsp")),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
