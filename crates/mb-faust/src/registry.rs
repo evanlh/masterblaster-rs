@@ -16,6 +16,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "Jeskola EQ-3" => ("eq3", include_str!("../../../faust/eq3.dsp")),
         "Jeskola Freeverb" => ("reverb", include_str!("../../../faust/reverb.dsp")),
         "Jeskola Cross Delay" => ("crossdelay", include_str!("../../../faust/crossdelay.dsp")),
+        "Jeskola NiNjA dElaY" => ("ninja_delay", include_str!("../../../faust/ninja_delay.dsp")),
         "FSM WahPro" => ("wahpro", include_str!("../../../faust/wahpro.dsp")),
         "Automaton Compressor" => (
             "automaton_compressor",
