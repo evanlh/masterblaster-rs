@@ -397,6 +397,37 @@ mod tests {
         }
     }
 
+    const SCRAPMAN_LABELS: [&str; 12] = [
+        "Dry out", "Feedback", "Fullness", "Richness", "Density", "Scattering",
+        "Fatness", "Attack", "Sustain", "Release", "Wet out", "Dummy",
+    ];
+
+    #[test]
+    fn scrapman_param_ordering_and_ranges() {
+        let raw = [(0.0, 240.0, 240.0), (0.0, 99.0, 0.0), (0.0, 100.0, 0.0), (4.0, 24.0, 12.0),
+            (0.0, 64.0, 48.0), (0.0, 64.0, 48.0), (0.0, 64.0, 16.0), (0.0, 240.0, 120.0),
+            (0.0, 240.0, 32.0), (0.0, 240.0, 64.0), (0.0, 240.0, 240.0), (0.0, 240.0, 240.0)];
+        let expected: Vec<ExpectedParam> = SCRAPMAN_LABELS.iter().zip(raw)
+            .map(|(l, (min, max, init))| ExpectedParam { label: l, min, max, init }).collect();
+        assert_params_match("scrapman", "scrapman.dsp", &expected);
+    }
+
+    #[test]
+    fn scrapman_set_param_follows_bmx_order() {
+        assert_set_param_routes("scrapman", "scrapman.dsp", &SCRAPMAN_LABELS);
+    }
+
+    #[test]
+    fn scrapman_boundary_values_round_trip() {
+        let dsp = load_dsp("scrapman", "scrapman.dsp");
+        for p in &dsp.params {
+            let at_max = crate::ui_visitor::scaled_to_f32(p, 65535);
+            assert!((at_max - p.max).abs() < 0.01, "{}: max {}", p.label, at_max);
+            let at_min = crate::ui_visitor::scaled_to_f32(p, 0);
+            assert!((at_min - p.min).abs() < 0.01, "{}: min {}", p.label, at_min);
+        }
+    }
+
     #[test]
     fn wahpro2_set_param_follows_bmx_order() {
         assert_set_param_routes("wahpro2", "wahpro2.dsp", &[
