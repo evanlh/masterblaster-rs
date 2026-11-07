@@ -594,6 +594,64 @@ mod tests {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
     }
 
+    // --- FSM SprayMan ---
+
+    const SPRAYMAN_LABELS: [&str; 13] = [
+        "Dry out", "Feedback", "Fullness", "Richness", "Density", "Scattering", "Fatness",
+        "Attack", "Sustain", "Release", "Wet out", "Pan", "Spread",
+    ];
+
+    #[test]
+    fn sprayman_param_ordering_and_ranges() {
+        let ranges = [(0.0, 240.0, 240.0), (0.0, 99.0, 0.0), (0.0, 100.0, 0.0), (4.0, 24.0, 12.0),
+            (0.0, 64.0, 48.0), (0.0, 64.0, 48.0), (0.0, 64.0, 16.0), (0.0, 240.0, 60.0),
+            (0.0, 240.0, 120.0), (0.0, 240.0, 32.0), (0.0, 240.0, 240.0), (0.0, 240.0, 120.0),
+            (0.0, 100.0, 50.0)];
+        let expected: Vec<ExpectedParam> = SPRAYMAN_LABELS.iter().zip(ranges)
+            .map(|(&label, (min, max, init))| ExpectedParam { label, min, max, init })
+            .collect();
+        assert_params_match("sprayman", "sprayman.dsp", &expected);
+    }
+
+    #[test]
+    fn sprayman_set_param_follows_bmx_order() {
+        assert_set_param_routes("sprayman", "sprayman.dsp", &SPRAYMAN_LABELS);
+    }
+
+    fn sprayman_with(params: &[(u16, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("sprayman", "sprayman.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| machine.set_param(p, v));
+        machine
+    }
+
+    fn render_blocks(machine: &mut FaustMachine, input: &[f32], blocks: usize) -> Vec<f32> {
+        (0..blocks).flat_map(|_| render_left(machine, input)).collect()
+    }
+
+    #[test]
+    fn sprayman_wet_off_passes_dry() {
+        // Wet out = 0 (raw 0 -> BMX 0): output is exactly the dry input at 0 dB.
+        let mut machine = sprayman_with(&[(10, 0)]);
+        let out = render_blocks(&mut machine, &[0.25; 256], 4);
+        assert!(out.iter().all(|s| (s - 0.25).abs() < 1e-6));
+    }
+
+    #[test]
+    fn sprayman_wet_grains_start_after_initial_wait() {
+        // Dry out = 0: silence until the first grain (~5800 samples or later), then output.
+        let mut machine = sprayman_with(&[(0, 0)]);
+        let input: Vec<f32> = (0..256).map(|i| (i as f32 * 0.3).sin() * 0.5).collect();
+        let out = render_blocks(&mut machine, &input, 160);
+        let first = first_audible(&out).expect("grains should sound");
+        assert!(first >= 5800, "first grain at {first}");
+    }
+
+    #[test]
+    fn registry_resolves_sprayman() {
+        assert!(crate::create_faust_machine("FSM SprayMan").is_some());
+    }
+
     #[test]
     fn registry_returns_none_for_unknown() {
         assert!(crate::create_faust_machine("Unknown Machine XYZ").is_none());
