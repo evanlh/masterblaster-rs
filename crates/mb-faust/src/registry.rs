@@ -18,6 +18,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
             "automaton_compressor",
             include_str!("../../../faust/automaton_compressor.dsp"),
         ),
+        "Chun-Yu's TouchWah" => ("touchwah", include_str!("../../../faust/chun-yu-s-touchwah.dsp")),
         "FSM WahPro2" => ("wahpro2", include_str!("../../../faust/wahpro2.dsp")),
         "11-Lofi v1.0" => ("lofi", include_str!("../../../faust/lofi.dsp")),
         "Arguelles Degrader" => ("degrader", include_str!("../../../faust/degrader.dsp")),

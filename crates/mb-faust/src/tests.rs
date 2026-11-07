@@ -1188,6 +1188,21 @@ mod tests {
             ExpectedParam { label: "Attack",    min: 0.0, max: 65534.0, init: 12577.0 },
             ExpectedParam { label: "Release",   min: 0.0, max: 65534.0, init: 7452.0 },
             ExpectedParam { label: "Gain",      min: 0.0, max: 65534.0, init: 0.0 },
+    // --- Chun-Yu's TouchWah ---
+
+    const TOUCHWAH_PARAMS: [&str; 6] = [
+        "Resonance", "Min Cutoff (Hz)", "Max Cutoff (Hz)", "Changes/Sec", "In->SinCurve?", "ScaleFactor",
+    ];
+
+    #[test]
+    fn touchwah_param_ordering_and_ranges() {
+        assert_params_match("touchwah", "chun-yu-s-touchwah.dsp", &[
+            ExpectedParam { label: "Resonance",       min: 10.0, max: 141.0,   init: 129.0 },
+            ExpectedParam { label: "Min Cutoff (Hz)", min: 1.0,  max: 22049.0, init: 256.0 },
+            ExpectedParam { label: "Max Cutoff (Hz)", min: 2.0,  max: 22050.0, init: 11025.0 },
+            ExpectedParam { label: "Changes/Sec",     min: 1.0,  max: 128.0,   init: 32.0 },
+            ExpectedParam { label: "In->SinCurve?",   min: 0.0,  max: 1.0,     init: 0.0 },
+            ExpectedParam { label: "ScaleFactor",     min: 1.0,  max: 16.0,    init: 1.0 },
         ]);
     }
 
@@ -1278,5 +1293,54 @@ mod tests {
         // Threshold -64 dB, ratio 25:1: linear-amplitude law gives ~1/25 for loud input.
         let g = automaton_compressor_sine_gain(&[(AC_THRESHOLD, 0), (AC_RATIO, 65535)]);
         assert!(g > 0.035 && g < 0.05, "expected gain near 1/25, got {g}");
+    fn touchwah_set_param_follows_bmx_order() {
+        assert_set_param_routes("touchwah", "chun-yu-s-touchwah.dsp", &TOUCHWAH_PARAMS);
+    }
+
+    /// Render `frames` samples of a mono-in-both-channels signal through TouchWah and return channel 0.
+    fn touchwah_render(frames: u16, signal: impl Fn(usize) -> f32, params: &[(u16, u16)]) -> Vec<f32> {
+        let mut machine = FaustMachine::new(load_dsp("touchwah", "chun-yu-s-touchwah.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(i, v)| machine.set_param(i, i32::from(v)));
+        let mut buf = AudioBuffer::new(2, frames);
+        (0..frames as usize).for_each(|n| {
+            buf.channel_mut(0)[n] = signal(n);
+            buf.channel_mut(1)[n] = signal(n);
+        });
+        machine.render(&mut buf);
+        buf.channel(0)[..frames as usize].to_vec()
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    fn sine_1k(n: usize) -> f32 {
+        0.1 * (2.0 * std::f32::consts::PI * 1000.0 * n as f32 / 44100.0).sin()
+    }
+
+    #[test]
+    fn touchwah_silent_input_gives_silence() {
+        let out = touchwah_render(1024, |_| 0.0, &[]);
+        assert!(out.iter().all(|&s| s == 0.0), "silent input must give silent output");
+    }
+
+    #[test]
+    fn touchwah_scale_factor_divides_output() {
+        let plain = touchwah_render(2048, sine_1k, &[]);
+        let scaled = touchwah_render(2048, sine_1k, &[(5, 65535)]); // ScaleFactor = 16
+        let ratio = rms(&scaled[1024..]) / rms(&plain[1024..]);
+        assert!((ratio - 1.0 / 16.0).abs() < 0.002, "ScaleFactor 16 should divide by 16, ratio={ratio}");
+    }
+
+    #[test]
+    fn touchwah_cutoff_follows_input_level() {
+        // Min cutoff 1 kHz-ish, max 22 kHz: a loud 10 kHz tone opens the filter, a quiet one stays shut.
+        let tone = |amp: f32| move |n: usize| amp * (2.0 * std::f32::consts::PI * 10000.0 * n as f32 / 44100.0).sin();
+        let params = [(1, 1000), (3, 65535)]; // Min Cutoff low, Changes/Sec = 128
+        let quiet = touchwah_render(8192, tone(0.01), &params);
+        let loud = touchwah_render(8192, tone(0.8), &params);
+        let (gq, gl) = (rms(&quiet[4096..]) / 0.01, rms(&loud[4096..]) / 0.8);
+        assert!(gl > 4.0 * gq, "loud input should open the low-pass: gain quiet={gq}, loud={gl}");
     }
 }
