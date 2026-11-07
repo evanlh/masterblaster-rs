@@ -512,6 +512,79 @@ mod tests {
         assert!(peak < 0.01, "both outputs at 0 should be near-silent, peak={peak}");
     }
 
+    // --- Jeskola NiNjA dElaY ---
+
+    const NINJA_ORDER: [&str; 8] = [
+        "Dry thru", "Length", "Length unit", "Feedback", "f. type", "f. cutoff", "f. bandwidth", "Wet out",
+    ];
+
+    #[test]
+    fn ninja_delay_param_ordering_and_ranges() {
+        // Buzz order: global Dry thru (switch, delivered as 0/1), then track 0
+        assert_params_match("ninja_delay", "ninja_delay.dsp", &[
+            ExpectedParam { label: "Dry thru",     min: 0.0,  max: 1.0,     init: 1.0 },
+            ExpectedParam { label: "Length",       min: 1.0,  max: 32768.0, init: 3.0 },
+            ExpectedParam { label: "Length unit",  min: 0.0,  max: 3.0,     init: 0.0 },
+            ExpectedParam { label: "Feedback",     min: 0.0,  max: 128.0,   init: 112.0 },
+            ExpectedParam { label: "f. type",      min: 0.0,  max: 3.0,     init: 1.0 },
+            ExpectedParam { label: "f. cutoff",    min: 10.0, max: 20000.0, init: 550.0 },
+            ExpectedParam { label: "f. bandwidth", min: 1.0,  max: 10000.0, init: 100.0 },
+            ExpectedParam { label: "Wet out",      min: 0.0,  max: 128.0,   init: 96.0 },
+        ]);
+    }
+
+    #[test]
+    fn ninja_delay_set_param_follows_bmx_order() {
+        assert_set_param_routes("ninja_delay", "ninja_delay.dsp", &NINJA_ORDER);
+    }
+
+    /// Raw Buzz ranges (min, max) in BMX order.
+    const NINJA_RANGES: [(i64, i64); 8] = [
+        (0, 1), (1, 32768), (0, 3), (0, 128), (0, 3), (10, 20000), (1, 10000), (0, 128),
+    ];
+
+    /// Set a raw Buzz value through the BMX scaling (truncating, like bmx_format).
+    fn set_raw_param(machine: &mut FaustMachine, param: u16, raw: i32) {
+        let (min, max) = NINJA_RANGES[param as usize];
+        machine.set_param(param, ((raw as i64 - min) * 65535 / (max - min)) as i32);
+    }
+
+    fn ninja_with(params: &[(u16, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("ninja_delay", "ninja_delay.dsp"));
+        machine.init(44100);
+        params.iter().for_each(|&(p, v)| set_raw_param(&mut machine, p, v));
+        machine
+    }
+
+    // dry off, 100-sample delay (unit 2), no feedback, wet 128
+    const NINJA_ECHO_100: [(u16, i32); 5] = [(0, 0), (1, 100), (2, 2), (3, 64), (7, 128)];
+
+    #[test]
+    fn ninja_delay_echo_lands_on_exact_sample() {
+        let out = render_impulse_left(&mut ninja_with(&NINJA_ECHO_100), 1024);
+        assert_eq!(first_audible(&out), Some(100), "echo should start exactly 100 samples later");
+    }
+
+    #[test]
+    fn ninja_delay_highpass_echo_matches_rbj_b0() {
+        // HP 550 Hz, Q = 1/sqrt2: b0 = (1 + cos w) / 2 / (1 + sin w / sqrt2)
+        let out = render_impulse_left(&mut ninja_with(&NINJA_ECHO_100), 1024);
+        let w = 2.0 * std::f32::consts::PI * 550.0 / 44100.0;
+        let b0 = (1.0 + w.cos()) / 2.0 / (1.0 + w.sin() / 2f32.sqrt());
+        assert!((out[100] - b0).abs() < 1e-4, "expected {b0}, got {}", out[100]);
+    }
+
+    #[test]
+    fn ninja_delay_tail_stops_after_silent_input() {
+        // Feedback +100% rings forever, but silent input cuts the output
+        // a block after the silence count reaches the delay length.
+        let mut params = NINJA_ECHO_100.to_vec();
+        params.push((3, 128));
+        let out = render_impulse_left(&mut ninja_with(&params), 4096);
+        assert!(out[300..400].iter().any(|s| s.abs() > 1e-3), "tail should ring first");
+        assert!(out[1024..].iter().all(|&s| s == 0.0), "tail should be cut by sample 1024");
+    }
+
     // --- Round-trip scaling tests ---
 
     fn round_trip_f32(param: &crate::ui_visitor::FaustParam, raw: f32) -> f32 {
