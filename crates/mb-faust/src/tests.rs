@@ -369,6 +369,18 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn flanger_param_ordering_and_ranges() {
+        assert_params_match("flanger", "flanger.dsp", &[
+            ExpectedParam { label: "freq",       min: 0.0, max: 4096.0, init: 100.0 },
+            ExpectedParam { label: "depth",      min: 0.0, max: 127.0,  init: 64.0 },
+            ExpectedParam { label: "feedback",   min: 0.0, max: 128.0,  init: 64.0 },
+            ExpectedParam { label: "min. delay", min: 0.0, max: 50.0,   init: 0.0 },
+            ExpectedParam { label: "dry out",    min: 0.0, max: 128.0,  init: 128.0 },
+            ExpectedParam { label: "wet out",    min: 0.0, max: 128.0,  init: 0.0 },
+        ]);
+    }
+
     /// Set each BMX param index to max and check it lands on the
     /// identically-labelled Faust param (C++ pParameters[] order).
     fn assert_set_param_routes(dsp_name: &str, dsp_file: &str, bmx_order: &[&str]) {
@@ -615,5 +627,51 @@ mod tests {
         let factory = crate::cache::try_load(name, source)
             .expect("factory should be cached after compile_cached");
         unsafe { crate::ffi::deleteCDSPFactory(factory); }
+    }
+
+    #[test]
+    fn flanger_set_param_follows_bmx_order() {
+        assert_set_param_routes("flanger", "flanger.dsp", &[
+            "freq", "depth", "feedback", "min. delay", "dry out", "wet out",
+        ]);
+    }
+
+    // --- Jeskola Flanger behaviour ---
+
+    fn flanger_render(machine: &mut FaustMachine, input: &[f32]) -> Vec<f32> {
+        let mut buf = AudioBuffer::new(2, input.len() as u16);
+        buf.channel_mut(0).copy_from_slice(input);
+        buf.channel_mut(1).copy_from_slice(input);
+        machine.render(&mut buf);
+        buf.channel(0).to_vec()
+    }
+
+    fn flanger_machine() -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("flanger", "flanger.dsp"));
+        machine.init(44100);
+        machine
+    }
+
+    #[test]
+    fn flanger_depth_zero_reads_two_samples_back_on_odd_samples() {
+        let mut machine = flanger_machine();
+        machine.set_param(1, 0); // depth 0: delay alternates 1 / -1 (stale) per sample
+        let input: Vec<f32> = (0..256).map(|i| ((i * 7919) % 13) as f32 / 13.0 - 0.5).collect();
+        let out = flanger_render(&mut machine, &input);
+        // dry +100%, wet -100%: odd samples are x[n] - x[n-2], even ones x[n] - 0
+        assert!((out[101] - (input[101] - input[99])).abs() < 1e-5);
+        assert!((out[100] - input[100]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn flanger_silent_block_outputs_zero() {
+        let mut machine = flanger_machine();
+        let noise: Vec<f32> = (0..256).map(|i| ((i * 31) % 17) as f32 / 17.0 - 0.5).collect();
+        flanger_render(&mut machine, &noise);
+        // feedback 0%: the hold covers the depth span (222 samples) -> one block
+        let held = flanger_render(&mut machine, &[0.0; 256]);
+        assert!(held.iter().any(|&s| s != 0.0), "first silent block is still processed");
+        let out = flanger_render(&mut machine, &[0.0; 256]);
+        assert!(out.iter().all(|&s| s == 0.0), "silent input block must be cut");
     }
 }
