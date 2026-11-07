@@ -50,24 +50,32 @@ b0(fc)   = sh(fc) * sh(fc) / a0(fc);
 a1(fc)   = -2 * (1 - 2 * sh(fc) * sh(fc)) / a0(fc);
 a2(fc)   = (1 - al(fc)) / a0(fc);
 
-// ---- block phase: 1 on the first sample of each host block ----
-blockstart = bp == 0 with { bp = (\(p).(select2(ma.BS != ma.BS', (p + 1) % ma.BS, 0))) ~ _; };
+// ---- position inside the host block (0 on its first sample) ----
+blockpos = (\(p).(select2(ma.BS != ma.BS', (p + 1) % ma.BS, 0))) ~ _;
 
 // ---- gate: has the current block seen a non-zero input yet? ----
-awake(x) = (\(a).((x != 0) | (a & (blockstart == 0)))) ~ _;
+awake(x) = (\(a).((x != 0) | (a & (blockpos != 0)))) ~ _;
 
 // ---- the controller + filter, with all state frozen while not awake ----
+// At the first non-zero sample of a block the window counter catches up with the leading zeros the
+// machine would have processed (they carry no energy); an update falling inside them is applied.
 wah(x, act) = loop ~ si.bus(7) : (!, !, !, !, !, !, !, _)
 with {
+    onset = act * (1 - act');
     loop(x1, x2, y1, y2, fcoff, ss, cnt) =
         hold(x1, x), hold(x2, x1), hold(y1, yo), hold(y2, y1), hold(fcoff, fcn - fc0),
         hold(ss, ssa + (cnta >= 0) * x * x), hold(cnt, cnta + 1), yo * act / sfac
     with {
         fc   = fcoff + fc0;
-        upd  = cnt >= period;
-        fcn  = select2(upd, fc, glide(fc, target(rmsof(ss, cnt))));
-        cnta = select2(upd, cnt, -1);
-        ssa  = select2(upd, ss, 0);
+        c0   = cnt + onset * blockpos;
+        cut  = c0 > period;                      // an update fired inside the leading zeros
+        fc1  = select2(cut, fc, glide(fc, target(rmsof(ss, period))));
+        ss1  = select2(cut, ss, 0);
+        cnt1 = select2(cut, c0, c0 - period - 1);
+        upd  = cnt1 >= period;
+        fcn  = select2(upd, fc1, glide(fc1, target(rmsof(ss1, cnt1))));
+        cnta = select2(upd, cnt1, -1);
+        ssa  = select2(upd, ss1, 0);
         yo   = b0(fcn) * (x + 2 * x1 + x2) - a1(fcn) * y1 - a2(fcn) * y2;
         hold(old, new) = select2(act, old, new);
     };
