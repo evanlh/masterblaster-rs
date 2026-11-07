@@ -400,6 +400,45 @@ mod tests {
     }
 
     #[test]
+    fn lofi_param_ordering_and_ranges() {
+        assert_params_match("lofi", "lofi.dsp", &[
+            ExpectedParam { label: "Hold",       min: 0.0, max: 127.0, init: 0.0 },
+            ExpectedParam { label: "Resolution", min: 0.0, max: 127.0, init: 0.0 },
+            ExpectedParam { label: "Mode",       min: 0.0, max: 8.0,   init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn lofi_set_param_follows_bmx_order() {
+        assert_set_param_routes("lofi", "lofi.dsp", &["Hold", "Resolution", "Mode"]);
+    }
+
+    #[test]
+    fn lofi_lo_mode_quantizes_toward_zero() {
+        // Mode 7 (LO), Resolution 0 (step 128), Hold 0: output is the input truncated to 128 steps.
+        let mut machine = FaustMachine::new(load_dsp("lofi", "lofi.dsp"));
+        machine.init(44100);
+        machine.set_param(2, (65535 * 7 / 8) as i32);
+        let mut buf = AudioBuffer::new(2, 256);
+        for i in 0..256 {
+            buf.channel_mut(0)[i] = 0.1;
+            buf.channel_mut(1)[i] = 0.1;
+        }
+        machine.render(&mut buf);
+        let want = (0.1_f32 * 32768.0 / 128.0).trunc() * 128.0 / 32768.0;
+        assert!((buf.channel(0)[100] - want).abs() < 1e-6, "got {}", buf.channel(0)[100]);
+    }
+
+    #[test]
+    fn lofi_silent_block_outputs_silence() {
+        let mut machine = FaustMachine::new(load_dsp("lofi", "lofi.dsp"));
+        machine.init(44100);
+        let mut buf = AudioBuffer::new(2, 256);
+        machine.render(&mut buf);
+        assert!(buf.channel(0).iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
     fn filter2_set_param_follows_bmx_order() {
         assert_set_param_routes("filter2", "filter2.dsp", &["Type", "Cutoff", "Resonance"]);
     }
