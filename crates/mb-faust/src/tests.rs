@@ -334,6 +334,37 @@ mod tests {
         ]);
     }
 
+    const WAHMANPRO_ORDER: [&str; 8] = [
+        "Cutoff", "Resonance", "Filter", "LFO rate", "LFO mod", "LFO Shape", "Inertia", "Set phase",
+    ];
+
+    #[test]
+    fn wahmanpro_param_ordering_and_ranges() {
+        // Set phase: Buzz default is 255 (no-value, outside 0..127); slider init 0.
+        assert_params_match("wahmanpro", "wahmanpro.dsp", &[
+            ExpectedParam { label: "Cutoff",    min: 0.0, max: 240.0, init: 120.0 },
+            ExpectedParam { label: "Resonance", min: 0.0, max: 240.0, init: 120.0 },
+            ExpectedParam { label: "Filter",    min: 0.0, max: 4.0,   init: 1.0 },
+            ExpectedParam { label: "LFO rate",  min: 0.0, max: 240.0, init: 30.0 },
+            ExpectedParam { label: "LFO mod",   min: 0.0, max: 240.0, init: 60.0 },
+            ExpectedParam { label: "LFO Shape", min: 0.0, max: 8.0,   init: 1.0 },
+            ExpectedParam { label: "Inertia",   min: 0.0, max: 60.0,  init: 10.0 },
+            ExpectedParam { label: "Set phase", min: 0.0, max: 127.0, init: 0.0 },
+        ]);
+    }
+
+    #[test]
+    fn wahmanpro_set_param_follows_bmx_order() {
+        assert_set_param_routes("wahmanpro", "wahmanpro.dsp", &WAHMANPRO_ORDER);
+    }
+
+    #[test]
+    fn wahmanpro_is_registered_stereo() {
+        let dsp = load_dsp("wahmanpro", "wahmanpro.dsp");
+        assert_eq!((dsp.num_inputs, dsp.num_outputs), (2, 2));
+        assert!(crate::registry::create_faust_machine("FSM WahManPro").is_some());
+    }
+
     #[test]
     fn filter2_param_ordering_and_ranges() {
         assert_params_match("filter2", "filter2.dsp", &[
