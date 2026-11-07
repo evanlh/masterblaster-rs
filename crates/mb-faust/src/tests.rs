@@ -594,6 +594,94 @@ mod tests {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
     }
 
+
+    // --- Chimp's PitchShifter ---
+
+    const CPS_SHIFT: u16 = 0;
+    const CPS_DIRECTION: u16 = 1;
+    const CPS_DRY: u16 = 2;
+    const CPS_WET: u16 = 3;
+
+    #[test]
+    fn chimp_pitchshifter_param_ordering_and_ranges() {
+        assert_params_match("chimp_pitchshifter", "chimp_pitchshifter.dsp", &[
+            ExpectedParam { label: "Shift",     min: 0.0, max: 2400.0, init: 1200.0 },
+            ExpectedParam { label: "Direction", min: 0.0, max: 1.0,    init: 0.0 },
+            ExpectedParam { label: "Dry out",   min: 0.0, max: 128.0,  init: 128.0 },
+            ExpectedParam { label: "Wet out",   min: 0.0, max: 128.0,  init: 128.0 },
+        ]);
+    }
+
+    #[test]
+    fn chimp_pitchshifter_set_param_follows_bmx_order() {
+        assert_set_param_routes("chimp_pitchshifter", "chimp_pitchshifter.dsp",
+            &["Shift", "Direction", "Dry out", "Wet out"]);
+    }
+
+    /// Scale a raw Buzz value (0..max) into the BMX 0..65535 range.
+    fn scale_raw(raw: i32, max: i32) -> i32 { raw * 65535 / max }
+
+    fn chimp_with(raw: &[(u16, i32, i32)]) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("chimp_pitchshifter", "chimp_pitchshifter.dsp"));
+        machine.init(44100);
+        raw.iter().for_each(|&(p, v, max)| machine.set_param(p, scale_raw(v, max)));
+        machine
+    }
+
+    /// 256-block render of a ramp signal that is never silent.
+    fn chimp_ramp(machine: &mut FaustMachine, frames: usize) -> Vec<f32> {
+        let input: Vec<f32> = (0..frames).map(|i| (i % 1000) as f32 / 1000.0 + 0.1).collect();
+        input.chunks(256).flat_map(|c| render_left(machine, c)).collect()
+    }
+
+    #[test]
+    fn chimp_pitchshifter_octave_down_repeats_samples() {
+        // Shift 1200 down, dry 64 (0%), wet 128 (100%): every input sample appears twice
+        let mut m = chimp_with(&[(CPS_SHIFT, 1200, 2400), (CPS_DRY, 64, 128)]);
+        let input: Vec<f32> = (1..=600).map(|i| i as f32 / 1000.0).collect();
+        let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut m, c)).collect();
+        assert!((out[10] - out[11]).abs() < 1e-6 || (out[9] - out[10]).abs() < 1e-6);
+        assert!((out[400] - input[200]).abs() < 1e-5 || (out[400] - input[201]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn chimp_pitchshifter_octave_up_skips_samples() {
+        let mut m = chimp_with(&[(CPS_SHIFT, 1200, 2400), (CPS_DIRECTION, 1, 1), (CPS_DRY, 64, 128)]);
+        let out = chimp_ramp(&mut m, 2048);
+        // after the 1024-sample splice, the head advances two input samples per output sample
+        let step = out[1500] - out[1499];
+        assert!((step.abs() - 0.002).abs() < 1e-4, "got step {step}");
+    }
+
+    #[test]
+    fn chimp_pitchshifter_zero_shift_passes_input() {
+        let mut m = chimp_with(&[(CPS_SHIFT, 0, 2400), (CPS_DRY, 100, 128)]);
+        let out = chimp_ramp(&mut m, 512);
+        assert!((out[300] - ((300 % 1000) as f32 / 1000.0 + 0.1)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn chimp_pitchshifter_dry_plus_wet_128_is_silent() {
+        let mut m = chimp_with(&[(CPS_DRY, 96, 128), (CPS_WET, 32, 128)]);
+        let peak = chimp_ramp(&mut m, 1024).iter().fold(0.0f32, |a, s| a.max(s.abs()));
+        assert_eq!(peak, 0.0);
+    }
+
+    #[test]
+    fn chimp_pitchshifter_cuts_silent_blocks() {
+        let mut m = chimp_with(&[(CPS_DRY, 128, 128)]);
+        let mut input = vec![0.5f32; 256];
+        input.extend(vec![0.0f32; 512]);
+        let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut m, c)).collect();
+        assert!(out[256..].iter().all(|s| *s == 0.0));
+        assert!(out[..256].iter().any(|s| s.abs() > 0.1));
+    }
+
+    #[test]
+    fn registry_resolves_chimp_pitchshifter() {
+        assert!(crate::create_faust_machine("Chimp's PitchShifter").is_some());
+    }
+
     #[test]
     fn registry_returns_none_for_unknown() {
         assert!(crate::create_faust_machine("Unknown Machine XYZ").is_none());
