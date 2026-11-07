@@ -924,6 +924,41 @@ mod tests {
                 let scaled = (raw * 65535 / 65534) as i32;
                 let got = eq10_recover_word(crate::ui_visitor::scaled_to_f32(p, scaled)) as i64;
                 assert_eq!(got, raw, "{}: raw {raw} round-trips to {got}", p.label);
+    // --- FSM PhatMan ---
+
+    const PHATMAN_ORDER: [&str; 8] = [
+        "Dry out", "Reset Phase", "Minimum delay", "Modulation",
+        "LFO rate", "Wet out", "Feedback", "Phasing",
+    ];
+
+    #[test]
+    fn phatman_param_ordering_and_ranges() {
+        assert_params_match("phatman", "phatman.dsp", &[
+            ExpectedParam { label: "Dry out",       min: 0.0, max: 240.0, init: 240.0 },
+            ExpectedParam { label: "Reset Phase",   min: 0.0, max: 240.0, init: 0.0 },
+            ExpectedParam { label: "Minimum delay", min: 1.0, max: 100.0, init: 20.0 },
+            ExpectedParam { label: "Modulation",    min: 1.0, max: 100.0, init: 10.0 },
+            ExpectedParam { label: "LFO rate",      min: 0.0, max: 254.0, init: 10.0 },
+            ExpectedParam { label: "Wet out",       min: 0.0, max: 240.0, init: 240.0 },
+            ExpectedParam { label: "Feedback",      min: 0.0, max: 128.0, init: 64.0 },
+            ExpectedParam { label: "Phasing",       min: 0.0, max: 128.0, init: 32.0 },
+        ]);
+    }
+
+    #[test]
+    fn phatman_set_param_follows_bmx_order() {
+        assert_set_param_routes("phatman", "phatman.dsp", &PHATMAN_ORDER);
+    }
+
+    #[test]
+    fn phatman_integer_values_round_trip_to_nearest_raw() {
+        // The DSP recovers raw values with floor(s + 0.5); truncating BMX
+        // scaling must never land more than half a step away.
+        let dsp = load_dsp("phatman", "phatman.dsp");
+        for p in &dsp.params {
+            for raw in (p.min as i32)..=(p.max as i32) {
+                let got = round_trip_f32(p, raw as f32);
+                assert_eq!((got + 0.5).floor() as i32, raw, "{}: raw {raw} -> {got}", p.label);
             }
         }
     }
@@ -972,6 +1007,38 @@ mod tests {
     #[test]
     fn registry_resolves_automaton_eq10() {
         assert!(crate::create_faust_machine("Automaton EQ-10").is_some());
+    fn phatman_with(params: &[(u16, f32)]) -> FaustMachine {
+        let dsp = load_dsp("phatman", "phatman.dsp");
+        let scaled: Vec<(u16, i32)> = params.iter().map(|&(i, raw)| {
+            let p = &dsp.params[i as usize];
+            (i, ((raw - p.min) / (p.max - p.min) * 65535.0) as i32)
+        }).collect();
+        let mut machine = FaustMachine::new(dsp);
+        machine.init(44100);
+        scaled.iter().for_each(|&(i, v)| machine.set_param(i, v));
+        machine
+    }
+
+    #[test]
+    fn phatman_wet_off_is_identity() {
+        let mut machine = phatman_with(&[(5, 0.0)]);
+        let input = sine(440.0, 4096);
+        let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
+        let err = input.iter().zip(&out).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+        assert!(err < 1e-6, "dry 0 dB / wet off should pass input through, max err {err}");
+    }
+
+    #[test]
+    fn phatman_wet_only_is_delayed_copy() {
+        // Dry off, LFO frozen-ish (rate 0): the wet tap settles near
+        // Min + Depth/2 = 88.2 + 22 samples after the startup glide.
+        let mut machine = phatman_with(&[(0, 0.0)]);
+        let frames = 44100;
+        let mut input = vec![0.0; frames];
+        input[30000] = 1.0;
+        let out: Vec<f32> = input.chunks(256).flat_map(|c| render_left(&mut machine, c)).collect();
+        let peak = out.iter().enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())).unwrap().0;
+        assert!((30088..30133).contains(&peak), "wet peak at {peak}");
     }
 
     // --- Registry tests ---
@@ -1200,6 +1267,11 @@ mod tests {
         let out = render_blocks(&mut apeq_with(&[(0, 65534)]), &input);
         assert!(peak(&out[256..512]) > 0.1, "impulse block should pass");
         assert_eq!(peak(&out[512..]), 0.0, "shelf tail is skipped on silent blocks: {:?}", &out[510..520]);
+    }
+
+    #[test]
+    fn registry_resolves_phatman() {
+        assert!(crate::create_faust_machine("FSM PhatMan").is_some());
     }
 
     #[test]
