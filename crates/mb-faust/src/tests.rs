@@ -594,6 +594,41 @@ mod tests {
         assert!(crate::create_faust_machine("FSM WahPro2").is_some());
     }
 
+    // --- Jeskola Reverb (clean-room port) ---
+
+    #[test]
+    fn jeskola_reverb_param_ordering_and_ranges() {
+        assert_params_match("jeskola_reverb", "jeskola_reverb.dsp", &[
+            ExpectedParam { label: "Dry Out",     min: 0.0,   max: 4096.0,  init: 4096.0 },
+            ExpectedParam { label: "Rev Out",     min: 0.0,   max: 4096.0,  init: 768.0 },
+            ExpectedParam { label: "ER Out",      min: 0.0,   max: 4096.0,  init: 0.0 },
+            ExpectedParam { label: "Rev Time",    min: 1.0,   max: 64.0,    init: 10.0 },
+            ExpectedParam { label: "Pre-Delay",   min: 0.0,   max: 100.0,   init: 0.0 },
+            ExpectedParam { label: "High Cutoff", min: 100.0, max: 16384.0, init: 5000.0 },
+        ]);
+    }
+
+    #[test]
+    fn jeskola_reverb_set_param_follows_bmx_order() {
+        assert_set_param_routes("jeskola_reverb", "jeskola_reverb.dsp", &[
+            "Dry Out", "Rev Out", "ER Out", "Rev Time", "Pre-Delay", "High Cutoff",
+        ]);
+    }
+
+    #[test]
+    fn jeskola_reverb_defaults_round_trip() {
+        let dsp = load_dsp("jeskola_reverb", "jeskola_reverb.dsp");
+        for p in &dsp.params {
+            let result = round_trip_f32(p, p.init).round();
+            assert_eq!(result, p.init, "{}: init {} round-tripped to {result}", p.label, p.init);
+        }
+    }
+
+    #[test]
+    fn registry_resolves_jeskola_reverb() {
+        assert!(crate::create_faust_machine("Jeskola Reverb").is_some());
+    }
+
     #[test]
     fn registry_returns_none_for_unknown() {
         assert!(crate::create_faust_machine("Unknown Machine XYZ").is_none());
