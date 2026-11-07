@@ -984,6 +984,18 @@ mod tests {
             ExpectedParam { label: "Attack",    min: 5.0,  max: 8000.0, init: 10.0 },
             ExpectedParam { label: "Release",   min: 30.0, max: 8000.0, init: 2000.0 },
             ExpectedParam { label: "Gain",      min: 0.0,  max: 128.0,  init: 6.0 },
+    // --- Jeskola Cross Delay ---
+
+    #[test]
+    fn cross_delay_param_ordering_and_ranges() {
+        assert_params_match("crossdelay", "crossdelay.dsp", &[
+            // Dry thru is a Buzz switch: 0 = off, 1 = on (delivered as 0 / 65535)
+            ExpectedParam { label: "Dry thru",    min: 0.0, max: 1.0,     init: 1.0 },
+            ExpectedParam { label: "L. Length",   min: 1.0, max: 32768.0, init: 3.0 },
+            ExpectedParam { label: "R. Length",   min: 1.0, max: 32768.0, init: 3.0 },
+            ExpectedParam { label: "Length unit", min: 0.0, max: 3.0,     init: 0.0 },
+            ExpectedParam { label: "Feedback",    min: 0.0, max: 128.0,   init: 96.0 },
+            ExpectedParam { label: "Wet out",     min: 0.0, max: 128.0,   init: 48.0 },
         ]);
     }
 
@@ -1020,6 +1032,74 @@ mod tests {
     fn geonik_compressor_passes_quiet_signals_with_output_gain() {
         let got = geonik_compressor_steady_gain(&[(3, 0)], 0.01);
         assert!((got - 2f32.sqrt()).abs() < 0.01, "expected sqrt(2), got {got}");
+    fn cross_delay_set_param_follows_bmx_order() {
+        assert_set_param_routes("crossdelay", "crossdelay.dsp", &[
+            "Dry thru", "L. Length", "R. Length", "Length unit", "Feedback", "Wet out",
+        ]);
+    }
+
+    const XD_L_LENGTH: u16 = 1;
+    const XD_R_LENGTH: u16 = 2;
+    const XD_UNIT: u16 = 3;
+
+    /// Set a Buzz param given its raw `value` over `min..max` via the BMX 0..65535 scaling.
+    fn set_raw_param(machine: &mut FaustMachine, param: u16, value: i32, (min, max): (i32, i32)) {
+        machine.set_param(param, (value - min) * 65535 / (max - min));
+    }
+
+    /// Cross delay at defaults (fb 50%, wet 48/128) with lengths in samples.
+    fn cross_delay_samples(left: i32, right: i32) -> FaustMachine {
+        let mut machine = FaustMachine::new(load_dsp("crossdelay", "crossdelay.dsp"));
+        machine.init(44100);
+        set_raw_param(&mut machine, XD_UNIT, 2, (0, 3));
+        set_raw_param(&mut machine, XD_L_LENGTH, left, (1, 32768));
+        set_raw_param(&mut machine, XD_R_LENGTH, right, (1, 32768));
+        machine
+    }
+
+    /// Render an impulse of height 0.5 at sample 0 and return (left, right).
+    fn render_impulse_stereo(machine: &mut FaustMachine, frames: usize) -> (Vec<f32>, Vec<f32>) {
+        let mut input = vec![0.0; frames];
+        input[0] = 0.5;
+        input.chunks(256).map(|c| {
+            let mut buf = AudioBuffer::new(2, c.len() as u16);
+            buf.channel_mut(0).copy_from_slice(c);
+            buf.channel_mut(1).copy_from_slice(c);
+            machine.render(&mut buf);
+            (buf.channel(0).to_vec(), buf.channel(1).to_vec())
+        }).fold((vec![], vec![]), |(mut l, mut r), (bl, br)| { l.extend(bl); r.extend(br); (l, r) })
+    }
+
+    fn assert_near(got: f32, expected: f32, what: &str) {
+        assert!((got - expected).abs() < 1e-5, "{what}: expected {expected}, got {got}");
+    }
+
+    #[test]
+    fn cross_delay_left_echo_then_right_echo() {
+        let (l, r) = render_impulse_stereo(&mut cross_delay_samples(100, 30), 1024);
+        let wet = 0.5 * 48.0 / 128.0;
+        assert_near(l[0], 0.5, "dry left");
+        assert_near(l[100], wet, "left echo at L. Length");
+        assert_near(r[130], wet * 0.5, "right echo at L + R, scaled by feedback");
+        assert_near(l[230], wet * 0.25, "second left echo after a full loop");
+    }
+
+    #[test]
+    fn cross_delay_dry_thru_off_removes_dry_signal() {
+        let mut machine = cross_delay_samples(100, 30);
+        machine.set_param(0, 0); // switch off (switches map 0 -> 0, 1 -> 65535)
+        let (l, r) = render_impulse_stereo(&mut machine, 256);
+        assert_near(l[0], 0.0, "no dry left");
+        assert_near(r[0], 0.0, "no dry right");
+        assert_near(l[100], 0.5 * 48.0 / 128.0, "wet echo still present");
+    }
+
+    #[test]
+    fn cross_delay_tail_stops_after_silence() {
+        // fb 50%: tail = maxD * (1 + 15) = 1600 silent samples; the cut lands on the next 256 block (2048)
+        let (l, _) = render_impulse_stereo(&mut cross_delay_samples(100, 100), 4096);
+        assert!(l[2048..].iter().all(|&s| s == 0.0), "output should stop after the tail");
+        assert!(l[1500].abs() > 0.0, "tail should still ring before the cut");
     }
 
     // --- Round-trip scaling tests ---
@@ -1727,6 +1807,11 @@ mod tests {
     #[test]
     fn registry_resolves_saturator() {
         assert!(crate::create_faust_machine("Geonik's Saturator").is_some());
+    }
+
+    #[test]
+    fn registry_resolves_cross_delay() {
+        assert!(crate::create_faust_machine("Jeskola Cross Delay").is_some());
     }
 
     #[test]
