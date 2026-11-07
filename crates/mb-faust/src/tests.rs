@@ -137,7 +137,7 @@ mod tests {
 
         // Set Type=0 (LP), Cutoff=20 (low cutoff ~50Hz), Resonance=0
         machine.set_param(0, 0);      // Type = LP
-        machine.set_param(1, 10240);  // Cutoff low (~20/127 * 65535)
+        machine.set_param(1, 10240);  // Cutoff low (~20/128 * 65535)
         machine.set_param(2, 0);      // Resonance = 0
 
         // Generate high-frequency sine (10kHz) as input
@@ -155,6 +155,62 @@ mod tests {
         let energy: f32 = buf.channel(0)[512..].iter().map(|s| s * s).sum();
         let rms = (energy / 512.0).sqrt();
         assert!(rms < 0.3, "LP filter should attenuate 10kHz, RMS={rms}");
+    }
+
+    /// Response (left channel) of filter2 with BMX-scaled params (0..65535) to a
+    /// unit impulse at sample `at`.
+    fn filter2_impulse_at(scaled: [i32; 3], at: usize, frames: u16) -> Vec<f32> {
+        let mut machine = FaustMachine::new(load_dsp("filter2", "filter2.dsp"));
+        machine.init(44100);
+        scaled.iter().enumerate().for_each(|(i, v)| machine.set_param(i as u16, *v));
+        let mut buf = AudioBuffer::new(2, frames);
+        buf.channel_mut(0)[at] = 1.0;
+        machine.render(&mut buf);
+        buf.channel(0).to_vec()
+    }
+
+    fn filter2_impulse(scaled: [i32; 3], frames: u16) -> Vec<f32> {
+        filter2_impulse_at(scaled, 0, frames)
+    }
+
+    // Oracle: the DLL returns false from Work on silent 256-sample blocks, so an
+    // impulse at 441 rings until 511 and the output is zero from 512 on.
+    #[test]
+    fn filter2_output_stops_after_silent_block_starts() {
+        let h = filter2_impulse_at([0, 0, 65535], 441, 1024);
+        assert!(h[441..512].iter().any(|s| s.abs() > 1e-6), "should ring within the block");
+        assert!(h[512..].iter().all(|s| *s == 0.0), "silent blocks must output zero");
+    }
+
+    fn assert_close(got: &[f32], expected: &[f32]) {
+        got.iter().zip(expected).enumerate().for_each(|(n, (g, e))|
+            assert!((g - e).abs() < 1e-5, "sample {n}: expected {e}, got {g} ({got:?})"));
+    }
+
+    // Oracle (buzz-machines-oracles impulse probe): at Cutoff 128, Resonance 0 the
+    // Chamberlin SVF has f = q = 1, so LP is a one-sample delay, HP is (1 - z^-1)^2
+    // and BP is (1 - z^-1).
+    #[test]
+    fn filter2_open_lowpass_is_one_sample_delay() {
+        assert_close(&filter2_impulse([0, 65535, 0], 4), &[0.0, 1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn filter2_type1_scaled_value_selects_highpass() {
+        // Type 1 of 0..2 arrives as 32767/65535 * 2 = 0.99997; it must still be HP.
+        assert_close(&filter2_impulse([32767, 65535, 0], 4), &[1.0, -2.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn filter2_open_bandpass_is_first_difference() {
+        assert_close(&filter2_impulse([65535, 65535, 0], 3), &[1.0, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn filter2_cutoff_zero_matches_oracle_coefficient() {
+        // Measured: BP impulse response starts at f = pi/256 for Cutoff 0.
+        let h = filter2_impulse([65535, 0, 0], 1);
+        assert!((h[0] - std::f32::consts::PI / 256.0).abs() < 1e-6, "got {}", h[0]);
     }
 
     // --- Reverb 2 tests ---
@@ -435,9 +491,10 @@ mod tests {
     #[test]
     fn filter2_param_ordering_and_ranges() {
         assert_params_match("filter2", "filter2.dsp", &[
-            ExpectedParam { label: "Type",      min: 0.0, max: 3.0,   init: 0.0 },
-            ExpectedParam { label: "Cutoff",    min: 0.0, max: 127.0, init: 64.0 },
-            ExpectedParam { label: "Resonance", min: 0.0, max: 127.0, init: 0.0 },
+            // Buzz PARA: Type 0..2 (LP/HP/BP), Cutoff 0..128 (128 = open), Resonance 0..128
+            ExpectedParam { label: "Type",      min: 0.0, max: 2.0,   init: 0.0 },
+            ExpectedParam { label: "Cutoff",    min: 0.0, max: 128.0, init: 128.0 },
+            ExpectedParam { label: "Resonance", min: 0.0, max: 128.0, init: 0.0 },
         ]);
     }
 
