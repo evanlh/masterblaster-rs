@@ -23,6 +23,10 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
         "Arguelles Degrader" => ("degrader", include_str!("../../../faust/degrader.dsp")),
         "Argüelles KFlanger" => ("kflanger", include_str!("../../../faust/kflanger.dsp")),
         "asedev Psycho01" => ("psycho01", include_str!("../../../faust/psycho01.dsp")),
+        "Automaton Compressor mkII" => (
+            "automaton_compressor_mkii",
+            include_str!("../../../faust/automaton_compressor_mkii.dsp"),
+        ),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
