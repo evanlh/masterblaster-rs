@@ -64,6 +64,7 @@ pub fn create_faust_machine(name: &str) -> Option<Box<dyn Machine>> {
             "ryg_analog_distort",
             include_str!("../../../faust/ryg_analog_distort.dsp"),
         ),
+        "Rymix FlaserBox" => ("flaserbox", include_str!("../../../faust/flaserbox.dsp")),
         _ => return None,
     };
     FaustMachine::from_source_cached(dsp_name, source)
