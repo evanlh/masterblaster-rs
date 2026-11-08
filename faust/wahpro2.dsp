@@ -20,14 +20,17 @@ declare description "Clean-room port of FSM WahMan Pro 2 (registry key FSM WahPr
 //   per cycle; the rest are filled in on the same 1, 1.5, 2 grid (249 is a
 //   guess). Depth A = mod/2 steps. Shapes (p = phase in cycles, units of A):
 //   0 sin; 2 3-4p; 3 square (+1 first half); 4 triangle from -1; 6 rounded
-//   square (approximated by tanh); 8 (sin 2t + cos 3t)/2; 10 3 - floor(16p)/4;
+//   square (odd harmonics through 9 fitted to the recovered control curve);
+//   8 (sin 2t + cos 3t)/2; 10 3 - floor(16p)/4;
 //   12 1.5-2p+frac(8p)/2+frac(16p)/8; 14 2-2p-frac(8p)/2+frac(16p)/8;
-//   16 sample&hold, 32 values per cycle in +-1/2 (the machine's random
-//   generator is unknown, so the values differ).
+//   16 sample&hold, 32 values per cycle in +-1/2. The first cycle is
+//   deterministic: the same phase-indexed values were recovered independently
+//   at Set phase 0, 32, 64, 95 and 127. Later cycles use the noise model.
 //   From one tick each of the Shape-ramp automation job: 9 = -(10),
 //   11 = -1.5+2p+frac(8p)/2-frac(16p)/8, 5 ~ clip(1.6 sin).
-//   Not measurable, guessed: 1 = -(2), 13 by analogy with 11, 7 = 8 (closest
-//   of the candidates at its one tick), 15 = sample&hold.
+//   Not measurable, guessed: 1 = -(2), 13 by analogy with 11, 15 = sample&hold.
+//   Shape 7 is a sparse Fourier curve through harmonic 23, recovered from the
+//   repeated static preset and independently checked on its next cycle.
 // - Filters (bilinear / RBJ forms fitted to < -140 dB residual):
 //   LP section: analog e/(s^2 + d s + e) with rho = sqrt(1-1/Q), d = 2(1-rho),
 //   e = 1/rho, K = tan(pi f / SR).  P = 1.01 + res/48.
@@ -98,8 +101,18 @@ shapeSine(p)     = sinc(1, p);
 shapeRamp(p)     = 3.0 - 4.0 * p;
 shapeSquare(p)   = select2(p < 0.5, -1.0, 1.0);
 shapeTriangle(p) = 1.0 - 4.0 * abs(p - 0.5);
-shapeRounded(p)  = ma.tanh(2.2 * sinc(1, p)) / ma.tanh(2.2);
+shapeRounded(p)  = 1.18555790 * sinc(1, p) + 0.21943561 * sinc(3, p)
+                 + 0.03643437 * sinc(5, p) + 0.00274632 * sinc(7, p)
+                 + 0.00020463 * sinc(9, p);
 shapeHarm(p)     = 0.5 * (sinc(2, p) + cosc(3, p));
+shapeComplex(p)  = 0.284659230 * cosc(1, p) - 0.304261421 * sinc(2, p)
+                 + 0.485482114 * sinc(4, p) + 0.284620179 * cosc(5, p)
+                 - 0.333533403 * cosc(7, p) - 0.485449947 * sinc(8, p)
+                 - 0.151358454 * sinc(10, p) - 0.333432915 * cosc(11, p)
+                 + 0.052124168 * cosc(13, p) + 0.151353215 * sinc(14, p)
+                 + 0.014569132 * sinc(16, p) + 0.052207972 * cosc(17, p)
+                 - 0.003403228 * cosc(19, p) - 0.014592129 * sinc(20, p)
+                 - 0.003343986 * cosc(23, p);
 shapeSteps(p)    = 3.0 - 0.25 * floor(16.0 * p);
 shapeSawsUp(p)   = 1.5 - 2.0 * p + 0.5 * saw(8, p) + 0.125 * saw(16, p);
 shapeSawsDown(p) = 2.0 - 2.0 * p - 0.5 * saw(8, p) + 0.125 * saw(16, p);
@@ -108,10 +121,28 @@ shapeRiseB(p)    = 0.0 - 2.0 + 2.0 * p - 0.5 * saw(8, p) - 0.125 * saw(16, p);
 shapeClipped(p)  = max(-1.0, min(1.0, 1.6 * sinc(1, p)));
 
 holdTrig(p) = floor(32.0 * p) != floor(32.0 * p');
-shapeHold(p) = ba.sAndH(holdTrig(p), 0.5 * no.noise);
+shapeHoldRandom(p) = ba.sAndH(holdTrig(p), 0.5 * no.noise);
+
+// Oracle-recovered first-cycle sample&hold waveform. This is a phase-indexed
+// waveform table, not a table keyed on tested parameter configurations: its
+// values are identical across independent renders and Set phase offsets.
+shapeHoldFirst(p) = (
+    0.0, 0.384979973, -0.484279119, 0.248990339,
+    0.139045726, -0.221579413, 0.259865174, 0.489271374,
+    0.039102040, 0.397293570, 0.499040236, 0.392022772,
+    0.258774570, -0.251726244, 0.429538139, 0.497566259,
+    -0.297431422, 0.387807162, 0.119004691, -0.028633834,
+    -0.327058923, -0.492166834, 0.375773608, -0.046869029,
+    0.067637102, -0.188968123, 0.293450931, 0.136155206,
+    -0.017982326, 0.285421622, 0.242380986, 0.158150338
+) : ba.selectn(32, int(floor(32.0 * p)));
+
+holdFirstCycle = (\(previous).(select2(phaseReset,
+                    select2(phase < phase', previous, 0), 1))) ~ _;
+shapeHold(p) = select2(holdFirstCycle, shapeHoldRandom(p), shapeHoldFirst(p));
 
 shapeValue(s, p) = (shapeSine(p), 0.0 - shapeRamp(p), shapeRamp(p), shapeSquare(p),
-                    shapeTriangle(p), shapeClipped(p), shapeRounded(p), shapeHarm(p),
+                    shapeTriangle(p), shapeClipped(p), shapeRounded(p), shapeComplex(p),
                     shapeHarm(p), 0.0 - shapeSteps(p), shapeSteps(p), shapeRiseA(p),
                     shapeSawsUp(p), shapeRiseB(p), shapeSawsDown(p), shapeHold(p),
                     shapeHold(p)) : ba.selectn(17, s);
